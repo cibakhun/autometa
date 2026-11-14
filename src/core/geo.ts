@@ -9,10 +9,16 @@ export function haversineKm(lat1: number, lng1: number, lat2: number, lng2: numb
   return 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(a));
 }
 
-/** Lat/lng box that contains every point within radiusKm; used as a cheap index prefilter. */
+/**
+ * Lat/lng box that contains every point within radiusKm; used as a cheap index prefilter.
+ * The longitude half-width uses the exact spherical bound asin(sin(r) / cos(lat)), because the
+ * widest point of a circle lies north (or south) of its centre, where degrees of longitude are shorter.
+ */
 export function boundingBox(lat: number, lng: number, radiusKm: number) {
-  const dLat = (radiusKm / EARTH_RADIUS_KM) * (180 / Math.PI);
-  const dLng = dLat / Math.max(Math.cos(toRad(lat)), 0.01);
+  const r = radiusKm / EARTH_RADIUS_KM;
+  const dLat = r * (180 / Math.PI);
+  const s = Math.sin(r) / Math.cos(toRad(lat));
+  const dLng = s >= 1 || !Number.isFinite(s) ? 180 : Math.asin(s) * (180 / Math.PI);
   return { minLat: lat - dLat, maxLat: lat + dLat, minLng: lng - dLng, maxLng: lng + dLng };
 }
 

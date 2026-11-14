@@ -94,11 +94,11 @@ export function FilterForm({ facets, filters }: { facets: MakeFacet[]; filters: 
         <div className="grid grid-cols-2 gap-2">
           <div>
             <label htmlFor="priceMin" className={labelClass}>Preis ab (€)</label>
-            <input id="priceMin" name="priceMin" type="number" min={0} step={500} inputMode="numeric" defaultValue={filters.priceMin} className={fieldClass} />
+            <input id="priceMin" name="priceMin" type="number" min={0} step={1} inputMode="numeric" defaultValue={filters.priceMin} className={fieldClass} />
           </div>
           <div>
             <label htmlFor="priceMax" className={labelClass}>Preis bis (€)</label>
-            <input id="priceMax" name="priceMax" type="number" min={0} step={500} inputMode="numeric" defaultValue={filters.priceMax} className={fieldClass} />
+            <input id="priceMax" name="priceMax" type="number" min={0} step={1} inputMode="numeric" defaultValue={filters.priceMax} className={fieldClass} />
           </div>
         </div>
 
@@ -139,7 +139,7 @@ export function FilterForm({ facets, filters }: { facets: MakeFacet[]; filters: 
         <fieldset>
           <legend className={labelClass}>Kraftstoff</legend>
           <div className="grid grid-cols-2 gap-x-2 gap-y-1">
-            {FUELS.filter((f) => f !== "other").map((fuel) => (
+            {FUELS.map((fuel) => (
               <label key={fuel} className="flex items-center gap-2 text-sm">
                 <input type="checkbox" name="fuel" value={fuel} defaultChecked={filters.fuel.includes(fuel)} className="accent-accent" />
                 {FUEL_LABELS[fuel]}
@@ -151,7 +151,7 @@ export function FilterForm({ facets, filters }: { facets: MakeFacet[]; filters: 
         <fieldset>
           <legend className={labelClass}>Fahrzeugtyp</legend>
           <div className="grid grid-cols-2 gap-x-2 gap-y-1">
-            {BODY_TYPES.filter((b) => b !== "other").map((body) => (
+            {BODY_TYPES.map((body) => (
               <label key={body} className="flex items-center gap-2 text-sm">
                 <input type="checkbox" name="body" value={body} defaultChecked={filters.body.includes(body)} className="accent-accent" />
                 {BODY_TYPE_LABELS[body]}
@@ -198,7 +198,7 @@ export function FilterForm({ facets, filters }: { facets: MakeFacet[]; filters: 
         </div>
 
         <div className="flex gap-2 pt-1">
-          <button type="submit" className="flex-1 rounded-md bg-accent px-3 py-2 text-sm font-semibold text-white hover:bg-accent-strong">
+          <button type="submit" className="flex-1 rounded-md bg-accent px-3 py-2 text-sm font-semibold text-on-accent hover:bg-accent-strong">
             Suchen
           </button>
           <Link href="/" className="rounded-md border border-line px-3 py-2 text-sm hover:border-accent">

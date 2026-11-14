@@ -177,10 +177,16 @@ export async function runIngest(pool: Pool, adapter: SourceAdapter): Promise<Ing
     );
     return result;
   } catch (error) {
-    await pool.query("update ingest_runs set finished_at = now(), error = $2 where id = $1", [
-      runId,
-      error instanceof Error ? error.message : String(error),
-    ]);
+    // Record the failure on the client we already hold, so a small pool cannot deadlock here,
+    // and never let a failed bookkeeping write hide the original error.
+    try {
+      await client.query("update ingest_runs set finished_at = now(), error = $2 where id = $1", [
+        runId,
+        error instanceof Error ? error.message : String(error),
+      ]);
+    } catch (logError) {
+      console.error("Could not record the failed ingest run:", logError);
+    }
     throw error;
   } finally {
     client.release();

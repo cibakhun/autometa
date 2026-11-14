@@ -35,7 +35,7 @@ export function ResultCard({ listing }: { listing: ListingSummary }) {
           href={`/go/${listing.id}`}
           target="_blank"
           rel="noopener nofollow"
-          className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent-strong"
+          className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-on-accent hover:bg-accent-strong"
         >
           Zum Angebot
         </a>

@@ -72,7 +72,7 @@ function Pagination({ result, filters }: { result: SearchResult; filters: Search
         <span key={p} className="flex items-center gap-1">
           {i > 0 && p - pages[i - 1] > 1 && <span className="px-1 text-muted">…</span>}
           {p === page ? (
-            <span aria-current="page" className="rounded-md bg-accent px-3 py-1.5 font-medium text-white">
+            <span aria-current="page" className="rounded-md bg-accent px-3 py-1.5 font-medium text-on-accent">
               {p}
             </span>
           ) : (

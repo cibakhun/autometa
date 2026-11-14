@@ -60,7 +60,7 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
             href={`/go/${listing.id}`}
             target="_blank"
             rel="noopener nofollow"
-            className="rounded-md bg-accent px-4 py-2 font-semibold text-white hover:bg-accent-strong"
+            className="rounded-md bg-accent px-4 py-2 font-semibold text-on-accent hover:bg-accent-strong"
           >
             Zum Angebot bei {listing.sourceName}
           </a>

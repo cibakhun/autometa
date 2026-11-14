@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { haversineKm } from "@/core/geo";
@@ -32,6 +35,20 @@ describe.skipIf(!url)("search against Postgres", () => {
 
   it("is idempotent when migrations run again", async () => {
     expect(await migrate(pool)).toEqual([]);
+  });
+
+  it("applies a migration once when two runs start at the same time", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "autometa-migrations-"));
+    try {
+      // The sleep keeps the first run busy while the second starts; without "if not exists",
+      // a second application of this file would fail.
+      await writeFile(path.join(dir, "99990101000000_lock_probe.sql"), "select pg_sleep(0.3); create table lock_probe (id int);");
+      const [a, b] = await Promise.all([migrate(pool, dir), migrate(pool, dir)]);
+      expect([...a, ...b]).toEqual(["99990101000000_lock_probe"]);
+    } finally {
+      await pool.query("drop table if exists lock_probe; delete from autometa_migrations where version = '99990101000000_lock_probe'");
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("applies every filter", async () => {
