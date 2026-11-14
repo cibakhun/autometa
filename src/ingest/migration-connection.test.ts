@@ -26,6 +26,8 @@ describe("migrationConnectionString", () => {
     ["as a query parameter", { DATABASE_URL: "postgresql://app@pooler/postgres?port=6543" }],
     ["with no host in the URL", { DATABASE_URL: "postgresql://app@/postgres?host=pooler&port=6543" }],
     ["through PGPORT", { DATABASE_URL: "postgresql://app@pooler/postgres", PGPORT: "6543" }],
+    ["with a leading zero", { DATABASE_URL: "postgresql://app@pooler/postgres?port=06543" }],
+    ["with a leading zero in PGPORT", { DATABASE_URL: "postgresql://app@pooler/postgres", PGPORT: "06543" }],
   ])("rejects the transaction pooler port %s", (_, env) => {
     expect(() => migrationConnectionString(env)).toThrow(/MIGRATION_DATABASE_URL/);
   });

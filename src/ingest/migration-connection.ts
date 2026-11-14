@@ -3,7 +3,7 @@ import { parse } from "pg-connection-string";
 type Env = Record<string, string | undefined>;
 
 /** Supabase's transaction pooler. It hands each transaction to a different server session. */
-const TRANSACTION_POOLER_PORT = "6543";
+const TRANSACTION_POOLER_PORT = 6543;
 
 /**
  * Picks the connection string for migrations. They hold a session-level advisory lock across
@@ -27,9 +27,11 @@ export function migrationConnectionString(env: Env = process.env): string {
 /**
  * The port pg will connect to. pg reads the string with this same parser, so a ?port= parameter,
  * a URL without a host and a Unix socket path resolve as they will at connect time. When the
- * string names no port, pg falls back to PGPORT. The parser redacts the input from its errors,
- * so a malformed string can't put the password into startup logs.
+ * string names no port, pg falls back to PGPORT, and it converts the value with parseInt, so
+ * "06543" is 6543. The parser redacts the input from its errors, so a malformed string can't put
+ * the password into startup logs.
  */
-function effectivePort(connectionString: string, env: Env): string | undefined {
-  return parse(connectionString).port || env.PGPORT || undefined;
+function effectivePort(connectionString: string, env: Env): number | undefined {
+  const port = parse(connectionString).port || env.PGPORT;
+  return port ? parseInt(port, 10) : undefined;
 }
