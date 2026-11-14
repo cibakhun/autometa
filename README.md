@@ -60,8 +60,8 @@ Das Hosting läuft über Coolify. Die App wird mit Nixpacks direkt aus diesem Re
 
 - **Build:** Nixpacks erkennt Next.js (`npm ci`, `npm run build`, `npm start`). Node-Version kommt aus `.nvmrc` (22). Port 3000. Der Build braucht keine Datenbank.
 - **Umgebungsvariable:** `DATABASE_URL` (Postgres-Connection-String). Mit einer Postgres-Datenbank in Coolify ist das die interne URL aus deren Einstellungen.
-- **Pre-deployment command:** `npm run db:migrate`, damit neue Migrationen vor dem Start laufen.
+- **Migrationen:** laufen automatisch beim Start jedes neuen Containers (`npm start` ruft zuerst `db:migrate` auf), also mit dem Code der neuen Version und bevor sie Anfragen bekommt. Schlägt eine Migration fehl, startet der neue Container nicht und die alte Version läuft weiter. Ein Pre-deployment command ist nicht nötig.
 - **Einmalig nach dem ersten Deployment** (im Terminal der App in Coolify): `npm run db:seed && npm run ingest -- demo`.
 - **Importe regelmäßig:** in Coolify unter „Scheduled Tasks“ je Quelle einen Befehl wie `npm run ingest -- demo` mit einem Cron-Ausdruck anlegen.
 
-Alternativ funktioniert jede andere Postgres-Datenbank, zum Beispiel Supabase (gepoolter Connection-String, Port 6543).
+Alternativ funktioniert jede andere Postgres-Datenbank, zum Beispiel Supabase. Dort kann die App den gepoolten Connection-String (Transaction-Modus, Port 6543) nutzen. Migrationen brauchen aber eine direkte Verbindung oder den Session-Modus (Port 5432), weil sie eine Sperre über mehrere Transaktionen halten. Dafür `MIGRATION_DATABASE_URL` setzen. Mit Port 6543 bricht `db:migrate` absichtlich ab.

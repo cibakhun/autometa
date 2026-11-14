@@ -6,7 +6,7 @@ declare global {
 
 /**
  * Shared Postgres pool. Works against local Postgres and Supabase.
- * On Vercel use Supabase's pooled connection string (port 6543).
+ * With Supabase, the pooled connection string (port 6543) is fine here; migrations use their own connection.
  */
 export function getPool(): Pool {
   if (!globalThis.__autometaPool) {
