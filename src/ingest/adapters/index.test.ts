@@ -1,10 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { demoListingCount } from "./index";
 
 describe("demoListingCount", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("defaults to 3000 when unset or blank", () => {
-    expect(demoListingCount(undefined)).toBe(3000);
+    vi.stubEnv("DEMO_LISTING_COUNT", undefined);
+    expect(demoListingCount()).toBe(3000);
     expect(demoListingCount(" ")).toBe(3000);
+  });
+
+  it("reads DEMO_LISTING_COUNT from the environment", () => {
+    vi.stubEnv("DEMO_LISTING_COUNT", "250");
+    expect(demoListingCount()).toBe(250);
   });
 
   it("accepts whole numbers of 0 or more", () => {
