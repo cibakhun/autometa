@@ -52,8 +52,14 @@ Regeln für jeden Adapter:
 
 - Nur Fakten speichern (Marke, Modell, Preis, km, Erstzulassung, Ort). Keine Fotos und keine Beschreibungstexte kopieren.
 - Keine Namen oder Kontaktdaten privater Verkäufer speichern.
-- Nur Quellen mit Erlaubnis oder offizieller Schnittstelle. Niemals Bot-Schutz, Captchas oder Logins umgehen.
+- Niemals Bot-Schutz, Captchas oder Logins umgehen.
 - Jedes Angebot verlinkt auf die Originalanzeige.
+
+Zusätzlich für Scraper (Quellen ohne Schnittstelle):
+
+- Webseiten nur über `PoliteFetcher` aus `src/ingest/http/fetcher.ts` abrufen. Er nennt sich ehrlich (`SCRAPE_USER_AGENT`), wartet zwischen zwei Abrufen bei derselben Börse (`SCRAPE_MIN_DELAY_MS`, mindestens 1 Sekunde, längeres `Crawl-delay` gewinnt), hält die robots.txt ein (`SCRAPE_RESPECT_ROBOTS`) und begrenzt die Abrufe pro Lauf (`SCRAPE_MAX_REQUESTS`).
+- Meldet eine Börse 401, 403 oder 429, zeigt ein Captcha oder leitet auf eine Anmeldung um, bricht der Lauf sofort ab (`BlockedError`). Nicht erneut versuchen, keine anderen IPs oder Browser-Kennungen.
+- `kind: "scrape"` setzen und `fullSnapshot: false`, solange der Adapter nicht wirklich den ganzen Bestand liest. Sonst würden nicht gelesene Angebote fälschlich als verkauft markiert.
 
 ## Deployment (Coolify über AgencyOS)
 

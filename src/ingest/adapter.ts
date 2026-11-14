@@ -3,7 +3,7 @@ import type { NormalizedListing } from "@/core/types";
 export interface SourceInfo {
   id: string;
   name: string;
-  kind: "api" | "feed" | "push" | "demo";
+  kind: "api" | "feed" | "push" | "scrape" | "demo";
   websiteUrl: string | null;
 }
 
@@ -14,9 +14,11 @@ export interface RawListing {
 }
 
 /**
- * Every source (marketplace API, dealer feed, demo data) implements this interface.
+ * Every source (marketplace API, dealer feed, scraped portal, demo data) implements this interface.
  * Rules every adapter must follow: only facts, no photos or description texts,
  * no personal data of private sellers, never bypass bot protection, logins or captchas.
+ * Scrapers fetch only through PoliteFetcher (src/ingest/http/fetcher.ts) and set
+ * fullSnapshot to false unless they really read the source's whole inventory.
  */
 export interface SourceAdapter {
   source: SourceInfo;

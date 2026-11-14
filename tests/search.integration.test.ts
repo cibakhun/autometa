@@ -38,6 +38,14 @@ describe.skipIf(!url)("search against Postgres", () => {
     expect(await migrate(pool)).toEqual([]);
   });
 
+  it("accepts scraped portals as a source kind", async () => {
+    await pool.query("insert into sources (id, name, kind) values ('scrape-probe', 'Probe', 'scrape')");
+    await pool.query("delete from sources where id = 'scrape-probe'");
+    await expect(pool.query("insert into sources (id, name, kind) values ('bad-probe', 'Probe', 'crawl')")).rejects.toThrow(
+      /sources_kind_check/,
+    );
+  });
+
   it("applies a migration once when two runs start at the same time", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "autometa-migrations-"));
     try {
