@@ -21,10 +21,18 @@ describe("migrationConnectionString", () => {
     expect(() => migrationConnectionString({ DATABASE_URL: "" })).toThrow(/DATABASE_URL is not set/);
   });
 
-  it("rejects the transaction pooler", () => {
-    expect(() =>
-      migrationConnectionString({ DATABASE_URL: "postgresql://app:secret@pooler:6543/postgres" }),
-    ).toThrow(/MIGRATION_DATABASE_URL/);
+  it.each([
+    ["in the authority", { DATABASE_URL: "postgresql://app:secret@pooler:6543/postgres" }],
+    ["as a query parameter", { DATABASE_URL: "postgresql://app@pooler/postgres?port=6543" }],
+    ["with no host in the URL", { DATABASE_URL: "postgresql://app@/postgres?host=pooler&port=6543" }],
+    ["through PGPORT", { DATABASE_URL: "postgresql://app@pooler/postgres", PGPORT: "6543" }],
+  ])("rejects the transaction pooler port %s", (_, env) => {
+    expect(() => migrationConnectionString(env)).toThrow(/MIGRATION_DATABASE_URL/);
+  });
+
+  it("lets the string's own port win over PGPORT", () => {
+    const url = "postgresql://app@db:5432/postgres";
+    expect(migrationConnectionString({ DATABASE_URL: url, PGPORT: "6543" })).toBe(url);
   });
 
   it("accepts a Unix socket path", () => {
@@ -33,8 +41,14 @@ describe("migrationConnectionString", () => {
     );
   });
 
-  it("leaves malformed strings to pg instead of throwing an error that holds the password", () => {
-    const malformed = "postgres://app:hunter2@db:bad/autometa";
-    expect(migrationConnectionString({ DATABASE_URL: malformed })).toBe(malformed);
+  it("keeps the password out of the error for a malformed string", () => {
+    let error: unknown;
+    try {
+      migrationConnectionString({ DATABASE_URL: "postgres://app:hunter2@db:bad/autometa" });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect(JSON.stringify(error, Object.getOwnPropertyNames(error))).not.toContain("hunter2");
   });
 });

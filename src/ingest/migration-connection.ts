@@ -1,3 +1,5 @@
+import { parse } from "pg-connection-string";
+
 type Env = Record<string, string | undefined>;
 
 /** Supabase's transaction pooler. It hands each transaction to a different server session. */
@@ -13,7 +15,7 @@ export function migrationConnectionString(env: Env = process.env): string {
   if (!connectionString) {
     throw new Error("DATABASE_URL is not set. Copy .env.example to .env.local.");
   }
-  if (connectionPort(connectionString) === TRANSACTION_POOLER_PORT) {
+  if (effectivePort(connectionString, env) === TRANSACTION_POOLER_PORT) {
     throw new Error(
       `Migrations need a direct or session-mode connection, not the transaction pooler on port ${TRANSACTION_POOLER_PORT}. ` +
         "Set MIGRATION_DATABASE_URL to the direct connection string (port 5432).",
@@ -22,13 +24,12 @@ export function migrationConnectionString(env: Env = process.env): string {
   return connectionString;
 }
 
-/** The URL's port, or undefined for forms pg accepts that are not URLs, such as Unix socket paths. */
-function connectionPort(connectionString: string): string | undefined {
-  try {
-    return new URL(connectionString).port;
-  } catch {
-    // Not rethrown: Node keeps the whole input, password included, on the error, and startup
-    // logs would print it. pg reports an invalid string itself, with the input redacted.
-    return undefined;
-  }
+/**
+ * The port pg will connect to. pg reads the string with this same parser, so a ?port= parameter,
+ * a URL without a host and a Unix socket path resolve as they will at connect time. When the
+ * string names no port, pg falls back to PGPORT. The parser redacts the input from its errors,
+ * so a malformed string can't put the password into startup logs.
+ */
+function effectivePort(connectionString: string, env: Env): string | undefined {
+  return parse(connectionString).port || env.PGPORT || undefined;
 }
