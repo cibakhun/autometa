@@ -54,7 +54,14 @@ Regeln für jeden Adapter:
 - Nur Quellen mit Erlaubnis oder offizieller Schnittstelle. Niemals Bot-Schutz, Captchas oder Logins umgehen.
 - Jedes Angebot verlinkt auf die Originalanzeige.
 
-## Deployment
+## Deployment (Coolify)
 
-- **Datenbank:** Supabase-Projekt in Frankfurt (eu-central-1). Migrationen mit `npm run db:migrate` gegen die direkte Verbindung oder mit der Supabase-CLI anwenden.
-- **Web-App:** Vercel-Projekt aus diesem Repo. Umgebungsvariable `DATABASE_URL` auf den gepoolten Supabase-Connection-String (Port 6543) setzen.
+Das Hosting läuft über Coolify. Die App wird mit Nixpacks direkt aus diesem Repo gebaut, eine Dockerfile ist nicht nötig.
+
+- **Build:** Nixpacks erkennt Next.js (`npm ci`, `npm run build`, `npm start`). Node-Version kommt aus `.nvmrc` (22). Port 3000. Der Build braucht keine Datenbank.
+- **Umgebungsvariable:** `DATABASE_URL` (Postgres-Connection-String). Mit einer Postgres-Datenbank in Coolify ist das die interne URL aus deren Einstellungen.
+- **Pre-deployment command:** `npm run db:migrate`, damit neue Migrationen vor dem Start laufen.
+- **Einmalig nach dem ersten Deployment** (im Terminal der App in Coolify): `npm run db:seed && npm run ingest -- demo`.
+- **Importe regelmäßig:** in Coolify unter „Scheduled Tasks“ je Quelle einen Befehl wie `npm run ingest -- demo` mit einem Cron-Ausdruck anlegen.
+
+Alternativ funktioniert jede andere Postgres-Datenbank, zum Beispiel Supabase (gepoolter Connection-String, Port 6543).
