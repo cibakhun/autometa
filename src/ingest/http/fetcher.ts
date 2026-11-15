@@ -51,8 +51,10 @@ export interface PoliteFetcherOptions {
   respectRobots?: boolean;
   /** Most requests one run may make, robots.txt included. */
   maxRequests?: number;
-  /** Retries for network errors and 5xx answers (never for blocks, 4xx or the budget). */
+  /** Retries for network errors, timeouts and 5xx answers (never for blocks, 4xx or the budget). */
   maxRetries?: number;
+  /** Longest time one request may take, body included, before it counts as a network error. */
+  timeoutMs?: number;
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -98,6 +100,7 @@ export class PoliteFetcher {
   private readonly jitterRatio: number;
   private readonly maxRequests: number;
   private readonly maxRetries: number;
+  private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
@@ -117,6 +120,7 @@ export class PoliteFetcher {
     this.jitterRatio = options.jitterRatio ?? 0.2;
     this.maxRequests = options.maxRequests ?? 500;
     this.maxRetries = options.maxRetries ?? 2;
+    this.timeoutMs = options.timeoutMs ?? 30_000;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.now = options.now ?? Date.now;
@@ -203,6 +207,10 @@ export class PoliteFetcher {
     let current = start;
     for (let hops = 0; ; hops++) {
       const response = await this.dispatch(current);
+      if (REDIRECT_STATUSES.has(response.status)) {
+        // A challenge can sit on the redirect itself; do not follow it to a normal-looking page.
+        this.assertNotBlocked({ url: current.href, status: response.status, text: response.text });
+      }
       if (!REDIRECT_STATUSES.has(response.status) || !response.location) {
         return { url: current.href, status: response.status, text: response.text };
       }
@@ -229,24 +237,37 @@ export class PoliteFetcher {
     this.hostQueues.set(host, previous.then(() => turn));
     await previous;
     try {
-      const wait = (this.nextSlot.get(host) ?? 0) - this.now();
-      if (wait > 0) await this.sleep(wait);
+      // Re-read the deadline after each wake: a Crawl-delay found meanwhile may have moved it.
+      for (let wait = this.waitFor(host); wait > 0; wait = this.waitFor(host)) await this.sleep(wait);
       if (this.requestCount >= this.maxRequests) throw new BudgetExceededError(this.maxRequests);
       this.requestCount += 1;
 
-      const delay = Math.max(this.minDelayMs, this.hostDelays.get(host) ?? 0);
       try {
         const response = await this.fetchImpl(url.href, {
           headers: { "user-agent": this.userAgent, accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8" },
           redirect: "manual",
+          signal: AbortSignal.timeout(this.timeoutMs),
         });
-        return { status: response.status, location: response.headers.get("location"), text: await response.text() };
+        const location = response.headers.get("location");
+        if (BLOCK_STATUSES.has(response.status)) {
+          // The status alone stops the run. Skip the body, so a broken one cannot turn it into a retry.
+          await response.body?.cancel().catch(() => undefined);
+          return { status: response.status, location, text: "" };
+        }
+        return { status: response.status, location, text: await response.text() };
       } finally {
-        this.nextSlot.set(host, this.now() + delay * (1 + this.jitterRatio * this.random()));
+        // Read the delay now, not before the request: robots.txt may have raised it meanwhile.
+        const delay = Math.max(this.minDelayMs, this.hostDelays.get(host) ?? 0);
+        const next = this.now() + delay * (1 + this.jitterRatio * this.random());
+        this.nextSlot.set(host, Math.max(this.nextSlot.get(host) ?? 0, next));
       }
     } finally {
       release();
     }
+  }
+
+  private waitFor(host: string): number {
+    return (this.nextSlot.get(host) ?? 0) - this.now();
   }
 
   private assertNotBlocked(page: FetchedPage): void {
@@ -266,7 +287,10 @@ export class PoliteFetcher {
   }
 }
 
-/** Errors worth another try: the request never got an answer (DNS, connection, TLS, reset). */
+/**
+ * Errors worth another try: the request got no complete answer (DNS, connection, TLS, reset)
+ * or ran past timeoutMs.
+ */
 function isNetworkError(error: unknown): boolean {
-  return error instanceof TypeError;
+  return error instanceof TypeError || (error as { name?: unknown } | null)?.name === "TimeoutError";
 }

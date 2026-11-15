@@ -127,7 +127,9 @@ export function policyFor(groups: RobotsGroup[], userAgent: string): RobotsPolic
   return {
     crawlDelaySeconds: delays.length > 0 ? Math.max(...delays) : null,
     isAllowed(pathWithQuery: string) {
-      const path = normalizePath(pathWithQuery || "/");
+      // A literal "*" or "$" in the path is compared in encoded form, so that a rule can match
+      // it by writing %2A or %24 (RFC 9309, 2.2.3), while "*" and "$" in rules stay operators.
+      const path = normalizePath(pathWithQuery || "/").replace(/\*/g, "%2A").replace(/\$/g, "%24");
       let best: { allow: boolean; length: number } | null = null;
       for (const rule of rules) {
         if (!matches(rule.compiled, path)) continue;

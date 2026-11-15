@@ -86,6 +86,15 @@ Crawl-delay: 10
     expect(policy.isAllowed("/a%2Fb")).toBe(false);
   });
 
+  it("matches a literal * or $ in the path through %2A and %24 in the rule", () => {
+    // RFC 9309, section 2.2.3.
+    const policy = policyFor(parseRobotsTxt("User-agent: *\nDisallow: /file-with-a-%2A.html\nDisallow: /foo-%24\n"), UA);
+    expect(policy.isAllowed("/file-with-a-*.html")).toBe(false);
+    expect(policy.isAllowed("/file-with-a-x.html")).toBe(true);
+    expect(policy.isAllowed("/foo-$")).toBe(false);
+    expect(policy.isAllowed("/foo-")).toBe(true);
+  });
+
   it("matches non-ASCII rules against the encoded path", () => {
     const policy = policyFor(parseRobotsTxt("User-agent: *\nDisallow: /gebrauchtwagen/köln\n"), UA);
     expect(policy.isAllowed(new URL("https://a.example/gebrauchtwagen/köln/1").pathname)).toBe(false);

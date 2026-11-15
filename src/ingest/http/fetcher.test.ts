@@ -147,7 +147,8 @@ describe("PoliteFetcher", () => {
 
   it("blocks a long challenge page but not a long page that mentions a captcha", async () => {
     const padded = `<html><head><title>Access Denied</title></head><body>${"x".repeat(80_000)}</body></html>`;
-    const mentions = `<html><body>${"x".repeat(60_000)} Kontaktformular mit Captcha</body></html>`;
+    // The word sits inside the scanned head; only the page length keeps it from counting.
+    const mentions = `<html><body>Kontaktformular mit Captcha ${"x".repeat(60_000)}</body></html>`;
     const site = fakeSite({
       "https://a.example/robots.txt": { status: 404 },
       "https://a.example/blocked": { body: padded },
@@ -210,6 +211,103 @@ describe("PoliteFetcher", () => {
     expect(error).toBeInstanceOf(DisallowedError);
     expect((error as DisallowedError).url).toBe("https://b.example/privat/1");
     expect(site.calls.map((c) => c.url)).not.toContain("https://b.example/privat/1");
+  });
+
+  it("stops at a redirect that carries a challenge page instead of following it", async () => {
+    const site = fakeSite({
+      "https://a.example/robots.txt": { status: 404 },
+      "https://a.example/x": { status: 302, location: "/ok", body: "<html><title>Just a moment...</title></html>" },
+      "https://a.example/ok": { body: page(1) },
+    });
+    await expect(new PoliteFetcher(site.options).getText("https://a.example/x")).rejects.toBeInstanceOf(BlockedError);
+    expect(site.calls.map((c) => c.url)).not.toContain("https://a.example/ok");
+  });
+
+  it("stops on a blocking status even when its body breaks off", async () => {
+    const broken = () =>
+      new ReadableStream({
+        pull(controller) {
+          controller.error(new TypeError("terminated"));
+        },
+      });
+    const fetchFor = (blockedUrl: string, calls: string[]) =>
+      (async (input: string | URL) => {
+        calls.push(String(input));
+        if (String(input) === blockedUrl) return new Response(broken(), { status: 429 });
+        if (String(input).endsWith("/robots.txt")) return new Response("", { status: 404 });
+        return new Response(page(1));
+      }) as typeof fetch;
+    let clock = 0;
+    const base = { now: () => clock, sleep: async (ms: number) => void (clock += ms), minDelayMs: 1000 };
+
+    const pageCalls: string[] = [];
+    const onPage = new PoliteFetcher({ ...base, fetchImpl: fetchFor("https://a.example/x", pageCalls) });
+    await expect(onPage.getText("https://a.example/x")).rejects.toBeInstanceOf(BlockedError);
+    expect(pageCalls.filter((u) => u === "https://a.example/x")).toHaveLength(1);
+
+    const robotsCalls: string[] = [];
+    const onRobots = new PoliteFetcher({ ...base, fetchImpl: fetchFor("https://a.example/robots.txt", robotsCalls) });
+    await expect(onRobots.getText("https://a.example/x")).rejects.toBeInstanceOf(BlockedError);
+    expect(robotsCalls).toEqual(["https://a.example/robots.txt"]);
+  });
+
+  it("gives up on a body that never ends and frees the host for the next request", async () => {
+    const calls: string[] = [];
+    const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
+      calls.push(String(input));
+      if (String(input) !== "https://a.example/endless") return new Response(page(1));
+      const signal = init!.signal!;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const timer = setInterval(() => controller.enqueue(new TextEncoder().encode("x")), 5);
+          signal.addEventListener("abort", () => {
+            clearInterval(timer);
+            controller.error(signal.reason);
+          });
+        },
+      });
+      return new Response(body);
+    }) as typeof fetch;
+    let clock = 0;
+    const fetcher = new PoliteFetcher({
+      fetchImpl,
+      respectRobots: false,
+      timeoutMs: 50,
+      maxRetries: 1,
+      now: () => clock,
+      sleep: async (ms) => void (clock += ms),
+    });
+
+    const error = await fetcher.getText("https://a.example/endless").catch((e: unknown) => e);
+    expect((error as Error).name).toBe("TimeoutError");
+    expect(calls.filter((u) => u === "https://a.example/endless")).toHaveLength(2);
+    await expect(fetcher.getText("https://a.example/next")).resolves.toMatchObject({ status: 200 });
+  });
+
+  it("keeps waiting when a sleep ends before the host's next slot", async () => {
+    const site = fakeSite({
+      "https://a.example/robots.txt": { status: 404 },
+      "https://a.example/1": { body: page(1) },
+      "https://a.example/2": { body: page(2) },
+    });
+    let clock = 0;
+    const fetcher = new PoliteFetcher({
+      ...site.options,
+      now: () => clock,
+      // Wakes after half the requested time, like a timer that fires early.
+      sleep: async (ms) => {
+        clock += Math.ceil(ms / 2);
+      },
+      fetchImpl: (async (input: string | URL, init?: RequestInit) => {
+        times.push(clock);
+        return site.options.fetchImpl!(input, init);
+      }) as typeof fetch,
+    });
+    const times: number[] = [];
+    await fetcher.getText("https://a.example/1");
+    await fetcher.getText("https://a.example/2");
+    expect(times[1] - times[0]).toBeGreaterThanOrEqual(1000);
+    expect(times[2] - times[1]).toBeGreaterThanOrEqual(1000);
   });
 
   it("stops at a redirect to a login page without requesting it", async () => {
