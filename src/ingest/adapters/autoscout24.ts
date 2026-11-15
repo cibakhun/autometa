@@ -11,20 +11,16 @@ import { MAKES } from "@/core/taxonomy";
 import type { NormalizedListing, SellerType } from "@/core/types";
 import type { FetchContext, RawListing, SourceAdapter, SourceInfo } from "../adapter";
 import { BlockedError, BudgetExceededError, DisallowedError, HttpStatusError, type PoliteFetcher } from "../http/fetcher";
-import { SegmentStore, type Segment, type SegmentDraft } from "../segments";
+import { crawlPriceSegments, type PriceRange } from "../price-segments";
 
 /**
  * AutoScout24 (www.autoscout24.de), read through its result lists /lst/<make>, which its
  * robots.txt allows for every crawler. Detail pages (/angebote/) are not allowed and are never
  * requested; users reach them through our link.
  *
- * Each run does two things within the request budget:
- * 1. "Newest": the first result pages per make, newest first, so fresh listings appear quickly.
- * 2. "Sweep": whole segments (make and price range) in rotation, page by page. A segment with more
- *    results than the portal lets us page through is split into smaller price ranges. Once a
- *    segment was read to the end and every listing it reported came in, listings of that segment
- *    we did not see count as missed; after two misses in a row they are taken out of the search.
- * Listings not seen for staleAfterDays are taken out as well, as a safety net.
+ * Each run reads the newest listings per make and then whole make × price-range segments in
+ * rotation (see crawlPriceSegments in ../price-segments). Listings not seen for staleAfterDays are
+ * taken out as well, as a safety net.
  */
 
 export const AUTOSCOUT24: SourceInfo = {
@@ -43,20 +39,8 @@ const MAKE_PATHS: Record<string, string> = {
   ds: "ds-automobiles",
 };
 
-/** First split of a whole make into price ranges (EUR); later splits halve a range. */
-const PRICE_LADDER = [0, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 12000, 14000, 16000, 18000, 20000, 23000, 26000, 30000, 35000, 40000, 50000, 60000, 80000, 100000];
-/** Ranges narrower than this are not split any further. */
-const MIN_RANGE_EUR = 200;
 /** This many failed pages in a row stop the run: the site is probably down or has changed. */
 const MAX_FAILURES_IN_A_ROW = 3;
-
-export interface SweepParams {
-  make: string;
-  /** Lowest price, inclusive. */
-  priceFrom: number;
-  /** Highest price, exclusive; null means no upper limit. */
-  priceTo: number | null;
-}
 
 export interface AutoScout24Options {
   fetcher: PoliteFetcher;
@@ -224,7 +208,7 @@ export function normalizeAutoScout24(raw: RawListing): NormalizedListing | null 
 }
 
 /** The result list URL for a make, newest first, optionally limited to a price range. */
-export function listUrl(make: string, page: number, price?: { from: number; to: number | null }): string {
+export function listUrl(make: string, page: number, price?: PriceRange): string {
   const url = new URL(`/lst/${MAKE_PATHS[make] ?? make}`, ORIGIN);
   url.searchParams.set("atype", "C");
   url.searchParams.set("cy", "D");
@@ -236,34 +220,6 @@ export function listUrl(make: string, page: number, price?: { from: number; to: 
   return url.href;
 }
 
-export function segmentKey({ make, priceFrom, priceTo }: SweepParams): string {
-  return `${make}:${priceFrom}-${priceTo ?? ""}`;
-}
-
-/** Smaller price ranges replacing one that has too many results, or [] when it cannot be split. */
-export function splitSegment(params: SweepParams): SweepParams[] {
-  const { make, priceFrom, priceTo } = params;
-  if (priceFrom === 0 && priceTo === null) {
-    return PRICE_LADDER.map((from, i) => ({ make, priceFrom: from, priceTo: PRICE_LADDER[i + 1] ?? null }));
-  }
-  if (priceTo === null) {
-    return [
-      { make, priceFrom, priceTo: priceFrom * 2 },
-      { make, priceFrom: priceFrom * 2, priceTo: null },
-    ];
-  }
-  if (priceTo - priceFrom < MIN_RANGE_EUR) return [];
-  const middle = Math.round((priceFrom + priceTo) / 2 / 100) * 100;
-  const cut = middle > priceFrom && middle < priceTo ? middle : Math.floor((priceFrom + priceTo) / 2);
-  return [
-    { make, priceFrom, priceTo: cut },
-    { make, priceFrom: cut, priceTo },
-  ];
-}
-
-const inRange = (price: number | null, { priceFrom, priceTo }: SweepParams) =>
-  price !== null && price >= priceFrom && (priceTo === null || price < priceTo);
-
 export function defaultAutoScout24Makes(): string[] {
   return MAKES.map((make) => make.slug);
 }
@@ -274,7 +230,6 @@ export function createAutoScout24Adapter(options: AutoScout24Options): SourceAda
   const newestPages = options.newestPages ?? 1;
   const maxPagesPerSegment = options.maxPagesPerSegment ?? 20;
   const log = options.log ?? (() => undefined);
-  let store!: SegmentStore<SweepParams>;
   let completed: string[] = [];
   let failuresInARow = 0;
 
@@ -302,75 +257,6 @@ export function createAutoScout24Adapter(options: AutoScout24Options): SourceAda
     }
   }
 
-  function toRaw(item: AutoScout24Item, segment?: string): RawListing {
-    return { externalId: item.id, payload: item as unknown as Record<string, unknown>, segment };
-  }
-
-  async function* newest(): AsyncGenerator<RawListing> {
-    for (const make of makes) {
-      for (let page = 1; page <= newestPages; page += 1) {
-        if (fetcher.requestsLeft < 1) return;
-        const result = await load(listUrl(make, page));
-        if (!result) break;
-        for (const item of result.items) yield toRaw(item);
-        if (page >= result.pages) break;
-      }
-    }
-  }
-
-  async function* sweep(segment: Segment<SweepParams>): AsyncGenerator<RawListing> {
-    const params = segment.params;
-    const price = { from: params.priceFrom, to: params.priceTo };
-    const first = await load(listUrl(params.make, 1, price));
-    if (!first) return;
-    await store.started(segment.key, first.total);
-
-    const reachablePages = Math.min(first.pages, maxPagesPerSegment);
-    if (first.total > reachablePages * PAGE_SIZE) {
-      const children = splitSegment(params);
-      if (children.length > 0) {
-        await store.split(
-          segment.key,
-          children.map((child) => ({ key: segmentKey(child), params: child })),
-        );
-        log(`split ${segment.key} (${first.total} results) into ${children.length} price ranges`);
-        // The page is still useful; its listings get their segment once the smaller ranges are read.
-        for (const item of first.items) yield toRaw(item);
-        return;
-      }
-    }
-
-    const seen = new Set<string>();
-    const emit = function* (items: AutoScout24Item[]) {
-      for (const item of items) {
-        const own = item.organic && inRange(item.price, params);
-        if (own) seen.add(item.id);
-        yield toRaw(item, own ? segment.key : undefined);
-      }
-    };
-    yield* emit(first.items);
-
-    const lastPage = Math.min(reachablePages, Math.ceil(first.total / PAGE_SIZE));
-    let unchanged = true;
-    for (let page = 2; page <= lastPage; page += 1) {
-      if (fetcher.requestsLeft < 1) return;
-      const result = await load(listUrl(params.make, page, price));
-      if (!result) return;
-      if (result.total !== first.total || result.pages !== first.pages) unchanged = false;
-      yield* emit(result.items);
-      if (result.items.length === 0) break;
-    }
-    if (!unchanged) log(`${segment.key} changed while it was read; it is read again in a later run`);
-
-    // Only a read that saw every reported listing may count the others as sold. Listings that moved
-    // between pages, or a list that grew or shrank while we read, leave the segment incomplete for
-    // this run; it stays in the plan and is read again.
-    if (unchanged && first.total <= reachablePages * PAGE_SIZE && seen.size >= first.total) {
-      completed.push(segment.key);
-      await store.completed(segment.key);
-    }
-  }
-
   return {
     source: AUTOSCOUT24,
     fullSnapshot: false,
@@ -379,23 +265,27 @@ export function createAutoScout24Adapter(options: AutoScout24Options): SourceAda
     completedSegments: () => completed,
     async *fetch(context?: FetchContext) {
       if (!context) throw new Error("AutoScout24 needs the import's database connection");
-      store = new SegmentStore<SweepParams>(context.db, AUTOSCOUT24.id);
       completed = [];
       failuresInARow = 0;
       try {
-        yield* newest();
-        await store.ensure(makes.map((make) => root(make)));
-        const wanted = new Set(makes);
-        const done = new Set<string>();
-        // Read the plan again after every segment: a split adds smaller segments to read next.
-        for (;;) {
-          // Page 1 alone may split the segment; keep one request for it and one more for page 2.
-          if (fetcher.requestsLeft < 2) break;
-          const next = (await store.active()).find((s) => wanted.has(s.params.make) && !done.has(s.key));
-          if (!next) break;
-          done.add(next.key);
-          yield* sweep(next);
-        }
+        yield* crawlPriceSegments<AutoScout24Item>(
+          {
+            sourceId: AUTOSCOUT24.id,
+            db: context.db,
+            makes,
+            pageSize: PAGE_SIZE,
+            maxPagesPerSegment,
+            newestPages,
+            requestsLeft: () => fetcher.requestsLeft,
+            loadPage: (make, page, price) => load(listUrl(make, page, price)),
+            itemId: (item) => item.id,
+            itemPrice: (item) => item.price,
+            isOrganic: (item) => item.organic,
+            toRaw: (item, segment) => ({ externalId: item.id, payload: item as unknown as Record<string, unknown>, segment }),
+            log,
+          },
+          completed,
+        );
       } catch (error) {
         // The budget ends the run quietly; everything read so far is kept.
         if (!(error instanceof BudgetExceededError)) throw error;
@@ -403,9 +293,4 @@ export function createAutoScout24Adapter(options: AutoScout24Options): SourceAda
       log(`requests: ${fetcher.requestsMade}, segments read completely: ${completed.length}`);
     },
   };
-}
-
-function root(make: string): SegmentDraft<SweepParams> {
-  const params = { make, priceFrom: 0, priceTo: null };
-  return { key: segmentKey(params), params };
 }

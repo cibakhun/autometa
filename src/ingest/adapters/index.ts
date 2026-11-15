@@ -4,6 +4,7 @@ import { createFetcherFromEnv, readList } from "../http/config";
 import { createAutoScout24Adapter } from "./autoscout24";
 import { createDemoAdapter } from "./demo";
 import { createKleinanzeigenAdapter } from "./kleinanzeigen";
+import { createMobileDeAdapter, mobileDeApiFromEnv } from "./mobilede";
 
 const DEFAULT_DEMO_COUNT = 3000;
 
@@ -43,5 +44,12 @@ export const ADAPTERS: Record<string, AdapterFactory> = {
       fetcher: createFetcherFromEnv(),
       makes: makesFromEnv("KLEINANZEIGEN_MAKES"),
       log: logFor("kleinanzeigen"),
+    }),
+  // Official Search-API; runs only with an API account from mobile.de (MOBILE_DE_API_USER/PASSWORD).
+  mobilede: () =>
+    createMobileDeAdapter({
+      api: mobileDeApiFromEnv(),
+      makes: makesFromEnv("MOBILE_DE_MAKES"),
+      log: logFor("mobilede"),
     }),
 };

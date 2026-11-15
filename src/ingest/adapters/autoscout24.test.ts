@@ -4,8 +4,6 @@ import {
   normalizeAutoScout24,
   PageFormatError,
   parseAutoScout24Page,
-  segmentKey,
-  splitSegment,
   type AutoScout24Item,
 } from "./autoscout24";
 
@@ -172,35 +170,5 @@ describe("listUrl", () => {
     );
     expect(listUrl("bmw", 1, { from: 0, to: 1000 })).toMatch(/&priceto=999$/);
     expect(listUrl("bmw", 1, { from: 100000, to: null })).toMatch(/&pricefrom=100000$/);
-  });
-});
-
-describe("splitSegment", () => {
-  it("splits a whole make along the price ladder without gaps", () => {
-    const parts = splitSegment({ make: "bmw", priceFrom: 0, priceTo: null });
-    expect(parts[0]).toEqual({ make: "bmw", priceFrom: 0, priceTo: 1000 });
-    expect(parts.at(-1)).toEqual({ make: "bmw", priceFrom: 100000, priceTo: null });
-    for (let i = 1; i < parts.length; i += 1) expect(parts[i].priceFrom).toBe(parts[i - 1].priceTo);
-  });
-
-  it("halves a range on round amounts and doubles an open top", () => {
-    expect(splitSegment({ make: "bmw", priceFrom: 10000, priceTo: 12000 })).toEqual([
-      { make: "bmw", priceFrom: 10000, priceTo: 11000 },
-      { make: "bmw", priceFrom: 11000, priceTo: 12000 },
-    ]);
-    expect(splitSegment({ make: "bmw", priceFrom: 100000, priceTo: null })).toEqual([
-      { make: "bmw", priceFrom: 100000, priceTo: 200000 },
-      { make: "bmw", priceFrom: 200000, priceTo: null },
-    ]);
-  });
-
-  it("stops at narrow ranges", () => {
-    expect(splitSegment({ make: "bmw", priceFrom: 10000, priceTo: 10100 })).toEqual([]);
-    expect(splitSegment({ make: "bmw", priceFrom: 10000, priceTo: 10200 })).toHaveLength(2);
-  });
-
-  it("names segments by make and range", () => {
-    expect(segmentKey({ make: "bmw", priceFrom: 5000, priceTo: 6000 })).toBe("bmw:5000-6000");
-    expect(segmentKey({ make: "bmw", priceFrom: 0, priceTo: null })).toBe("bmw:0-");
   });
 });

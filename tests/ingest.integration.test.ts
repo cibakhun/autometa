@@ -4,6 +4,7 @@ import type { NormalizedListing } from "@/core/types";
 import type { RawListing, SourceAdapter, SourceInfo } from "@/ingest/adapter";
 import { createAutoScout24Adapter, listUrl } from "@/ingest/adapters/autoscout24";
 import { createDemoAdapter } from "@/ingest/adapters/demo";
+import { createMobileDeAdapter, MobileDeApi, searchUrl } from "@/ingest/adapters/mobilede";
 import { updateDuplicates } from "@/ingest/duplicates";
 import { PoliteFetcher } from "@/ingest/http/fetcher";
 import { migrate } from "@/ingest/migrate";
@@ -413,5 +414,100 @@ describe.skipIf(!url)("crawling AutoScout24 result lists", () => {
     } finally {
       await single.end();
     }
+  });
+});
+
+describe.skipIf(!url)("reading the mobile.de Search-API", () => {
+  let pool: Pool;
+  const PAGE = 2;
+
+  /** Ads in the Search-API's JSON format, named prefix-0, prefix-1, ... with the given prices. */
+  const ads = (prefix: string, prices: number[]) =>
+    prices.map((price, i) => ({
+      mobileAdId: `${prefix}-${i}`,
+      make: "BMW",
+      model: "320",
+      modelDescription: "320d Touring",
+      detailPageUrl: `https://suchen.mobile.de/auto-inserat/bmw-320/${prefix}-${i}.html?source=api`,
+      mileage: 120000,
+      firstRegistration: "201505",
+      fuel: "DIESEL",
+      gearbox: "AUTOMATIC_GEAR",
+      seller: { type: "DEALER", companyName: "Autohaus Köln", phones: [{ number: "0221 1" }], address: { zipcode: "50667", city: "Köln", country: "DE" } },
+      price: { consumerPriceGross: `${price}.00`, currency: "EUR" },
+    }));
+  const answer = (list: unknown[], total: number, maxPages: number) => JSON.stringify({ total, currentPage: 1, maxPages, pageSize: PAGE, ads: list });
+  const range = (from: number, to: number | null) => ({ from, to });
+  const search = (page: number, price?: { from: number; to: number | null }) => searchUrl("bmw", page, price, PAGE);
+
+  function fakeApi(routes: Map<string, string>) {
+    const requests: { url: string; authorization: string }[] = [];
+    const api = new MobileDeApi({
+      user: "test-user",
+      password: "test-password",
+      minDelayMs: 0,
+      sleep: async () => undefined,
+      fetchImpl: (async (input: string | URL, init?: RequestInit) => {
+        requests.push({ url: String(input), authorization: (init?.headers as Record<string, string>).authorization });
+        return new Response(routes.get(String(input)) ?? answer([], 0, 0));
+      }) as typeof fetch,
+    });
+    return { api, requests };
+  }
+
+  beforeAll(async () => {
+    pool = await freshTestDatabase();
+  }, 60_000);
+
+  afterAll(async () => {
+    await pool?.end();
+  });
+
+  it("reads newest ads and price segments and counts misses only in segments read completely", async () => {
+    const routes = new Map<string, string>([
+      // Newest changes and the whole make: more than the API pages through, so it is split.
+      [search(1), answer(ads("new", [25000, 31000]), 2500, 1250)],
+      // 0-1000: three ads on two pages.
+      [search(1, range(0, 1000)), answer(ads("cheap", [500, 900]), 3, 2)],
+      [search(2, range(0, 1000)), answer(ads("cheap2", [700]), 3, 2)],
+      // 1000-2000: the list grows while it is read, so it does not count as complete.
+      [search(1, range(1000, 2000)), answer(ads("mid", [1100, 1200]), 3, 2)],
+      [search(2, range(1000, 2000)), answer(ads("mid2", [1300, 1400]), 4, 2)],
+    ]);
+    const crawl = () => {
+      const fake = fakeApi(routes);
+      return { ...fake, adapter: createMobileDeAdapter({ api: fake.api, makes: ["bmw"], pageSize: PAGE }) };
+    };
+
+    const first = crawl();
+    await runIngest(pool, first.adapter);
+    expect(first.adapter.completedSegments!()).toContain("bmw:0-1000");
+    expect(first.adapter.completedSegments!()).not.toContain("bmw:1000-2000");
+    expect(first.adapter.completedSegments!()).not.toContain("bmw:0-");
+    // Only the API is asked, always with the API account.
+    expect(first.requests.every((r) => r.url.startsWith("https://services.mobile.de/search-api/search?"))).toBe(true);
+    expect(first.requests.every((r) => r.authorization.startsWith("Basic "))).toBe(true);
+
+    const source = await pool.query("select name, kind from sources where id = 'mobilede'");
+    expect(source.rows[0]).toEqual({ name: "mobile.de", kind: "api" });
+    const stored = await pool.query<{ external_id: string; segment: string | null; model_slug: string | null; seller_name: string | null; fuel: string; zip: string }>(
+      "select external_id, segment, model_slug, seller_name, fuel, zip from listings where source_id = 'mobilede' order by external_id",
+    );
+    const byId = new Map(stored.rows.map((row) => [row.external_id, row]));
+    expect(byId.get("cheap-1")).toMatchObject({ segment: "bmw:0-1000", seller_name: "Autohaus Köln", fuel: "diesel", zip: "50667" });
+    expect(byId.get("new-0")?.segment).toBeNull();
+    const raw = await pool.query("select payload::text as payload from raw_listings where source_id = 'mobilede'");
+    expect(raw.rows.some((row) => row.payload.includes("0221"))).toBe(false);
+
+    // The 900 EUR car is sold: gone after two complete reads of its segment without it.
+    routes.set(search(1, range(0, 1000)), answer([...ads("cheap", [500]), ...ads("cheap2", [700])], 2, 1));
+    await runIngest(pool, crawl().adapter);
+    const once = await pool.query("select status, missed_runs from listings where external_id = 'cheap-1'");
+    expect(once.rows[0]).toEqual({ status: "active", missed_runs: 1 });
+    await runIngest(pool, crawl().adapter);
+    const gone = await pool.query("select external_id from listings where source_id = 'mobilede' and status = 'gone'");
+    expect(gone.rows.map((row) => row.external_id)).toEqual(["cheap-1"]);
+    // The segment that changed while it was read never takes anything out.
+    expect((await pool.query("select status from listings where external_id = 'mid-0'")).rows[0].status).toBe("active");
   });
 });
