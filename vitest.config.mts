@@ -6,7 +6,11 @@ export default defineConfig({
     alias: { "@": path.resolve(import.meta.dirname, "src") },
   },
   test: {
-    include: ["src/**/*.test.ts", "tests/**/*.test.ts"],
     environment: "node",
+    projects: [
+      { extends: true, test: { name: "unit", include: ["src/**/*.test.ts"] } },
+      // Integration tests share one database and reset it, so their files run one after another.
+      { extends: true, test: { name: "integration", include: ["tests/**/*.test.ts"], fileParallelism: false } },
+    ],
   },
 });

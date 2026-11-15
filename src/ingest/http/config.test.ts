@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createFetcherFromEnv } from "./config";
+import { createFetcherFromEnv, readList } from "./config";
 
 describe("createFetcherFromEnv", () => {
   afterEach(() => {
@@ -29,5 +29,23 @@ describe("createFetcherFromEnv", () => {
     vi.stubEnv("SCRAPE_MIN_DELAY_MS", undefined);
     vi.stubEnv("SCRAPE_RESPECT_ROBOTS", "vielleicht");
     expect(() => createFetcherFromEnv()).toThrow(/SCRAPE_RESPECT_ROBOTS/);
+  });
+});
+
+describe("readList", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("splits a comma-separated value and ignores blanks", () => {
+    vi.stubEnv("SCRAPE_SOURCES", " autoscout24, ,kleinanzeigen ");
+    expect(readList("SCRAPE_SOURCES")).toEqual(["autoscout24", "kleinanzeigen"]);
+  });
+
+  it("is undefined when unset or blank", () => {
+    vi.stubEnv("SCRAPE_SOURCES", undefined);
+    expect(readList("SCRAPE_SOURCES")).toBeUndefined();
+    vi.stubEnv("SCRAPE_SOURCES", " , ");
+    expect(readList("SCRAPE_SOURCES")).toBeUndefined();
   });
 });

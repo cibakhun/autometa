@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getPool } from "@/lib/db";
 import { formatNumber } from "@/lib/format";
 import { filtersToQuery, parseFilters, SORT_LABELS, type SearchFilters } from "@/search/filters";
-import { getMakeFacets, resolveZip, searchListings, type Origin, type SearchResult } from "@/search/query";
+import { getMakeFacets, getSourceFacets, resolveZip, searchListings, type Origin, type SearchResult } from "@/search/query";
 import { FilterForm } from "./filter-form";
 import { ResultCard } from "./result-card";
 
@@ -10,12 +10,16 @@ export async function SearchView({ searchParams }: { searchParams: PageProps<"/"
   const filters = parseFilters(await searchParams);
   const pool = getPool();
   const origin = filters.zip ? await resolveZip(pool, filters.zip) : null;
-  const [facets, result] = await Promise.all([getMakeFacets(pool), searchListings(pool, filters, origin)]);
+  const [facets, sources, result] = await Promise.all([
+    getMakeFacets(pool),
+    getSourceFacets(pool),
+    searchListings(pool, filters, origin),
+  ]);
 
   return (
     <div className="grid gap-6 md:grid-cols-[18rem_1fr]">
       <aside>
-        <FilterForm key={filtersToQuery(filters, { page: 1 })} facets={facets} filters={filters} />
+        <FilterForm key={filtersToQuery(filters, { page: 1 })} facets={facets} sources={sources} filters={filters} />
       </aside>
       <section aria-label="Suchergebnisse" className="min-w-0">
         <ResultHeader result={result} filters={filters} origin={origin} />

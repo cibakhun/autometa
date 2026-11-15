@@ -2,7 +2,7 @@
 
 Eine Suche für Gebrauchtwagen aus vielen Fahrzeugbörsen: Suchkriterien einmal eingeben, Angebote aus verschiedenen Quellen in einer einheitlichen Liste vergleichen und per Klick zur Originalanzeige springen.
 
-**Stand:** Phase 1. Suche, Filter, Detailseite und Weiterleitung laufen mit generierten Demo-Daten. Echte Quellen folgen, sobald der Datenzugang geklärt ist.
+**Stand:** Phase 2. Echte Angebote kommen von AutoScout24 und Kleinanzeigen (siehe „Quellen“). Ohne eingeschaltete Quellen zeigt die Seite generierte Demo-Daten und sagt das oben auch.
 
 ## Schnellstart
 
@@ -24,7 +24,8 @@ npm run dev                     # http://localhost:3000
 | `npm run db:migrate` | SQL-Migrationen aus `supabase/migrations` anwenden |
 | `npm run db:seed` | Marken- und Modellliste sowie bekannte Postleitzahlen schreiben |
 | `npm run db:prepare` | `db:seed` und, solange die Datenbank keine Angebote hat, die Demo-Daten importieren (läuft bei jedem Start) |
-| `npm run ingest -- demo` | Eine Quelle importieren (hier: Demo-Daten) |
+| `npm run ingest -- autoscout24 kleinanzeigen` | Quellen einmal importieren, danach Dubletten neu gruppieren (`demo` für Demo-Daten) |
+| `npm run worker` | Hintergrund-Job: importiert die Quellen aus `SCRAPE_SOURCES` alle `SCRAPE_INTERVAL_MINUTES` Minuten |
 | `npm test` | Tests; mit `TEST_DATABASE_URL` auch gegen eine echte Datenbank |
 | `npm run lint` / `npm run typecheck` / `npm run build` | Prüfungen wie in der CI |
 
@@ -33,14 +34,33 @@ npm run dev                     # http://localhost:3000
 ```
 supabase/migrations/   Datenbankschema (läuft auf Postgres und Supabase)
 src/core/              Datenmodell, Marken-/Modellliste, Normalisierung, Geo-Funktionen
-src/ingest/            Adapter-Schnittstelle, Import-Lauf, Migrationen, Seed
-src/ingest/adapters/   ein Adapter je Quelle (aktuell: demo)
+src/ingest/            Adapter-Schnittstelle, Import-Lauf, Dubletten, Segmente, Migrationen, Seed
+src/ingest/adapters/   ein Adapter je Quelle: autoscout24, kleinanzeigen, demo
+src/ingest/http/       PoliteFetcher (Abstand, robots.txt, Abbruch bei Sperren), HTML-Helfer
 src/search/            Filter aus der URL lesen, SQL-Suche, PLZ-Auflösung
 src/app/               Next.js-Seiten: Suche, Detailseite /angebot/[id], Weiterleitung /go/[id], API /api/search
-scripts/               Kommandozeilen-Einstiege für Migration, Seed und Import
+scripts/               Kommandozeilen-Einstiege für Migration, Seed, Import, Worker und Start
+data/                  Postleitzahlen mit Koordinaten (GeoNames, CC BY 4.0)
 ```
 
-So fließen die Daten: Adapter ruft ab → Rohdaten landen in `raw_listings` → Normalisierung auf das einheitliche Format → `listings`. Jede Quelle wird in einem eigenen Lauf importiert (`ingest_runs`). Fehlt ein Angebot in zwei vollständigen Läufen hintereinander, gilt es als verkauft und verschwindet aus der Suche.
+So fließen die Daten: Adapter ruft ab → Rohdaten landen in `raw_listings` → Normalisierung auf das einheitliche Format → `listings`. Jede Quelle wird in einem eigenen Lauf importiert (`ingest_runs`); zwei Läufe derselben Quelle können sich nicht überschneiden. Nach jedem Import gruppiert `updateDuplicates` dasselbe Fahrzeug auf mehreren Börsen (gleiche Marke, Modell und Erstzulassung, km ±2 %, Preis ±8 %, höchstens 25 km entfernt, keine widersprüchliche Leistung, Kraftstoff oder Getriebe). Die Suche zeigt es einmal, zum günstigsten Preis, mit „Auch bei …“ für die anderen Börsen.
+
+Wann ein Angebot aus der Suche verschwindet:
+
+- Liest ein Adapter den ganzen Bestand (`fullSnapshot`), zählt jedes fehlende Angebot als verpasst. Liest er nur Teile, zählen Fehlende nur in den Teilen, die er vollständig gelesen hat (`completedSegments`). Nach zwei verpassten Läufen hintereinander gilt ein Angebot als verkauft.
+- Zusätzlich verschwindet ein Angebot, das ein Adapter `staleAfterDays` Tage nicht mehr gesehen hat.
+
+## Quellen
+
+| Börse | Was gelesen wird | Abdeckung | Aus der Suche nach |
+| --- | --- | --- | --- |
+| AutoScout24 | Ergebnislisten `/lst/<marke>` (robots.txt erlaubt sie, Detailseiten nicht) | Je Lauf erst die neuesten Angebote je Marke, dann reihum Marke × Preisbereich. Hat ein Bereich mehr Treffer, als die Liste durchblättern lässt, wird er geteilt (`crawl_segments`). | zwei vollständigen Läufen seines Preisbereichs ohne das Angebot, spätestens 30 Tagen |
+| Kleinanzeigen | Kategorie „Autos“, je Marke und gesamt die ersten 5 Seiten (mehr erlaubt die robots.txt nicht, Filter auch nicht) | nur die neuesten Anzeigen; ob privat oder Händler, steht nicht in der Liste | 14 Tagen ohne Sichtung |
+| mobile.de | nichts | Die robots.txt verbietet die Suche, und die Seite sperrt unseren Bot (403). | |
+
+Der Bot hält die robots.txt jeder Börse ein (Entscheidung vom 15.11.2026). Gespeichert werden nur Fakten, keine Fotos, Beschreibungen oder Namen privater Verkäufer. Hat eine Börse ihr Seitenformat geändert, bricht der Lauf mit einer klaren Meldung ab, statt leere Daten zu speichern.
+
+Wie weit AutoScout24 pro Lauf kommt, hängt vom Budget ab: Bei 5 Sekunden Abstand und 500 Abrufen dauert ein Lauf gut 40 Minuten. Mit `AUTOSCOUT24_MAKES` und `KLEINANZEIGEN_MAKES` lassen sich die Marken eingrenzen (Slugs wie `volkswagen,bmw`).
 
 ## Eine neue Quelle anbinden
 
@@ -68,9 +88,9 @@ AutoMeta läuft wie die anderen AgencyOS-Projekte als Coolify-App, die AgencyOS 
 
 - **Build:** `nixpacks.toml` legt wie bei AgencyOS Node 22, `npm ci`, `npm run build` und `npm run start` fest. Der Build braucht keine Datenbank.
 - **Datenbank:** eine PostgreSQL-Ressource im selben Coolify-Projekt. Ihre interne URL kommt als `DATABASE_URL` in die Umgebungsvariablen der App, in Coolify oder im AgencyOS-Projekt.
-- **Start:** `npm run start` führt die Migrationen aus, schreibt Marken, Modelle und PLZ und importiert die Demo-Angebote, solange die Datenbank noch keine Angebote hat. Erst danach startet Next.js. Schlägt ein Schritt fehl, startet der neue Container nicht und die alte Version läuft weiter. Ein Terminal oder ein Pre-deployment command ist nicht nötig.
+- **Start:** `npm run start` führt die Migrationen aus, schreibt Marken, Modelle und PLZ und importiert die Demo-Angebote, solange die Datenbank noch keine Angebote hat. Danach startet Next.js und, wenn `SCRAPE_SOURCES` gesetzt ist, daneben der Import-Worker. Schlägt ein Schritt vor dem Start fehl, startet der neue Container nicht und die alte Version läuft weiter. Ein Terminal oder ein Pre-deployment command ist nicht nötig.
 - **Ausrollen:** den Pull Request in AgencyOS mit „Merge to Main“ zusammenführen und danach unter „Deployments“ ein Deployment starten. AgencyOS legt die App ohne GitHub-Webhook an, ein Push auf `main` allein rollt also nichts aus, solange in Coolify keiner eingerichtet ist.
 - **Domain:** die automatische sslip.io-Adresse ist von außen nicht erreichbar. Für eine öffentliche Adresse eine Subdomain in Cloudflare (proxied) auf den Server zeigen lassen und dieselbe Adresse bei der App als Domain eintragen.
-- **Importe regelmäßig:** in Coolify unter „Scheduled Tasks“ je Quelle einen Befehl wie `npm run ingest -- demo` mit einem Cron-Ausdruck anlegen.
+- **Echte Angebote einschalten:** in den Umgebungsvariablen der App `SCRAPE_SOURCES=autoscout24,kleinanzeigen` setzen und neu ausrollen. Der Worker läuft im selben Container, importiert sofort und dann alle `SCRAPE_INTERVAL_MINUTES` Minuten (Standard 60). Stürzt er ab, startet ihn der Container neu, die Website läuft davon unabhängig. Sobald eine echte Quelle Angebote geliefert hat, löscht der Import die Demo-Daten. Die Logs der App zeigen jeden Lauf (`[autoscout24] …`, `duplicates: …`).
 
 Alternativ funktioniert jede andere Postgres-Datenbank, zum Beispiel Supabase. Dort kann die App den gepoolten Connection-String (Transaction-Modus, Port 6543) nutzen. Migrationen brauchen aber eine direkte Verbindung oder den Session-Modus (Port 5432), weil sie eine Sperre über mehrere Transaktionen halten. Dafür `MIGRATION_DATABASE_URL` setzen. Mit Port 6543 bricht `db:migrate` absichtlich ab.

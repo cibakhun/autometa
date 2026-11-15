@@ -51,6 +51,8 @@ const schema = z.object({
 export type SearchFilters = z.infer<typeof schema> & {
   fuel: (typeof FUELS)[number][];
   body: (typeof BODY_TYPES)[number][];
+  /** Source ids such as "autoscout24"; unknown ids simply match nothing. */
+  source: string[];
 };
 
 function getAll(params: RawParams, key: string): string[] {
@@ -73,7 +75,10 @@ export function parseFilters(params: RawParams): SearchFilters {
       (allowed as readonly string[]).includes(v),
     );
 
-  const filters: SearchFilters = { ...parsed, fuel: multi("fuel", FUELS), body: multi("body", BODY_TYPES) };
+  const sources = [...new Set(getAll(params, "source").flatMap((v) => v.split(",")))]
+    .filter((v) => /^[a-z0-9_-]{1,40}$/.test(v))
+    .slice(0, 10);
+  const filters: SearchFilters = { ...parsed, fuel: multi("fuel", FUELS), body: multi("body", BODY_TYPES), source: sources };
   if (!filters.make) filters.model = undefined;
   if (filters.zip && !filters.radius) filters.radius = 50;
   if (!filters.zip) filters.radius = undefined;

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  detectBodyType,
+  detectFuel,
+  detectTransmission,
+  findMakeInTitle,
   kwToPs,
   normalizeBodyType,
   normalizeFuel,
@@ -107,5 +111,80 @@ describe("resolveMakeModel", () => {
 
   it("returns nulls for unknown makes", () => {
     expect(resolveMakeModel("Trabant", "601")).toEqual({ makeSlug: null, modelSlug: null, variant: "601" });
+  });
+});
+
+describe("detectFuel", () => {
+  it.each([
+    ["VW Golf 2.0 TDI Highline", "diesel"],
+    ["BMW 320d Touring", "diesel"],
+    ["Audi A3 Sportback 1.4 TFSI", "petrol"],
+    ["BMW 118i", "petrol"],
+    ["VW Passat GTE Variant", "plugin_hybrid"],
+    ["Toyota Yaris Hybrid", "hybrid"],
+    ["Audi e-tron 55 quattro", "electric"],
+    ["Opel Corsa Autogas LPG", "lpg"],
+    ["Seat Leon 1.5 TGI", "cng"],
+  ])("%s -> %s", (title, fuel) => {
+    expect(detectFuel(title)).toBe(fuel);
+  });
+
+  it("returns null when the title does not say", () => {
+    expect(detectFuel("VW Golf 7 Comfortline")).toBeNull();
+    expect(detectFuel(null)).toBeNull();
+  });
+});
+
+describe("detectTransmission", () => {
+  it("counts clear words only", () => {
+    expect(detectTransmission("Golf 2.0 TDI DSG")).toBe("automatic");
+    expect(detectTransmission("C 220 d Automatik")).toBe("automatic");
+    expect(detectTransmission("Polo 1.0 6-Gang")).toBe("manual");
+    expect(detectTransmission("Corsa Schaltgetriebe")).toBe("manual");
+    expect(detectTransmission("Auto mit TÜV")).toBeNull();
+    expect(detectTransmission("Golf Comfortline")).toBeNull();
+  });
+});
+
+describe("detectBodyType", () => {
+  it.each([
+    ["BMW 320d Touring", "estate"],
+    ["Audi A4 Avant", "estate"],
+    ["Peugeot 308 SW", "estate"],
+    ["Mercedes C 200 T-Modell", "estate"],
+    ["Mini Cooper Cabrio", "convertible"],
+    ["BMW 420i Coupé", "coupe"],
+    ["VW T5 Bus", "van"],
+    ["Mercedes E 220 Limousine", "sedan"],
+  ])("%s -> %s", (title, body) => {
+    expect(detectBodyType(title)).toBe(body);
+  });
+
+  it("does not match parts of other words", () => {
+    expect(detectBodyType("Swift 1.2")).toBeNull();
+    expect(detectBodyType("Vanden Plas")).toBeNull();
+    expect(detectBodyType(null)).toBeNull();
+  });
+});
+
+describe("findMakeInTitle", () => {
+  it("finds the make at the start and returns the rest", () => {
+    expect(findMakeInTitle("VW Golf 7 1.4 TSI")).toMatchObject({ make: { slug: "volkswagen" }, rest: "Golf 7 1.4 TSI" });
+    expect(findMakeInTitle("Mercedes Benz V250 4Matic")).toMatchObject({ make: { slug: "mercedes-benz" }, rest: "V250 4Matic" });
+    expect(findMakeInTitle("Mercedes-Benz C 220 d")).toMatchObject({ make: { slug: "mercedes-benz" }, rest: "C 220 d" });
+    expect(findMakeInTitle("Land Rover Defender 110")).toMatchObject({ make: { slug: "land-rover" }, rest: "Defender 110" });
+  });
+
+  it("returns null when the title does not start with a make", () => {
+    expect(findMakeInTitle("Suche Golf 7")).toBeNull();
+    expect(findMakeInTitle("")).toBeNull();
+  });
+});
+
+describe("Mercedes-Benz classes", () => {
+  it("reads the class from codes like C220d, but leaves GLC to its own model", () => {
+    expect(resolveMakeModel("Mercedes-Benz", "C220d AMG Line").modelSlug).toBe("c-klasse");
+    expect(resolveMakeModel("Mercedes-Benz", "V250 4Matic").modelSlug).toBe("v-klasse");
+    expect(resolveMakeModel("Mercedes-Benz", "GLC 300").modelSlug).toBe("glc");
   });
 });

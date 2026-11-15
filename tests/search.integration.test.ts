@@ -93,10 +93,13 @@ describe.skipIf(!url)("search against Postgres", () => {
   });
 
   it("falls back to a nearby postal code", async () => {
-    const origin = await resolveZip(pool, "10999");
-    expect(origin).toMatchObject({ city: "Berlin", exact: false });
-    expect(haversineKm(origin!.lat, origin!.lng, 52.52, 13.405)).toBeLessThan(1);
-    expect(await resolveZip(pool, "27999")).toBeNull();
+    expect(await resolveZip(pool, "10999")).toMatchObject({ city: "Berlin Kreuzberg", exact: true });
+    // 10875 belongs to a single company and is not in the list; the numerically closest code in the region is used.
+    const origin = await resolveZip(pool, "10875");
+    expect(origin).toMatchObject({ zip: "10829", city: "Berlin", exact: false });
+    expect(haversineKm(origin!.lat, origin!.lng, 52.52, 13.405)).toBeLessThan(10);
+    // No German postal code starts with 05.
+    expect(await resolveZip(pool, "05999")).toBeNull();
   });
 
   it("escapes LIKE wildcards in the free-text search", async () => {

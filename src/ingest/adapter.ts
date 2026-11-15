@@ -1,3 +1,4 @@
+import type { Pool } from "pg";
 import type { NormalizedListing } from "@/core/types";
 
 export interface SourceInfo {
@@ -10,7 +11,18 @@ export interface SourceInfo {
 /** One listing as delivered by a source, before normalization. Stored as-is in raw_listings. */
 export interface RawListing {
   externalId: string;
+  /** Facts only: no photos, description texts or contact data of private sellers. */
   payload: Record<string, unknown>;
+  /**
+   * The part of the source's inventory this listing was found in (see crawl_segments).
+   * Only set it when the listing really belongs to that part, not for ads the portal mixes in.
+   */
+  segment?: string;
+}
+
+/** What an adapter gets from the import run. */
+export interface AdapterContext {
+  pool: Pool;
 }
 
 /**
@@ -27,7 +39,20 @@ export interface SourceAdapter {
    * Only then may listings missing from a run be counted as possibly sold.
    */
   fullSnapshot: boolean;
+  /**
+   * For sources that cannot be read completely: listings not seen for this many days count as
+   * sold. Leave it out for full snapshots.
+   */
+  staleAfterDays?: number;
   fetch(): AsyncIterable<RawListing>;
   /** Returns null when the listing cannot be used (e.g. no price). */
   normalize(raw: RawListing): NormalizedListing | null;
+  /**
+   * Segments the last fetch() read completely. Active listings of these segments that the run did
+   * not see count as missed, like listings missing from a full snapshot. Called after fetch()
+   * finished without an error.
+   */
+  completedSegments?(): string[];
 }
+
+export type AdapterFactory = (context: AdapterContext) => SourceAdapter;

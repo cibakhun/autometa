@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "tsx scripts/migrate.ts && tsx scripts/prepare.ts && next start",
+    "start": "tsx scripts/migrate.ts && tsx scripts/prepare.ts && tsx scripts/serve.ts",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
@@ -13,7 +13,8 @@
     "db:seed": "tsx scripts/seed.ts",
     "db:prepare": "tsx scripts/prepare.ts",
     "ingest": "tsx scripts/ingest.ts",
-    "db:setup": "npm run db:migrate && npm run db:prepare"
+    "db:setup": "npm run db:migrate && npm run db:prepare",
+    "worker": "tsx scripts/worker.ts"
   },
   "dependencies": {
     "next": "16.4.6",

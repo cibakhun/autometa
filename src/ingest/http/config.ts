@@ -1,6 +1,6 @@
 import { DEFAULT_USER_AGENT, PoliteFetcher } from "./fetcher";
 
-function readNumber(name: string, fallback: number, min: number): number {
+export function readNumber(name: string, fallback: number, min: number): number {
   const value = process.env[name];
   if (value === undefined || value.trim() === "") return fallback;
   const n = Number(value);
@@ -8,12 +8,21 @@ function readNumber(name: string, fallback: number, min: number): number {
   return n;
 }
 
-function readBoolean(name: string, fallback: boolean): boolean {
+export function readBoolean(name: string, fallback: boolean): boolean {
   const value = process.env[name]?.trim().toLowerCase();
   if (!value) return fallback;
   if (["1", "true", "ja", "yes"].includes(value)) return true;
   if (["0", "false", "nein", "no"].includes(value)) return false;
   throw new Error(`${name} must be true or false, got "${process.env[name]}".`);
+}
+
+/** A comma-separated list, e.g. "autoscout24, kleinanzeigen"; undefined when unset or blank. */
+export function readList(name: string): string[] | undefined {
+  const items = (process.env[name] ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return items.length > 0 ? items : undefined;
 }
 
 /** The fetcher scrapers use, configured from SCRAPE_* environment variables. */

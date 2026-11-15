@@ -74,8 +74,9 @@ export interface NormalizedListing {
   powerKw: number | null;
   bodyType: BodyType | null;
   color: string | null;
-  sellerType: SellerType;
-  /** Company name for dealers. Always null for private sellers. */
+  /** Null when the source does not say whether the seller is a dealer. */
+  sellerType: SellerType | null;
+  /** Company name for dealers. Always null for private sellers and unknown seller types. */
   sellerName: string | null;
   zip: string | null;
   city: string | null;

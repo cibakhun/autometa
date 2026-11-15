@@ -1,5 +1,9 @@
-import type { SourceAdapter } from "../adapter";
+import { MAKES } from "@/core/taxonomy";
+import type { AdapterFactory } from "../adapter";
+import { createFetcherFromEnv, readList } from "../http/config";
+import { createAutoScout24Adapter } from "./autoscout24";
 import { createDemoAdapter } from "./demo";
+import { createKleinanzeigenAdapter } from "./kleinanzeigen";
 
 const DEFAULT_DEMO_COUNT = 3000;
 
@@ -13,7 +17,32 @@ export function demoListingCount(value = process.env.DEMO_LISTING_COUNT): number
   return count;
 }
 
-/** All known sources. Add a real adapter here once its access is agreed. */
-export const ADAPTERS: Record<string, () => SourceAdapter> = {
+/** Make slugs from an environment variable such as AUTOSCOUT24_MAKES; all makes when unset. */
+export function makesFromEnv(name: string): string[] | undefined {
+  const makes = readList(name)?.map((make) => make.toLowerCase());
+  const unknown = makes?.filter((make) => !MAKES.some((known) => known.slug === make)) ?? [];
+  if (unknown.length > 0) {
+    throw new Error(`${name} has unknown makes: ${unknown.join(", ")}. Known: ${MAKES.map((m) => m.slug).join(", ")}`);
+  }
+  return makes;
+}
+
+const logFor = (source: string) => (message: string) => console.log(`[${source}] ${message}`);
+
+/** All known sources. */
+export const ADAPTERS: Record<string, AdapterFactory> = {
   demo: () => createDemoAdapter({ count: demoListingCount() }),
+  autoscout24: ({ pool }) =>
+    createAutoScout24Adapter({
+      fetcher: createFetcherFromEnv(),
+      pool,
+      makes: makesFromEnv("AUTOSCOUT24_MAKES"),
+      log: logFor("autoscout24"),
+    }),
+  kleinanzeigen: () =>
+    createKleinanzeigenAdapter({
+      fetcher: createFetcherFromEnv(),
+      makes: makesFromEnv("KLEINANZEIGEN_MAKES"),
+      log: logFor("kleinanzeigen"),
+    }),
 };

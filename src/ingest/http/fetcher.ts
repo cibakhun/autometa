@@ -28,6 +28,17 @@ export class DisallowedError extends Error {
   }
 }
 
+/** The site answered with an error status (other than a block). */
+export class HttpStatusError extends Error {
+  constructor(
+    readonly url: string,
+    readonly status: number,
+  ) {
+    super(`HTTP ${status} for ${url}`);
+    this.name = "HttpStatusError";
+  }
+}
+
 /** The per-run request budget is used up. */
 export class BudgetExceededError extends Error {
   constructor(readonly maxRequests: number) {
@@ -131,6 +142,11 @@ export class PoliteFetcher {
     return this.requestCount;
   }
 
+  /** Requests this run may still make before BudgetExceededError. */
+  get requestsLeft(): number {
+    return Math.max(0, this.maxRequests - this.requestCount);
+  }
+
   /** Fetches a page as text, or throws BlockedError / DisallowedError / BudgetExceededError. */
   async getText(url: string): Promise<FetchedPage> {
     const target = new URL(url);
@@ -153,7 +169,7 @@ export class PoliteFetcher {
         await this.sleep(this.minDelayMs * 2 ** attempt);
         continue;
       }
-      if (page.status >= 400) throw new Error(`HTTP ${page.status} for ${page.url}`);
+      if (page.status >= 400) throw new HttpStatusError(page.url, page.status);
       return page;
     }
   }
