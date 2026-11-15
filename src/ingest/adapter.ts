@@ -16,6 +16,8 @@ export interface RawListing {
   /**
    * The part of the source's inventory this listing was found in (see crawl_segments).
    * Only set it when the listing really belongs to that part, not for ads the portal mixes in.
+   * A sighting without a segment keeps the stored one only while price and make are unchanged;
+   * segments must be cut by those facts (or coarser ones) for that to hold.
    */
   segment?: string;
 }

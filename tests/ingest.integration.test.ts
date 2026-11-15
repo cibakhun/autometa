@@ -147,6 +147,18 @@ describe.skipIf(!url)("importing scraped portals", () => {
     expect(await statusOf(PORTAL_A, "1")).toMatchObject({ segment: "vw:0-1000" });
   });
 
+  it("drops a listing's segment when a sighting outside it shows a new price", async () => {
+    await runIngest(pool, fakePortal(PORTAL_A, [{ listing: car(PORTAL_A, "1", { priceEur: 900 }), segment: "vw:0-1000" }]));
+    await runIngest(pool, fakePortal(PORTAL_A, [{ listing: car(PORTAL_A, "1", { priceEur: 1500 }) }]));
+    expect(await statusOf(PORTAL_A, "1")).toMatchObject({ segment: null });
+
+    // A complete read of its old segment no longer counts it as missed; the next sweep places it again.
+    await runIngest(pool, fakePortal(PORTAL_A, [], { completedSegments: ["vw:0-1000"] }));
+    expect(await statusOf(PORTAL_A, "1")).toMatchObject({ status: "active", missed_runs: 0 });
+    await runIngest(pool, fakePortal(PORTAL_A, [{ listing: car(PORTAL_A, "1", { priceEur: 1500 }), segment: "vw:1000-2000" }]));
+    expect(await statusOf(PORTAL_A, "1")).toMatchObject({ segment: "vw:1000-2000" });
+  });
+
   it("takes out listings not seen for staleAfterDays", async () => {
     await runIngest(pool, fakePortal(PORTAL_A, [{ listing: car(PORTAL_A, "1") }, { listing: car(PORTAL_A, "2") }]));
     await pool.query("update listings set last_seen_at = now() - interval '15 days' where external_id = '1'");
@@ -348,6 +360,24 @@ describe.skipIf(!url)("crawling AutoScout24 result lists", () => {
     await runIngest(pool, crawl().adapter);
     const gone = await pool.query("select external_id from listings where status = 'gone'");
     expect(gone.rows.map((row) => row.external_id)).toEqual(["cheap-1"]);
+  });
+
+  it("does not count a segment as read completely when its list changed between pages", async () => {
+    const routes = new Map<string, string>([
+      [listUrl("skoda", 1), page(cars("p1", Array.from({ length: 20 }, (_, i) => 5000 + i)), 30, 2)],
+      // Page 2 sees one more listing than page 1 did: something moved while we read.
+      [listUrl("skoda", 2), page(cars("p2", Array.from({ length: 10 }, (_, i) => 6000 + i)), 31, 2)],
+    ]);
+    const site = fakeSite(routes);
+    const adapter = createAutoScout24Adapter({ fetcher: site.fetcher, makes: ["skoda"], maxPagesPerSegment: 2 });
+    await runIngest(pool, adapter);
+    expect(adapter.completedSegments!()).not.toContain("skoda:0-");
+
+    // The same list with steady counts is complete.
+    routes.set(listUrl("skoda", 2), page(cars("p2", Array.from({ length: 10 }, (_, i) => 6000 + i)), 30, 2));
+    const steady = createAutoScout24Adapter({ fetcher: fakeSite(routes).fetcher, makes: ["skoda"], maxPagesPerSegment: 2 });
+    await runIngest(pool, steady);
+    expect(steady.completedSegments!()).toContain("skoda:0-");
   });
 
   it("stops quietly when the request budget is used up and keeps what it read", async () => {

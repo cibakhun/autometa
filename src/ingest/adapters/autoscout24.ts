@@ -351,17 +351,21 @@ export function createAutoScout24Adapter(options: AutoScout24Options): SourceAda
     yield* emit(first.items);
 
     const lastPage = Math.min(reachablePages, Math.ceil(first.total / PAGE_SIZE));
+    let unchanged = true;
     for (let page = 2; page <= lastPage; page += 1) {
       if (fetcher.requestsLeft < 1) return;
       const result = await load(listUrl(params.make, page, price));
       if (!result) return;
+      if (result.total !== first.total || result.pages !== first.pages) unchanged = false;
       yield* emit(result.items);
       if (result.items.length === 0) break;
     }
+    if (!unchanged) log(`${segment.key} changed while it was read; it is read again in a later run`);
 
     // Only a read that saw every reported listing may count the others as sold. Listings that moved
-    // between pages while we read leave the segment incomplete for this run.
-    if (first.total <= reachablePages * PAGE_SIZE && seen.size >= first.total) {
+    // between pages, or a list that grew or shrank while we read, leave the segment incomplete for
+    // this run; it stays in the plan and is read again.
+    if (unchanged && first.total <= reachablePages * PAGE_SIZE && seen.size >= first.total) {
       completed.push(segment.key);
       await store.completed(segment.key);
     }

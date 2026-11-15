@@ -239,7 +239,7 @@ export function resolveMakeModel(makeRaw: string, modelRaw: string): ResolvedMak
 
 /**
  * The raw text after the first `normalizedCount` normalized words. A raw word that holds more than
- * the match keeps its rest: "VW-Golf 1.4" after one word is "Golf 1.4".
+ * the match keeps its rest as written: "VW-Golf-1.4 TSI" after one word is "Golf-1.4 TSI".
  */
 function restAfter(rawWords: string[], normalizedCount: number): string {
   let covered = 0;
@@ -247,10 +247,29 @@ function restAfter(rawWords: string[], normalizedCount: number): string {
     if (covered >= normalizedCount) return rawWords.slice(index).join(" ");
     const parts = normalizeText(rawWords[index]).split(" ").filter(Boolean).length;
     if (covered + parts > normalizedCount) {
-      const pieces = rawWords[index].split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-      return [...pieces.slice(normalizedCount - covered), ...rawWords.slice(index + 1)].join(" ");
+      const tail = afterWordRuns(rawWords[index], normalizedCount - covered);
+      return [tail, ...rawWords.slice(index + 1)].filter(Boolean).join(" ");
     }
     covered += parts;
+  }
+  return "";
+}
+
+/**
+ * The part of one raw word after its first `count` runs of letters or digits, as normalizeText
+ * splits them, without the separator in between: ("Golf-1.4", 1) -> "1.4".
+ */
+function afterWordRuns(word: string, count: number): string {
+  const chars = Array.from(word.normalize("NFC"));
+  let runs = 0;
+  let inRun = false;
+  for (let index = 0; index < chars.length; index += 1) {
+    const isWordChar = normalizeText(chars[index]) !== "";
+    if (isWordChar && !inRun) {
+      if (runs === count) return chars.slice(index).join("");
+      runs += 1;
+    }
+    inRun = isWordChar;
   }
   return "";
 }

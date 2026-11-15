@@ -133,7 +133,13 @@ async function writeBatch(client: PoolClient, sourceId: string, raws: RawListing
          values ${placeholders(pending.length, LISTING_COLUMNS.length)}
          on conflict (source_id, external_id)
          do update set ${updates},
-                       segment = coalesce(excluded.segment, listings.segment),
+                       segment = case
+                         when excluded.segment is not null then excluded.segment
+                         -- Seen outside a segment (e.g. in the newest list): keep the old one only
+                         -- while the facts a segment is cut by are the same.
+                         when excluded.price_eur is not distinct from listings.price_eur
+                          and excluded.make_slug is not distinct from listings.make_slug then listings.segment
+                       end,
                        status = 'active', missed_runs = 0, last_seen_at = now()`,
         pending.flatMap(listingValues),
       );

@@ -179,6 +179,7 @@ describe("findMakeInTitle", () => {
     expect(findMakeInTitle("Mercedes-Benz C 220 d")).toMatchObject({ make: { slug: "mercedes-benz" }, rest: "C 220 d" });
     expect(findMakeInTitle("Land Rover Defender 110")).toMatchObject({ make: { slug: "land-rover" }, rest: "Defender 110" });
     expect(findMakeInTitle("VW-Golf 1.4 TSI")).toMatchObject({ make: { slug: "volkswagen" }, rest: "Golf 1.4 TSI" });
+    expect(findMakeInTitle("VW-Golf-1.4 TSI")).toMatchObject({ make: { slug: "volkswagen" }, rest: "Golf-1.4 TSI" });
   });
 
   it("returns null when the title does not start with a make", () => {
@@ -191,6 +192,12 @@ describe("resolveMakeModel with joined words", () => {
   it("keeps what follows the model inside the same word", () => {
     expect(resolveMakeModel("VW", "Golf-GTI Performance")).toEqual({ makeSlug: "volkswagen", modelSlug: "golf", variant: "GTI Performance" });
     expect(resolveMakeModel("VW", "Käfer 1303")).toMatchObject({ modelSlug: "beetle", variant: "1303" });
+  });
+
+  it("keeps the punctuation of the rest", () => {
+    expect(resolveMakeModel("VW", "Golf-1.4 TSI")).toMatchObject({ modelSlug: "golf", variant: "1.4 TSI" });
+    expect(resolveMakeModel("VW", "T-Roc-2.0 TDI")).toMatchObject({ modelSlug: "t-roc", variant: "2.0 TDI" });
+    expect(resolveMakeModel("VW", "Golf/GTI")).toMatchObject({ modelSlug: "golf", variant: "GTI" });
   });
 });
 
