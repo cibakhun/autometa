@@ -12,6 +12,7 @@ import { IngestBusyError, runIngest } from "@/ingest/run";
 import { seedReferenceData } from "@/ingest/seed";
 import { parseFilters } from "@/search/filters";
 import { getListing, getMakeFacets, getSourceFacets, getSourceStatus, searchListings } from "@/search/query";
+import { emptyTestDatabase } from "./test-database";
 
 /**
  * Import of scraped portals against a real Postgres. Set TEST_DATABASE_URL to a database whose
@@ -19,11 +20,9 @@ import { getListing, getMakeFacets, getSourceFacets, getSourceStatus, searchList
  */
 const url = process.env.TEST_DATABASE_URL;
 
-/** Connects to the test database and empties it; refuses any database without "test" in its name. */
+/** An empty, migrated and seeded test database (see emptyTestDatabase for the safety check). */
 async function freshTestDatabase(): Promise<Pool> {
-  if (!new URL(url!).pathname.includes("test")) throw new Error("TEST_DATABASE_URL must point to a *test* database");
-  const pool = new Pool({ connectionString: url });
-  await pool.query("drop schema public cascade; create schema public;");
+  const pool = await emptyTestDatabase();
   await migrate(pool);
   await seedReferenceData(pool);
   return pool;

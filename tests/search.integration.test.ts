@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { Pool } from "pg";
+import type { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { haversineKm } from "@/core/geo";
 import { createDemoAdapter } from "@/ingest/adapters/demo";
@@ -11,6 +11,7 @@ import { runIngest } from "@/ingest/run";
 import { seedReferenceData } from "@/ingest/seed";
 import { parseFilters } from "@/search/filters";
 import { getMakeFacets, recordClick, resolveZip, searchListings } from "@/search/query";
+import { emptyTestDatabase } from "./test-database";
 
 /**
  * Runs against a real Postgres. Set TEST_DATABASE_URL to a database whose name contains "test";
@@ -22,9 +23,7 @@ describe.skipIf(!url)("search against Postgres", () => {
   let pool: Pool;
 
   beforeAll(async () => {
-    if (!new URL(url!).pathname.includes("test")) throw new Error("TEST_DATABASE_URL must point to a *test* database");
-    pool = new Pool({ connectionString: url });
-    await pool.query("drop schema public cascade; create schema public;");
+    pool = await emptyTestDatabase();
     await migrate(pool);
     await seedReferenceData(pool);
     await runIngest(pool, createDemoAdapter({ count: 600, seed: 3 }));
@@ -138,8 +137,7 @@ describe.skipIf(!url)("preparing a fresh database", () => {
   let pool: Pool;
 
   beforeAll(async () => {
-    pool = new Pool({ connectionString: url });
-    await pool.query("drop schema public cascade; create schema public;");
+    pool = await emptyTestDatabase();
     await migrate(pool);
   }, 60_000);
 
