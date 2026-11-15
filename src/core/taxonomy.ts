@@ -58,7 +58,7 @@ export const MAKES: MakeDef[] = [
       m("touareg", "Touareg"),
       m("taigo", "Taigo"),
       m("scirocco", "Scirocco"),
-      m("beetle", "Beetle", { aliases: ["kaefer", "new beetle"] }),
+      m("beetle", "Beetle", { aliases: ["kaefer", "kafer", "new beetle"] }),
       m("fox", "Fox"),
       m("amarok", "Amarok"),
       m("transporter", "Transporter", { aliases: ["t4", "t5", "t6", "t6 1", "t7", "bus", "bulli"] }),

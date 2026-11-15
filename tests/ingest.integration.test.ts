@@ -19,6 +19,16 @@ import { getListing, getMakeFacets, getSourceFacets, getSourceStatus, searchList
  */
 const url = process.env.TEST_DATABASE_URL;
 
+/** Connects to the test database and empties it; refuses any database without "test" in its name. */
+async function freshTestDatabase(): Promise<Pool> {
+  if (!new URL(url!).pathname.includes("test")) throw new Error("TEST_DATABASE_URL must point to a *test* database");
+  const pool = new Pool({ connectionString: url });
+  await pool.query("drop schema public cascade; create schema public;");
+  await migrate(pool);
+  await seedReferenceData(pool);
+  return pool;
+}
+
 const PORTAL_A: SourceInfo = { id: "portal-a", name: "Portal A", kind: "scrape", websiteUrl: "https://a.example" };
 const PORTAL_B: SourceInfo = { id: "portal-b", name: "Portal B", kind: "scrape", websiteUrl: "https://b.example" };
 
@@ -89,11 +99,7 @@ describe.skipIf(!url)("importing scraped portals", () => {
   };
 
   beforeAll(async () => {
-    if (!new URL(url!).pathname.includes("test")) throw new Error("TEST_DATABASE_URL must point to a *test* database");
-    pool = new Pool({ connectionString: url });
-    await pool.query("drop schema public cascade; create schema public;");
-    await migrate(pool);
-    await seedReferenceData(pool);
+    pool = await freshTestDatabase();
   }, 60_000);
 
   beforeEach(async () => {
@@ -162,11 +168,14 @@ describe.skipIf(!url)("importing scraped portals", () => {
       },
     });
     const first = runIngest(pool, slow);
-    await running;
-    await expect(runIngest(pool, fakePortal(PORTAL_A, []))).rejects.toBeInstanceOf(IngestBusyError);
-    // Other sources are not blocked.
-    await expect(runIngest(pool, fakePortal(PORTAL_B, []))).resolves.toMatchObject({ fetched: 0 });
-    release();
+    try {
+      await running;
+      await expect(runIngest(pool, fakePortal(PORTAL_A, []))).rejects.toBeInstanceOf(IngestBusyError);
+      // Other sources are not blocked.
+      await expect(runIngest(pool, fakePortal(PORTAL_B, []))).resolves.toMatchObject({ fetched: 0 });
+    } finally {
+      release();
+    }
     await expect(first).resolves.toMatchObject({ upserted: 1 });
     // The lock is released afterwards.
     await expect(runIngest(pool, fakePortal(PORTAL_A, []))).resolves.toMatchObject({ fetched: 0 });
@@ -275,10 +284,7 @@ describe.skipIf(!url)("crawling AutoScout24 result lists", () => {
   const range = (from: number, to: number | null) => ({ from, to });
 
   beforeAll(async () => {
-    pool = new Pool({ connectionString: url });
-    await pool.query("drop schema public cascade; create schema public;");
-    await migrate(pool);
-    await seedReferenceData(pool);
+    pool = await freshTestDatabase();
   }, 60_000);
 
   afterAll(async () => {
@@ -296,10 +302,12 @@ describe.skipIf(!url)("crawling AutoScout24 result lists", () => {
       // 1000-1500: 25 results on two pages.
       [listUrl("bmw", 1, range(1000, 1500)), page(cars("low", Array.from({ length: 20 }, (_, i) => 1000 + i * 10)), 25, 2)],
       [listUrl("bmw", 2, range(1000, 1500)), page(cars("low2", Array.from({ length: 5 }, (_, i) => 1300 + i * 10)), 25, 2)],
+      // 1500-2000: three results reported, but one listing shows up twice and another not at all.
+      [listUrl("bmw", 1, range(1500, 2000)), page([...cars("dup", [1600, 1700]), { id: "dup-0", price: 1600 }], 3, 1)],
     ]);
     const crawl = () => {
       const site = fakeSite(routes);
-      return { site, adapter: createAutoScout24Adapter({ fetcher: site.fetcher, pool, makes: ["bmw"], maxPagesPerSegment: 2 }) };
+      return { site, adapter: createAutoScout24Adapter({ fetcher: site.fetcher, makes: ["bmw"], maxPagesPerSegment: 2 }) };
     };
 
     const first = crawl();
@@ -307,6 +315,8 @@ describe.skipIf(!url)("crawling AutoScout24 result lists", () => {
     expect(result.gone).toBe(0);
     expect(first.adapter.completedSegments!()).toEqual(expect.arrayContaining(["bmw:0-1000", "bmw:1000-1500"]));
     expect(first.adapter.completedSegments!()).not.toContain("bmw:1000-2000");
+    // Not every reported listing came in: nothing there may count as sold.
+    expect(first.adapter.completedSegments!()).not.toContain("bmw:1500-2000");
     // Detail pages are never requested.
     expect(first.site.requested.some((href) => href.includes("/angebote/"))).toBe(false);
 
@@ -347,9 +357,20 @@ describe.skipIf(!url)("crawling AutoScout24 result lists", () => {
         ? new Response("User-agent: *\nAllow: /\n")
         : new Response(page(cars(String(input), [5000, 6000]), 2, 1))) as typeof fetch;
     const fetcher = new PoliteFetcher({ fetchImpl, sleep: async () => undefined, minDelayMs: 0, random: () => 0, maxRequests: 3 });
-    const adapter = createAutoScout24Adapter({ fetcher, pool, makes: ["bmw", "audi", "opel", "ford"] });
+    const adapter = createAutoScout24Adapter({ fetcher, makes: ["bmw", "audi", "opel", "ford"] });
     const result = await runIngest(pool, adapter);
     expect(fetcher.requestsMade).toBe(3);
     expect(result.upserted).toBeGreaterThan(0);
+  });
+
+  it("needs only the import's own database connection", async () => {
+    const single = new Pool({ connectionString: url, max: 1 });
+    try {
+      const site = fakeSite(new Map([[listUrl("bmw", 1), page(cars("one", [5000]), 1, 1)]]));
+      const adapter = createAutoScout24Adapter({ fetcher: site.fetcher, makes: ["bmw"] });
+      await expect(runIngest(single, adapter)).resolves.toMatchObject({ upserted: 1 });
+    } finally {
+      await single.end();
+    }
   });
 });

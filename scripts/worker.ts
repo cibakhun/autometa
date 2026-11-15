@@ -38,6 +38,7 @@ async function main() {
     } catch (error) {
       log(`round failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
     }
+    if (stopping) break;
     const wait = Math.max(0, started + intervalMs - Date.now());
     log(`next round in ${Math.round(wait / 60_000)} minutes`);
     // Wake up early when asked to stop.

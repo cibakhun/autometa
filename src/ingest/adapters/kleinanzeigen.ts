@@ -91,8 +91,12 @@ export function parseKleinanzeigenPage(html: string, listMake: string | null = n
     const prices = [...article.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)]
       .map((m) => textOf(m[1]))
       .filter((text) => /^(\d{1,3}(\.\d{3})*|\d+) €( VB)?$|^VB$|^Zu verschenken$/.test(text));
-    const texts = [...article.matchAll(/>([^<>]+)</g)].map((m) => decodeEntities(m[1]).trim()).filter(Boolean);
-    const place = texts.map((t) => t.match(/^(\d{5}) (.+)$/)).find(Boolean);
+    // Facts come from the short text nodes outside the seller's description, which can hold
+    // anything (names, phone numbers) and is never read.
+    const withoutDescription = article.replace(/<(p|div)\b[^>]*class="[^"]*description[^"]*"[^>]*>[\s\S]*?<\/\1>/g, "");
+    const texts = [...withoutDescription.matchAll(/>([^<>]+)</g)].map((m) => decodeEntities(m[1]).trim()).filter(Boolean);
+    // "10115 Berlin", "80331 München - Altstadt": a place name has no digits.
+    const place = texts.map((t) => t.match(/^(\d{5}) ([^\d]{2,60})$/)).find(Boolean);
     const mileage = texts.find((t) => /^\d{1,3}(\.\d{3})* km$|^\d+ km$/.test(t)) ?? null;
     const registration = texts.map((t) => t.match(/^EZ (\d{1,2}\/\d{4})$/)).find(Boolean);
 
@@ -197,28 +201,31 @@ export function createKleinanzeigenAdapter(options: KleinanzeigenOptions): Sourc
     async *fetch() {
       failuresInARow = 0;
       const seen = new Set<string>();
-      let structureChecked = false;
       try {
         // Makes first, so their listings keep the make filter's make; the whole category last.
         for (const make of [...makes, null]) {
+          const inList = new Set<string>();
           for (let page = 1; page <= pagesPerList; page += 1) {
             if (fetcher.requestsLeft < 1) return;
             const url = pageUrl(make, page);
             const html = await load(url);
             if (html === null) break;
             const items = parseKleinanzeigenPage(html, make);
-            if (!structureChecked) {
-              // The first list page always has listings; none means the page layout changed.
-              if (items.length === 0) throw new Error(`Kleinanzeigen: no listings found on ${url}; did the page change?`);
-              structureChecked = true;
+            // A make may have no listings, but the whole category always has some: none there
+            // means the page layout changed.
+            if (make === null && page === 1 && items.length === 0) {
+              throw new Error(`Kleinanzeigen: no listings found on ${url}; did the page change?`);
             }
-            const fresh = items.filter((item) => !seen.has(item.id));
-            for (const item of fresh) {
+            const newInList = items.filter((item) => !inList.has(item.id));
+            for (const item of newInList) {
+              inList.add(item.id);
+              // Listings already found in an earlier list keep that list's make.
+              if (seen.has(item.id)) continue;
               seen.add(item.id);
               yield { externalId: item.id, payload: item as unknown as Record<string, unknown> };
             }
-            // A page without anything new means the list ends here (or repeats itself).
-            if (fresh.length === 0) break;
+            // A page with nothing new for this list means the list ends here (or repeats itself).
+            if (newInList.length === 0) break;
           }
         }
       } catch (error) {

@@ -199,7 +199,7 @@ async function ingestLocked(client: PoolClient, adapter: SourceAdapter): Promise
 
   try {
     try {
-      for await (const raw of adapter.fetch()) {
+      for await (const raw of adapter.fetch({ db: client })) {
         result.fetched += 1;
         raws.push(raw);
         const listing = adapter.normalize(raw);

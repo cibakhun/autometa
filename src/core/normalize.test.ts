@@ -106,7 +106,7 @@ describe("resolveMakeModel", () => {
   });
 
   it("keeps the make when the model is unknown", () => {
-    expect(resolveMakeModel("VW", "Käfer 1303")).toEqual({ makeSlug: "volkswagen", modelSlug: null, variant: "Käfer 1303" });
+    expect(resolveMakeModel("VW", "Corrado G60")).toEqual({ makeSlug: "volkswagen", modelSlug: null, variant: "Corrado G60" });
   });
 
   it("returns nulls for unknown makes", () => {
@@ -125,6 +125,8 @@ describe("detectFuel", () => {
     ["Audi e-tron 55 quattro", "electric"],
     ["Opel Corsa Autogas LPG", "lpg"],
     ["Seat Leon 1.5 TGI", "cng"],
+    ["Toyota Prius Benzin/Elektro", "hybrid"],
+    ["Ford Kuga Elektro/Benzin", "hybrid"],
   ])("%s -> %s", (title, fuel) => {
     expect(detectFuel(title)).toBe(fuel);
   });
@@ -162,6 +164,9 @@ describe("detectBodyType", () => {
 
   it("does not match parts of other words", () => {
     expect(detectBodyType("Swift 1.2")).toBeNull();
+    // 4x4 is the drive, not the body.
+    expect(detectBodyType("Panda 4x4")).toBeNull();
+    expect(detectBodyType("Kleinwagen 4x4")).toBe("small");
     expect(detectBodyType("Vanden Plas")).toBeNull();
     expect(detectBodyType(null)).toBeNull();
   });
@@ -173,11 +178,19 @@ describe("findMakeInTitle", () => {
     expect(findMakeInTitle("Mercedes Benz V250 4Matic")).toMatchObject({ make: { slug: "mercedes-benz" }, rest: "V250 4Matic" });
     expect(findMakeInTitle("Mercedes-Benz C 220 d")).toMatchObject({ make: { slug: "mercedes-benz" }, rest: "C 220 d" });
     expect(findMakeInTitle("Land Rover Defender 110")).toMatchObject({ make: { slug: "land-rover" }, rest: "Defender 110" });
+    expect(findMakeInTitle("VW-Golf 1.4 TSI")).toMatchObject({ make: { slug: "volkswagen" }, rest: "Golf 1.4 TSI" });
   });
 
   it("returns null when the title does not start with a make", () => {
     expect(findMakeInTitle("Suche Golf 7")).toBeNull();
     expect(findMakeInTitle("")).toBeNull();
+  });
+});
+
+describe("resolveMakeModel with joined words", () => {
+  it("keeps what follows the model inside the same word", () => {
+    expect(resolveMakeModel("VW", "Golf-GTI Performance")).toEqual({ makeSlug: "volkswagen", modelSlug: "golf", variant: "GTI Performance" });
+    expect(resolveMakeModel("VW", "Käfer 1303")).toMatchObject({ modelSlug: "beetle", variant: "1303" });
   });
 });
 

@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import type { NormalizedListing } from "@/core/types";
 
 export interface SourceInfo {
@@ -44,7 +44,7 @@ export interface SourceAdapter {
    * sold. Leave it out for full snapshots.
    */
   staleAfterDays?: number;
-  fetch(): AsyncIterable<RawListing>;
+  fetch(context?: FetchContext): AsyncIterable<RawListing>;
   /** Returns null when the listing cannot be used (e.g. no price). */
   normalize(raw: RawListing): NormalizedListing | null;
   /**
@@ -53,6 +53,15 @@ export interface SourceAdapter {
    * finished without an error.
    */
   completedSegments?(): string[];
+}
+
+/** What a running import hands to fetch(). */
+export interface FetchContext {
+  /**
+   * The import's own database connection. Adapters that keep crawl state use it instead of the
+   * pool, so an import never waits for a second connection.
+   */
+  db: PoolClient;
 }
 
 export type AdapterFactory = (context: AdapterContext) => SourceAdapter;

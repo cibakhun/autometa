@@ -69,6 +69,15 @@ describe("parseKleinanzeigenPage", () => {
     expect(JSON.stringify(items)).not.toMatch(/Verkaufe|0170|img\.example/);
   });
 
+  it("never takes the place from the seller's description", () => {
+    const html = page([{ id: "1", title: "VW Golf", place: "" }]).replace(
+      "Verkaufe mein Auto, Tel. 0170 1234567, Erika",
+      "</p><p class=\"aditem-main--middle--description\">10115 Erika Musterfrau",
+    );
+    expect(parseKleinanzeigenPage(html)[0]).toMatchObject({ zip: null, city: null });
+    expect(parseKleinanzeigenPage(page([{ id: "2", title: "VW Golf", place: "10115 Tel 0170 1234567" }]))[0]).toMatchObject({ zip: null });
+  });
+
   it("decodes entities and copes with missing facts", () => {
     const [item] = parseKleinanzeigenPage(page([{ id: "1", title: "Opel Corsa &amp; Winterr&auml;der", price: "VB", mileage: "", registration: "" }]));
     expect(item).toMatchObject({ title: "Opel Corsa & Winterräder", price: "VB", mileage: null, firstRegistration: null, listMake: null });
@@ -179,8 +188,34 @@ describe("createKleinanzeigenAdapter", () => {
     expect(site.requested).not.toContain(pageUrl(null, 6));
   });
 
-  it("stops when the first page has no listings: the page layout probably changed", async () => {
-    const site = fakeSite({ "https://www.kleinanzeigen.de/robots.txt": "", [pageUrl("bmw", 1)]: "<html><body>Neues Design</body></html>" });
+  it("reads the whole category on even when its first page holds only listings already found", async () => {
+    const site = fakeSite({
+      "https://www.kleinanzeigen.de/robots.txt": "",
+      [pageUrl("bmw", 1)]: page(ads(1, 2)),
+      [pageUrl(null, 1)]: page(ads(1, 2)),
+      [pageUrl(null, 2)]: page(ads(20, 2)),
+    });
+    const adapter = createKleinanzeigenAdapter({ fetcher: site.fetcher, makes: ["bmw"] });
+    const raws: RawListing[] = [];
+    for await (const raw of adapter.fetch()) raws.push(raw);
+    expect(raws.map((raw) => raw.externalId)).toEqual(["1", "2", "20", "21"]);
+  });
+
+  it("goes on after a make without listings", async () => {
+    const site = fakeSite({
+      "https://www.kleinanzeigen.de/robots.txt": "",
+      [pageUrl("abarth", 1)]: page([]),
+      [pageUrl(null, 1)]: page(ads(1, 2)),
+    });
+    const adapter = createKleinanzeigenAdapter({ fetcher: site.fetcher, makes: ["abarth"] });
+    const raws: RawListing[] = [];
+    for await (const raw of adapter.fetch()) raws.push(raw);
+    expect(raws).toHaveLength(2);
+  });
+
+  it("stops when the whole category has no listings: the page layout probably changed", async () => {
+    const empty = "<html><body>Neues Design</body></html>";
+    const site = fakeSite({ "https://www.kleinanzeigen.de/robots.txt": "", [pageUrl("bmw", 1)]: empty, [pageUrl(null, 1)]: empty });
     const adapter = createKleinanzeigenAdapter({ fetcher: site.fetcher, makes: ["bmw"] });
     await expect(async () => {
       for await (const raw of adapter.fetch()) void raw;

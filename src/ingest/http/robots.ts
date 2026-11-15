@@ -30,7 +30,7 @@ export function parseRobotsTxt(text: string): RobotsGroup[] {
   let current: RobotsGroup | null = null;
   let lastWasAgent = false;
 
-  for (const rawLine of text.split(/\r?\n/)) {
+  for (const rawLine of text.split(/\r\n|\r|\n/)) {
     const line = rawLine.replace(/#.*$/, "").trim();
     if (!line) continue;
     const colon = line.indexOf(":");
@@ -112,7 +112,8 @@ function matches({ segments, anchored }: CompiledPattern, path: string): boolean
 
 /** Picks the groups that apply to `userAgent` and merges them into one policy. */
 export function policyFor(groups: RobotsGroup[], userAgent: string): RobotsPolicy {
-  const token = userAgent.split("/")[0].trim().toLowerCase();
+  // The product token: "AutoMetaBot/0.1 (+https://…)" and "AutoMetaBot (+https://…)" -> "autometabot".
+  const token = userAgent.trim().split(/[\s/]/)[0].toLowerCase();
   let selected = groups.filter((g) => g.agents.some((a) => a !== "*" && a === token));
   if (selected.length === 0) selected = groups.filter((g) => g.agents.includes("*"));
 

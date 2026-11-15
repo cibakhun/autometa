@@ -32,10 +32,9 @@ const logFor = (source: string) => (message: string) => console.log(`[${source}]
 /** All known sources. */
 export const ADAPTERS: Record<string, AdapterFactory> = {
   demo: () => createDemoAdapter({ count: demoListingCount() }),
-  autoscout24: ({ pool }) =>
+  autoscout24: () =>
     createAutoScout24Adapter({
       fetcher: createFetcherFromEnv(),
-      pool,
       makes: makesFromEnv("AUTOSCOUT24_MAKES"),
       log: logFor("autoscout24"),
     }),

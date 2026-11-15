@@ -109,4 +109,15 @@ Crawl-delay: 10
     expect(policy.isAllowed("/x/file.pdf")).toBe(false);
     expect(policy.isAllowed("/x/file.pdf?download=1")).toBe(true);
   });
+
+  it("finds our group with or without a version in the bot name", () => {
+    const groups = parseRobotsTxt("User-agent: *\nAllow: /\n\nUser-agent: AutoMetaBot\nDisallow: /\n");
+    expect(policyFor(groups, "AutoMetaBot (+https://example.org/bot)").isAllowed("/x")).toBe(false);
+    expect(policyFor(groups, "AutoMetaBot/0.2 (+https://example.org/bot)").isAllowed("/x")).toBe(false);
+  });
+
+  it("reads files with CR-only line endings", () => {
+    const policy = policyFor(parseRobotsTxt("User-agent: *\rDisallow: /\r"), UA);
+    expect(policy.isAllowed("/x")).toBe(false);
+  });
 });

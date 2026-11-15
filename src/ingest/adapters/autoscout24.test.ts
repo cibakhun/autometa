@@ -93,6 +93,15 @@ describe("parseAutoScout24Page", () => {
     expect(page.items).toEqual([]);
   });
 
+  it("refuses pages without result and page counts, which completeness depends on", () => {
+    const data = (props: Record<string, unknown>) =>
+      `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { listings: [as24Listing()], ...props } } })}</script>`;
+    expect(() => parseAutoScout24Page(data({}))).toThrow(/no result or page count/);
+    expect(() => parseAutoScout24Page(data({ numberOfResults: "12", numberOfPages: 1 }))).toThrow(PageFormatError);
+    expect(() => parseAutoScout24Page(data({ numberOfResults: 12, numberOfPages: 0 }))).toThrow(PageFormatError);
+    expect(parseAutoScout24Page(data({ numberOfResults: 0, numberOfPages: 0 })).total).toBe(0);
+  });
+
   it("fails loudly when the page structure changed", () => {
     expect(() => parseAutoScout24Page("<html><body>Wartung</body></html>")).toThrow(PageFormatError);
     expect(() => parseAutoScout24Page('<script id="__NEXT_DATA__" type="application/json">{oops</script>')).toThrow(PageFormatError);
@@ -124,6 +133,17 @@ describe("normalizeAutoScout24", () => {
       zip: "10115",
       city: "Berlin",
     });
+  });
+
+  it("reads the first registration in every format the page uses", () => {
+    const at = (calendar: string | null, tracking: string | null) =>
+      normalize({
+        vehicleDetails: calendar ? [{ iconName: "calendar", data: calendar }] : [],
+        tracking: { firstRegistration: tracking },
+      })?.firstRegistration;
+    expect(at("03/2021", null)).toBe("2021-03-01");
+    expect(at(null, "03-2021")).toBe("2021-03-01");
+    expect(at(null, "2021-03-01")).toBe("2021-03-01");
   });
 
   it("knows private sellers but not their names", () => {

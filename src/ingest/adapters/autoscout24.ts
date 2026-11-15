@@ -1,4 +1,3 @@
-import type { Pool } from "pg";
 import {
   detectBodyType,
   normalizeFuel,
@@ -10,7 +9,7 @@ import {
 } from "@/core/normalize";
 import { MAKES } from "@/core/taxonomy";
 import type { NormalizedListing, SellerType } from "@/core/types";
-import type { RawListing, SourceAdapter, SourceInfo } from "../adapter";
+import type { FetchContext, RawListing, SourceAdapter, SourceInfo } from "../adapter";
 import { BlockedError, BudgetExceededError, DisallowedError, HttpStatusError, type PoliteFetcher } from "../http/fetcher";
 import { SegmentStore, type Segment, type SegmentDraft } from "../segments";
 
@@ -23,8 +22,8 @@ import { SegmentStore, type Segment, type SegmentDraft } from "../segments";
  * 1. "Newest": the first result pages per make, newest first, so fresh listings appear quickly.
  * 2. "Sweep": whole segments (make and price range) in rotation, page by page. A segment with more
  *    results than the portal lets us page through is split into smaller price ranges. Once a
- *    segment was read to the end, listings of that segment we did not see count as missed; after
- *    two misses in a row they are taken out of the search.
+ *    segment was read to the end and every listing it reported came in, listings of that segment
+ *    we did not see count as missed; after two misses in a row they are taken out of the search.
  * Listings not seen for staleAfterDays are taken out as well, as a safety net.
  */
 
@@ -48,8 +47,6 @@ const MAKE_PATHS: Record<string, string> = {
 const PRICE_LADDER = [0, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 12000, 14000, 16000, 18000, 20000, 23000, 26000, 30000, 35000, 40000, 50000, 60000, 80000, 100000];
 /** Ranges narrower than this are not split any further. */
 const MIN_RANGE_EUR = 200;
-/** A segment counts as read completely when at least this share of the reported results came in. */
-const COMPLETE_SHARE = 0.9;
 /** This many failed pages in a row stop the run: the site is probably down or has changed. */
 const MAX_FAILURES_IN_A_ROW = 3;
 
@@ -63,7 +60,6 @@ export interface SweepParams {
 
 export interface AutoScout24Options {
   fetcher: PoliteFetcher;
-  pool: Pool;
   /** Our make slugs to read. Defaults to every make of the taxonomy. */
   makes?: string[];
   /** Newest pages per make and run. */
@@ -129,8 +125,11 @@ export function parseAutoScout24Page(html: string, url = ORIGIN): AutoScout24Pag
   }
   const pageProps = obj(obj(obj(data).props).pageProps);
   if (!Array.isArray(pageProps.listings)) throw new PageFormatError(url, "no listings array");
-  const total = Number(pageProps.numberOfResults);
-  const pages = Number(pageProps.numberOfPages);
+  // Without these counts we cannot tell whether a segment was read completely.
+  const total = pageProps.numberOfResults;
+  const pages = pageProps.numberOfPages;
+  if (!isCount(total) || !isCount(pages)) throw new PageFormatError(url, "no result or page count");
+  if (total > 0 && pages < 1) throw new PageFormatError(url, `${total} results on ${pages} pages`);
 
   const items: AutoScout24Item[] = [];
   for (const entry of pageProps.listings) {
@@ -179,12 +178,10 @@ export function parseAutoScout24Page(html: string, url = ORIGIN): AutoScout24Pag
       organic: (str(listing.searchResultType) ?? "Organic") === "Organic",
     });
   }
-  return {
-    items,
-    total: Number.isFinite(total) ? total : items.length,
-    pages: Number.isFinite(pages) ? pages : 1,
-  };
+  return { items, total, pages };
 }
+
+const isCount = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0;
 
 const cleanText = (value: string | null) => (value ? value.replace(/[*|]+/g, " ").replace(/\s+/g, " ").trim() || null : null);
 
@@ -211,7 +208,7 @@ export function normalizeAutoScout24(raw: RawListing): NormalizedListing | null 
     variant,
     priceEur: item.price,
     mileageKm: parseInteger(item.mileage),
-    firstRegistration: parseFirstRegistration(item.firstRegistration?.replace("-", "/")),
+    firstRegistration: parseFirstRegistration(item.firstRegistration),
     fuel: item.fuel ? normalizeFuel(item.fuel) : null,
     transmission: normalizeTransmission(item.transmission),
     powerKw: parsePowerKw(item.power),
@@ -272,12 +269,12 @@ export function defaultAutoScout24Makes(): string[] {
 }
 
 export function createAutoScout24Adapter(options: AutoScout24Options): SourceAdapter {
-  const { fetcher, pool } = options;
+  const { fetcher } = options;
   const makes = options.makes ?? defaultAutoScout24Makes();
   const newestPages = options.newestPages ?? 1;
   const maxPagesPerSegment = options.maxPagesPerSegment ?? 20;
   const log = options.log ?? (() => undefined);
-  const store = new SegmentStore<SweepParams>(pool, AUTOSCOUT24.id);
+  let store!: SegmentStore<SweepParams>;
   let completed: string[] = [];
   let failuresInARow = 0;
 
@@ -362,7 +359,9 @@ export function createAutoScout24Adapter(options: AutoScout24Options): SourceAda
       if (result.items.length === 0) break;
     }
 
-    if (first.total <= reachablePages * PAGE_SIZE && seen.size >= Math.floor(first.total * COMPLETE_SHARE)) {
+    // Only a read that saw every reported listing may count the others as sold. Listings that moved
+    // between pages while we read leave the segment incomplete for this run.
+    if (first.total <= reachablePages * PAGE_SIZE && seen.size >= first.total) {
       completed.push(segment.key);
       await store.completed(segment.key);
     }
@@ -374,7 +373,9 @@ export function createAutoScout24Adapter(options: AutoScout24Options): SourceAda
     staleAfterDays: options.staleAfterDays ?? 30,
     normalize: normalizeAutoScout24,
     completedSegments: () => completed,
-    async *fetch() {
+    async *fetch(context?: FetchContext) {
+      if (!context) throw new Error("AutoScout24 needs the import's database connection");
+      store = new SegmentStore<SweepParams>(context.db, AUTOSCOUT24.id);
       completed = [];
       failuresInARow = 0;
       try {

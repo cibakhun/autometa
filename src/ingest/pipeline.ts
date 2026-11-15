@@ -46,14 +46,24 @@ export async function ingestSources(
     }),
   );
 
+  // Also after a failed run: what it stored before the error is in the search, too.
   let demoRemoved = 0;
-  if (sources.some((s) => s.source !== "demo" && (s.result?.upserted ?? 0) > 0)) {
+  if (await hasRealListings(pool)) {
     demoRemoved = await removeDemoData(pool);
     if (demoRemoved > 0) log(`demo: removed ${demoRemoved} demo listings, real listings are in`);
   }
   const duplicates = await updateDuplicates(pool);
   log(`duplicates: ${duplicates.clusters} vehicles listed on several portals (${duplicates.listings} listings)`);
   return { sources, duplicates, demoRemoved };
+}
+
+async function hasRealListings(pool: Pool): Promise<boolean> {
+  const { rows } = await pool.query<{ found: boolean }>(
+    `select exists (
+       select 1 from listings l join sources s on s.id = l.source_id where s.kind <> 'demo' and l.status = 'active'
+     ) as found`,
+  );
+  return rows[0].found;
 }
 
 /** Deletes demo sources with their listings, clicks and runs. Returns the number of listings. */

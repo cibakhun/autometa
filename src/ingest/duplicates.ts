@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { distanceSql } from "@/core/geo";
 
 /**
@@ -39,9 +39,27 @@ export interface DuplicateResult {
 }
 
 export async function updateDuplicates(pool: Pool): Promise<DuplicateResult> {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    // One regrouping at a time, from reading the candidates to the last write, so a slower run
+    // cannot write back groups that a newer run already corrected.
+    await client.query("select pg_advisory_xact_lock(hashtext('autometa-duplicates'))");
+    const result = await regroup(client);
+    await client.query("commit");
+    return result;
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function regroup(client: PoolClient): Promise<DuplicateResult> {
   const r = MATCH_RULES;
   const distance = distanceSql("a.lat", "a.lng", "b.lat", "b.lng");
-  const { rows } = await pool.query<Candidate>(
+  const { rows } = await client.query<Candidate>(
     `select a.id::int8 as a, b.id::int8 as b, a.source_id as a_source, b.source_id as b_source,
             abs(a.mileage_km - b.mileage_km)::float8 / greatest(a.mileage_km, b.mileage_km, 1)
               + abs(a.price_eur - b.price_eur)::float8 / greatest(a.price_eur, b.price_eur, 1) as score
@@ -70,25 +88,15 @@ export async function updateDuplicates(pool: Pool): Promise<DuplicateResult> {
   const ids = [...clusters.keys()];
   const clusterIds = ids.map((id) => clusters.get(id)!);
 
-  const client = await pool.connect();
-  try {
-    await client.query("begin");
-    await client.query(
-      `update listings l set cluster_id = v.cluster_id
-         from unnest($1::int8[], $2::int8[]) as v (id, cluster_id)
-        where l.id = v.id and l.cluster_id is distinct from v.cluster_id`,
-      [ids, clusterIds],
-    );
-    await client.query("update listings set cluster_id = null where cluster_id is not null and not (id = any($1::int8[]))", [
-      ids,
-    ]);
-    await client.query("commit");
-  } catch (error) {
-    await client.query("rollback");
-    throw error;
-  } finally {
-    client.release();
-  }
+  await client.query(
+    `update listings l set cluster_id = v.cluster_id
+       from unnest($1::int8[], $2::int8[]) as v (id, cluster_id)
+      where l.id = v.id and l.cluster_id is distinct from v.cluster_id`,
+    [ids, clusterIds],
+  );
+  await client.query("update listings set cluster_id = null where cluster_id is not null and not (id = any($1::int8[]))", [
+    ids,
+  ]);
   return { clusters: new Set(clusterIds).size, listings: ids.length };
 }
 

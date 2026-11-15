@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { PoolClient } from "pg";
 
 /**
  * Crawl plan of a scraped source: the parts ("segments") its inventory is read in, for example
@@ -18,16 +18,17 @@ export interface SegmentDraft<P> {
   params: P;
 }
 
+/** Reads and writes the crawl plan on one connection (the import's own, see FetchContext). */
 export class SegmentStore<P> {
   constructor(
-    private readonly pool: Pool,
+    private readonly db: PoolClient,
     private readonly sourceId: string,
   ) {}
 
   /** Adds segments that do not exist yet (retired ones stay retired). */
   async ensure(segments: SegmentDraft<P>[]): Promise<void> {
     if (segments.length === 0) return;
-    await this.pool.query(
+    await this.db.query(
       `insert into crawl_segments (source_id, key, params)
        select $1, key, params from unnest($2::text[], $3::jsonb[]) as s (key, params)
        on conflict (source_id, key) do nothing`,
@@ -37,7 +38,7 @@ export class SegmentStore<P> {
 
   /** Segments to read, the longest unread first; never-read segments come first of all. */
   async active(): Promise<Segment<P>[]> {
-    const { rows } = await this.pool.query(
+    const { rows } = await this.db.query(
       `select key, params, last_total, last_started_at, last_completed_at
          from crawl_segments
         where source_id = $1 and not retired
@@ -54,14 +55,14 @@ export class SegmentStore<P> {
   }
 
   async started(key: string, total: number | null): Promise<void> {
-    await this.pool.query(
+    await this.db.query(
       "update crawl_segments set last_started_at = now(), last_total = $3 where source_id = $1 and key = $2",
       [this.sourceId, key, total],
     );
   }
 
   async completed(key: string): Promise<void> {
-    await this.pool.query("update crawl_segments set last_completed_at = now() where source_id = $1 and key = $2", [
+    await this.db.query("update crawl_segments set last_completed_at = now() where source_id = $1 and key = $2", [
       this.sourceId,
       key,
     ]);
@@ -69,22 +70,19 @@ export class SegmentStore<P> {
 
   /** Retires a segment and adds its smaller replacements in one transaction. */
   async split(key: string, children: SegmentDraft<P>[]): Promise<void> {
-    const client = await this.pool.connect();
+    await this.db.query("begin");
     try {
-      await client.query("begin");
-      await client.query("update crawl_segments set retired = true where source_id = $1 and key = $2", [this.sourceId, key]);
-      await client.query(
+      await this.db.query("update crawl_segments set retired = true where source_id = $1 and key = $2", [this.sourceId, key]);
+      await this.db.query(
         `insert into crawl_segments (source_id, key, params)
          select $1, key, params from unnest($2::text[], $3::jsonb[]) as s (key, params)
          on conflict (source_id, key) do update set retired = false, params = excluded.params`,
         [this.sourceId, children.map((c) => c.key), children.map((c) => JSON.stringify(c.params))],
       );
-      await client.query("commit");
+      await this.db.query("commit");
     } catch (error) {
-      await client.query("rollback");
+      await this.db.query("rollback");
       throw error;
-    } finally {
-      client.release();
     }
   }
 }

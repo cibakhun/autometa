@@ -1,7 +1,7 @@
 import type { Pool } from "pg";
 import type { AdapterFactory } from "./adapter";
 import { ADAPTERS } from "./adapters";
-import { runIngest, type IngestResult } from "./run";
+import { IngestBusyError, runIngest, type IngestResult } from "./run";
 import { seedReferenceData } from "./seed";
 
 export interface PrepareResult {
@@ -22,6 +22,14 @@ export async function prepareData(
 ): Promise<PrepareResult> {
   const reference = await seedReferenceData(pool);
   const { rows } = await pool.query<{ empty: boolean }>("select not exists (select 1 from listings) as empty");
-  const demo = rows[0].empty ? await runIngest(pool, createDemo({ pool })) : null;
+  let demo: IngestResult | null = null;
+  if (rows[0].empty) {
+    try {
+      demo = await runIngest(pool, createDemo({ pool }));
+    } catch (error) {
+      // Another instance starting at the same time is importing the demo data already.
+      if (!(error instanceof IngestBusyError)) throw error;
+    }
+  }
   return { reference, demo };
 }

@@ -92,6 +92,7 @@ export function normalizeFuel(value: string | null | undefined): Fuel | null {
 const TITLE_FUEL_RULES: [RegExp, Fuel][] = [
   [/\b(plug ?in|phev|gte|e hybrid|ehybrid)\b/, "plugin_hybrid"],
   [/\bhybrid\b/, "hybrid"],
+  [/\b(elektro (benzin|diesel)|(benzin|diesel) elektro)\b/, "hybrid"],
   [/\b(elektro|electric|e tron|bev)\b/, "electric"],
   [/\b(diesel|tdi|cdi|crdi|hdi|bluehdi|dci|tdci|cdti|d4d|jtd|multijet|\d{3}d|\d{2}d)\b/, "diesel"],
   [/\b(autogas|lpg)\b/, "lpg"],
@@ -148,7 +149,7 @@ const TITLE_BODY_RULES: [RegExp, BodyType][] = [
   [/\b(kombi|estate|touring|avant|variant|sportswagon|sports tourer|tourer|wagon|t modell|sw)\b/, "estate"],
   [/\b(cabrio|cabriolet|roadster|convertible|spider|spyder)\b/, "convertible"],
   [/\b(coupe|coupé)\b/, "coupe"],
-  [/\b(suv|gelandewagen|offroad|crossover|4x4)\b/, "suv"],
+  [/\b(suv|gelandewagen|offroad|crossover)\b/, "suv"],
   [/\b(van|kleinbus|bus|bulli|mpv|minivan|camper|wohnmobil)\b/, "van"],
   [/\b(limousine|lim|sedan|saloon)\b/, "sedan"],
   [/\b(kleinwagen)\b/, "small"],
@@ -193,7 +194,7 @@ export function findMakeInTitle(title: string): { make: MakeDef; rest: string } 
     }
   }
   if (!best) return null;
-  return { make: best.make, rest: rawWords.slice(consumedRawWords(rawWords, best.length)).join(" ") };
+  return { make: best.make, rest: restAfter(rawWords, best.length) };
 }
 
 export interface ResolvedMakeModel {
@@ -232,18 +233,24 @@ export function resolveMakeModel(makeRaw: string, modelRaw: string): ResolvedMak
   if (!best) return { makeSlug: make.slug, modelSlug: null, variant: modelRaw.trim() || null };
 
   // Drop as many original words as the matched key had (handles "T-Roc" vs "t roc").
-  const consumed = consumedRawWords(rawWords, best.length);
-  const variant = rawWords.slice(consumed).join(" ").trim();
+  const variant = restAfter(rawWords, best.length);
   return { makeSlug: make.slug, modelSlug: best.slug, variant: variant || null };
 }
 
-/** How many raw (space-separated) words cover the first `normalizedCount` normalized words. */
-function consumedRawWords(rawWords: string[], normalizedCount: number): number {
+/**
+ * The raw text after the first `normalizedCount` normalized words. A raw word that holds more than
+ * the match keeps its rest: "VW-Golf 1.4" after one word is "Golf 1.4".
+ */
+function restAfter(rawWords: string[], normalizedCount: number): string {
   let covered = 0;
-  let index = 0;
-  while (covered < normalizedCount && index < rawWords.length) {
-    covered += normalizeText(rawWords[index]).split(" ").filter(Boolean).length;
-    index += 1;
+  for (let index = 0; index < rawWords.length; index += 1) {
+    if (covered >= normalizedCount) return rawWords.slice(index).join(" ");
+    const parts = normalizeText(rawWords[index]).split(" ").filter(Boolean).length;
+    if (covered + parts > normalizedCount) {
+      const pieces = rawWords[index].split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+      return [...pieces.slice(normalizedCount - covered), ...rawWords.slice(index + 1)].join(" ");
+    }
+    covered += parts;
   }
-  return index;
+  return "";
 }
