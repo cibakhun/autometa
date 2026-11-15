@@ -159,6 +159,18 @@ describe.skipIf(!url)("importing scraped portals", () => {
     expect(await statusOf(PORTAL_A, "1")).toMatchObject({ segment: "vw:1000-2000" });
   });
 
+  it("drops the segment when a later sighting in the same run shows a new price", async () => {
+    const sightings: Sighting[] = [
+      { listing: car(PORTAL_A, "1", { priceEur: 900 }), segment: "vw:0-1000" },
+      { listing: car(PORTAL_A, "1", { priceEur: 1500 }) },
+      { listing: car(PORTAL_A, "2", { priceEur: 800 }), segment: "vw:0-1000" },
+      { listing: car(PORTAL_A, "2", { priceEur: 800 }) },
+    ];
+    await runIngest(pool, fakePortal(PORTAL_A, sightings));
+    expect(await statusOf(PORTAL_A, "1")).toMatchObject({ segment: null });
+    expect(await statusOf(PORTAL_A, "2")).toMatchObject({ segment: "vw:0-1000" });
+  });
+
   it("takes out listings not seen for staleAfterDays", async () => {
     await runIngest(pool, fakePortal(PORTAL_A, [{ listing: car(PORTAL_A, "1") }, { listing: car(PORTAL_A, "2") }]));
     await pool.query("update listings set last_seen_at = now() - interval '15 days' where external_id = '1'");

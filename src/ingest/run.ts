@@ -98,14 +98,23 @@ function lastPerId<T>(items: T[], id: (item: T) => string): T[] {
   return [...new Map(items.map((item) => [id(item), item])).values()];
 }
 
-/** Like lastPerId, but a listing keeps the segment of any sighting that had one. */
+/**
+ * Like lastPerId, but a sighting without a segment keeps the segment of an earlier sighting in the
+ * same batch, as long as price and make (the facts segments are cut by) did not change in between.
+ * The upsert applies the same rule against the stored row.
+ */
 function mergePending(pending: PendingListing[]): PendingListing[] {
   const byId = new Map<string, PendingListing>();
   for (const item of pending) {
     const previous = byId.get(item.listing.externalId);
-    byId.set(item.listing.externalId, { ...item, segment: item.segment ?? previous?.segment ?? null });
+    const carried = previous && sameSegmentFacts(previous.listing, item.listing) ? previous.segment : null;
+    byId.set(item.listing.externalId, { ...item, segment: item.segment ?? carried });
   }
   return [...byId.values()];
+}
+
+function sameSegmentFacts(a: NormalizedListing, b: NormalizedListing): boolean {
+  return a.priceEur === b.priceEur && a.makeSlug === b.makeSlug;
 }
 
 /** Writes one batch in a transaction and returns how many listings it stored. */
