@@ -254,6 +254,10 @@ export class PoliteFetcher {
           await response.body?.cancel().catch(() => undefined);
           return { status: response.status, location, text: "" };
         }
+        if (response.status >= 400 && response.status < 500) {
+          // A 4xx is never retried, so a body that breaks off must not cause a retry either.
+          return { status: response.status, location, text: await response.text().catch(() => "") };
+        }
         return { status: response.status, location, text: await response.text() };
       } finally {
         // Read the delay now, not before the request: robots.txt may have raised it meanwhile.

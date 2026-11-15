@@ -251,6 +251,24 @@ describe("PoliteFetcher", () => {
     expect(robotsCalls).toEqual(["https://a.example/robots.txt"]);
   });
 
+  it("does not retry a 4xx whose body breaks off", async () => {
+    const calls: string[] = [];
+    const fetchImpl = (async (input: string | URL) => {
+      calls.push(String(input));
+      const broken = new ReadableStream({
+        pull(controller) {
+          controller.error(new TypeError("terminated"));
+        },
+      });
+      return new Response(broken, { status: 404 });
+    }) as typeof fetch;
+    let clock = 0;
+    const fetcher = new PoliteFetcher({ fetchImpl, now: () => clock, sleep: async (ms) => void (clock += ms) });
+    // robots.txt answers 404 too, which RFC 9309 reads as "no robots.txt": the page is then requested.
+    await expect(fetcher.getText("https://a.example/x")).rejects.toThrow(/HTTP 404/);
+    expect(calls).toEqual(["https://a.example/robots.txt", "https://a.example/x"]);
+  });
+
   it("gives up on a body that never ends and frees the host for the next request", async () => {
     const calls: string[] = [];
     const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
