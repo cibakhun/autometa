@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BlockedError, BudgetExceededError, DisallowedError, PoliteFetcher, type PoliteFetcherOptions } from "./fetcher";
 
-type Reply = { status?: number; body?: string; url?: string } | Error;
+type Reply = { status?: number; body?: string; location?: string } | Error;
 
 /** A fake site: answers by URL, records requests and the virtual time they were made at. */
 function fakeSite(routes: Record<string, Reply | Reply[]>) {
@@ -14,9 +14,10 @@ function fakeSite(routes: Record<string, Reply | Reply[]>) {
     const reply = Array.isArray(route) ? (route.length > 1 ? route.shift()! : route[0]) : route;
     if (!reply) return new Response("not found", { status: 404 });
     if (reply instanceof Error) throw reply;
-    const response = new Response(reply.body ?? "", { status: reply.status ?? 200 });
-    Object.defineProperty(response, "url", { value: reply.url ?? url });
-    return response;
+    return new Response(reply.body ?? "", {
+      status: reply.status ?? 200,
+      headers: reply.location ? { location: reply.location } : {},
+    });
   }) as typeof fetch;
   const options: PoliteFetcherOptions = {
     fetchImpl,
@@ -87,8 +88,9 @@ describe("PoliteFetcher", () => {
     [{ status: 403, body: "Forbidden" }, "access denied"],
     [{ status: 429, body: "slow down" }, "rate limited"],
     [{ status: 200, body: "<html><title>Bitte bestätigen</title>Bitte zeigen Sie, dass Sie kein Roboter sind</html>" }, "human check"],
-    [{ status: 200, body: '<div id="px-captcha"></div>' }, "captcha"],
-    [{ status: 200, body: "<form>", url: "https://a.example/login?next=/x" }, "login"],
+    [{ status: 200, body: '<div id="px-captcha"></div>' }, "PerimeterX"],
+    [{ status: 503, body: "<html><title>Just a moment...</title></html>" }, "access denied page"],
+    [{ status: 302, location: "/login?next=/x" }, "login"],
   ])("stops on a block (%j) without retrying", async (reply, reason) => {
     const site = fakeSite({ "https://a.example/robots.txt": { status: 404 }, "https://a.example/x": reply });
     const fetcher = new PoliteFetcher(site.options);
@@ -117,5 +119,106 @@ describe("PoliteFetcher", () => {
     await fetcher.getText("https://a.example/1");
     await expect(fetcher.getText("https://a.example/1")).rejects.toBeInstanceOf(BudgetExceededError);
     expect(fetcher.requestsMade).toBe(2);
+  });
+  it("retries network errors and treats an unreachable robots.txt as disallow-all", async () => {
+    const flaky = fakeSite({
+      "https://a.example/robots.txt": { status: 404 },
+      "https://a.example/x": [new TypeError("fetch failed"), { body: page(1) }],
+    });
+    await expect(new PoliteFetcher(flaky.options).getText("https://a.example/x")).resolves.toMatchObject({ status: 200 });
+    expect(flaky.calls.filter((c) => c.url === "https://a.example/x")).toHaveLength(2);
+
+    const down = fakeSite({ "https://a.example/robots.txt": new TypeError("fetch failed") });
+    await expect(new PoliteFetcher(down.options).getText("https://a.example/x")).rejects.toBeInstanceOf(DisallowedError);
+    expect(down.calls.map((c) => c.url)).toEqual(["https://a.example/robots.txt"]);
+  });
+
+  it.each([
+    [{ status: 403, body: "Forbidden" }, "access denied"],
+    [{ status: 429 }, "rate limited"],
+    [{ status: 200, body: "<html><title>Just a moment...</title></html>" }, "access denied page"],
+  ])("stops the run when robots.txt itself is blocked (%j)", async (reply, reason) => {
+    const site = fakeSite({ "https://a.example/robots.txt": reply, "https://a.example/x": { body: page(1) } });
+    const error = await new PoliteFetcher(site.options).getText("https://a.example/x").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BlockedError);
+    expect((error as BlockedError).reason).toContain(reason);
+    expect(site.calls.map((c) => c.url)).toEqual(["https://a.example/robots.txt"]);
+  });
+
+  it("blocks a long challenge page but not a long page that mentions a captcha", async () => {
+    const padded = `<html><head><title>Access Denied</title></head><body>${"x".repeat(80_000)}</body></html>`;
+    const mentions = `<html><body>${"x".repeat(60_000)} Kontaktformular mit Captcha</body></html>`;
+    const site = fakeSite({
+      "https://a.example/robots.txt": { status: 404 },
+      "https://a.example/blocked": { body: padded },
+      "https://a.example/ok": { body: mentions },
+    });
+    const fetcher = new PoliteFetcher(site.options);
+    await expect(fetcher.getText("https://a.example/blocked")).rejects.toBeInstanceOf(BlockedError);
+    await expect(fetcher.getText("https://a.example/ok")).resolves.toMatchObject({ status: 200 });
+  });
+
+  it("spaces concurrent requests to the same host", async () => {
+    const site = fakeSite({
+      "https://a.example/robots.txt": { status: 404 },
+      "https://a.example/1": { body: page(1) },
+      "https://a.example/2": { body: page(2) },
+      "https://a.example/3": { body: page(3) },
+    });
+    const fetcher = new PoliteFetcher(site.options);
+    await Promise.all([1, 2, 3].map((n) => fetcher.getText(`https://a.example/${n}`)));
+    const times = site.calls.map((c) => c.at);
+    for (let i = 1; i < times.length; i++) expect(times[i] - times[i - 1]).toBeGreaterThanOrEqual(1000);
+  });
+
+  it("never spends more than the budget when requests run concurrently", async () => {
+    const site = fakeSite(Object.fromEntries([1, 2, 3, 4].map((n) => [`https://a.example/${n}`, { body: page(n) }])));
+    const fetcher = new PoliteFetcher({ ...site.options, respectRobots: false, maxRequests: 2 });
+    await fetcher.getText("https://a.example/1");
+    // The next three all have to wait for the host's next slot; only one may still go out.
+    const results = await Promise.allSettled([2, 3, 4].map((n) => fetcher.getText(`https://a.example/${n}`)));
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((r) => r.status === "rejected" && r.reason instanceof BudgetExceededError)).toHaveLength(2);
+    expect(site.calls).toHaveLength(2);
+    expect(fetcher.requestsMade).toBe(2);
+  });
+
+  it("follows redirects one paced hop at a time, each counting against the budget", async () => {
+    const site = fakeSite({
+      "https://a.example/robots.txt": { status: 404 },
+      "https://a.example/alt": { status: 301, location: "/neu" },
+      "https://a.example/neu": { body: page(1) },
+    });
+    const fetcher = new PoliteFetcher(site.options);
+    await expect(fetcher.getText("https://a.example/alt")).resolves.toMatchObject({ url: "https://a.example/neu", status: 200 });
+    expect(fetcher.requestsMade).toBe(3);
+    expect(site.calls[2].at - site.calls[1].at).toBeGreaterThanOrEqual(1000);
+
+    const loop = fakeSite({ "https://a.example/a": { status: 302, location: "/a" } });
+    const looping = new PoliteFetcher({ ...loop.options, respectRobots: false });
+    await expect(looping.getText("https://a.example/a")).rejects.toThrow(/redirects/);
+    expect(loop.calls).toHaveLength(6);
+  });
+
+  it("checks every redirect target against robots.txt of its host before requesting it", async () => {
+    const site = fakeSite({
+      "https://a.example/robots.txt": { status: 404 },
+      "https://a.example/x": { status: 302, location: "https://b.example/privat/1" },
+      "https://b.example/robots.txt": { body: "User-agent: *\nDisallow: /privat" },
+    });
+    const error = await new PoliteFetcher(site.options).getText("https://a.example/x").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(DisallowedError);
+    expect((error as DisallowedError).url).toBe("https://b.example/privat/1");
+    expect(site.calls.map((c) => c.url)).not.toContain("https://b.example/privat/1");
+  });
+
+  it("stops at a redirect to a login page without requesting it", async () => {
+    const site = fakeSite({
+      "https://a.example/robots.txt": { status: 404 },
+      "https://a.example/x": { status: 302, location: "https://a.example/anmelden?ziel=/x" },
+    });
+    const error = await new PoliteFetcher(site.options).getText("https://a.example/x").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BlockedError);
+    expect(site.calls.map((c) => c.url)).toEqual(["https://a.example/robots.txt", "https://a.example/x"]);
   });
 });

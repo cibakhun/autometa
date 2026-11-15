@@ -71,4 +71,33 @@ Crawl-delay: 10
     const groups = parseRobotsTxt("User-agent: a\nUser-agent: *\nDisallow: /x\n");
     expect(policyFor(groups, UA).isAllowed("/x")).toBe(false);
   });
+
+  it("keeps agents in one group when a Sitemap line sits between them", () => {
+    const groups = parseRobotsTxt("User-agent: AutoMetaBot\nSitemap: https://a.example/sitemap.xml\nUser-agent: *\nDisallow: /\n");
+    expect(policyFor(groups, UA).isAllowed("/x")).toBe(false);
+  });
+
+  it("compares percent-encoded unreserved characters as their plain form", () => {
+    const policy = policyFor(parseRobotsTxt("User-agent: *\nDisallow: /private\nDisallow: /%7Euser\nDisallow: /a%2fb\n"), UA);
+    expect(policy.isAllowed("/%70rivate/1")).toBe(false);
+    expect(policy.isAllowed("/~user")).toBe(false);
+    // An encoded slash is a different path from a real one.
+    expect(policy.isAllowed("/a/b")).toBe(true);
+    expect(policy.isAllowed("/a%2Fb")).toBe(false);
+  });
+
+  it("matches non-ASCII rules against the encoded path", () => {
+    const policy = policyFor(parseRobotsTxt("User-agent: *\nDisallow: /gebrauchtwagen/köln\n"), UA);
+    expect(policy.isAllowed(new URL("https://a.example/gebrauchtwagen/köln/1").pathname)).toBe(false);
+  });
+
+  it("matches many wildcards against a long path quickly", () => {
+    const policy = policyFor(parseRobotsTxt(`User-agent: *\nDisallow: /${"*a".repeat(12)}*b\nDisallow: /*.pdf$\n`), UA);
+    const started = performance.now();
+    expect(policy.isAllowed(`/${"a".repeat(5000)}`)).toBe(true);
+    expect(policy.isAllowed(`/${"a".repeat(5000)}b`)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(100);
+    expect(policy.isAllowed("/x/file.pdf")).toBe(false);
+    expect(policy.isAllowed("/x/file.pdf?download=1")).toBe(true);
+  });
 });

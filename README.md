@@ -58,7 +58,8 @@ Regeln für jeden Adapter:
 Zusätzlich für Scraper (Quellen ohne Schnittstelle):
 
 - Webseiten nur über `PoliteFetcher` aus `src/ingest/http/fetcher.ts` abrufen. Er nennt sich ehrlich (`SCRAPE_USER_AGENT`), wartet zwischen zwei Abrufen bei derselben Börse (`SCRAPE_MIN_DELAY_MS`, mindestens 1 Sekunde, längeres `Crawl-delay` gewinnt), hält die robots.txt ein (`SCRAPE_RESPECT_ROBOTS`) und begrenzt die Abrufe pro Lauf (`SCRAPE_MAX_REQUESTS`).
-- Meldet eine Börse 401, 403 oder 429, zeigt ein Captcha oder leitet auf eine Anmeldung um, bricht der Lauf sofort ab (`BlockedError`). Nicht erneut versuchen, keine anderen IPs oder Browser-Kennungen.
+- Meldet eine Börse 401, 403 oder 429, zeigt ein Captcha oder leitet auf eine Anmeldung um, bricht der Lauf sofort ab (`BlockedError`). Das gilt auch, wenn schon die robots.txt so antwortet. Nicht erneut versuchen, keine anderen IPs oder Browser-Kennungen.
+- Weiterleitungen folgt der Fetcher selbst (höchstens 5). Jeder Schritt zählt als eigener Abruf, wartet seinen Abstand ab und muss von der robots.txt seines Hosts erlaubt sein.
 - `kind: "scrape"` setzen und `fullSnapshot: false`, solange der Adapter nicht wirklich den ganzen Bestand liest. Sonst würden nicht gelesene Angebote fälschlich als verkauft markiert.
 
 ## Deployment (Coolify über AgencyOS)

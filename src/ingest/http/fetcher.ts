@@ -51,7 +51,7 @@ export interface PoliteFetcherOptions {
   respectRobots?: boolean;
   /** Most requests one run may make, robots.txt included. */
   maxRequests?: number;
-  /** Retries for network errors and 5xx answers (never for blocks). */
+  /** Retries for network errors and 5xx answers (never for blocks, 4xx or the budget). */
   maxRetries?: number;
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
@@ -65,15 +65,29 @@ const BLOCK_STATUSES = new Map([
   [429, "rate limited (429)"],
 ]);
 
-/** Text that bot-protection and captcha pages contain. Checked on every page. */
-const CHALLENGE_MARKERS: [RegExp, string][] = [
-  [/captcha/i, "captcha"],
-  [/cf-chl|challenge-platform|cf-turnstile/i, "Cloudflare challenge"],
-  [/_Incapsula_Resource|incapsula/i, "Imperva challenge"],
-  [/px-captcha|perimeterx/i, "PerimeterX challenge"],
-  [/<title>\s*Access Denied\s*<\/title>/i, "access denied page"],
+/**
+ * Signatures that only bot-protection interstitials carry. They count on every page, however
+ * long, because a site can pad a block page.
+ */
+const CHALLENGE_SIGNATURES: [RegExp, string][] = [
+  [/<title>\s*(Access Denied|Just a moment\.\.\.|Attention Required! \| Cloudflare)\s*<\/title>/i, "access denied page"],
+  [/_cf_chl_opt|cf-chl-/i, "Cloudflare challenge"],
+  [/_Incapsula_Resource/i, "Imperva challenge"],
+  [/px-captcha/i, "PerimeterX challenge"],
+];
+
+/**
+ * Words a challenge page uses but a real page may mention in passing, for example in a
+ * contact form. They count on error answers and on short pages only.
+ */
+const CHALLENGE_WORDS: [RegExp, string][] = [
+  [/captcha|cf-turnstile/i, "captcha"],
   [/kein Roboter|not a robot|are you a human/i, "human check"],
 ];
+
+/** Redirects are followed by hand, so every hop goes through robots.txt, budget and pacing. */
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECTS = 5;
 
 const LOGIN_PATH = /\/(login|signin|sign-in|anmelden|einloggen)(\/|\.|\?|$)/i;
 
@@ -90,6 +104,8 @@ export class PoliteFetcher {
   private readonly random: () => number;
   private readonly robots = new Map<string, Promise<RobotsPolicy>>();
   private readonly nextSlot = new Map<string, number>();
+  /** Tail of the request queue per host: requests to one host run one after another. */
+  private readonly hostQueues = new Map<string, Promise<void>>();
   /** Crawl-delay per host when robots.txt asks for more than minDelayMs. */
   private readonly hostDelays = new Map<string, number>();
   private requestCount = 0;
@@ -114,20 +130,25 @@ export class PoliteFetcher {
   /** Fetches a page as text, or throws BlockedError / DisallowedError / BudgetExceededError. */
   async getText(url: string): Promise<FetchedPage> {
     const target = new URL(url);
-    if (this.respectRobots) {
-      const policy = await this.policyFor(target);
-      if (!policy.isAllowed(target.pathname + target.search)) throw new DisallowedError(url);
-    }
+    await this.assertAllowed(target);
 
     let attempt = 0;
     for (;;) {
-      const page = await this.request(target.href, target.host);
-      if (page.status >= 500 && attempt < this.maxRetries) {
+      let page: FetchedPage;
+      try {
+        page = await this.follow(target, true);
+      } catch (error) {
+        if (!isNetworkError(error) || attempt >= this.maxRetries) throw error;
         attempt += 1;
         await this.sleep(this.minDelayMs * 2 ** attempt);
         continue;
       }
       this.assertNotBlocked(page);
+      if (page.status >= 500 && attempt < this.maxRetries) {
+        attempt += 1;
+        await this.sleep(this.minDelayMs * 2 ** attempt);
+        continue;
+      }
       if (page.status >= 400) throw new Error(`HTTP ${page.status} for ${page.url}`);
       return page;
     }
@@ -144,15 +165,24 @@ export class PoliteFetcher {
     return policy;
   }
 
+  private async assertAllowed(target: URL): Promise<void> {
+    if (!this.respectRobots) return;
+    const policy = await this.policyFor(target);
+    if (!policy.isAllowed(target.pathname + target.search)) throw new DisallowedError(target.href);
+  }
+
   private async loadPolicy(origin: string, host: string): Promise<RobotsPolicy> {
     let page: FetchedPage;
     try {
-      page = await this.request(`${origin}/robots.txt`, host);
+      page = await this.follow(new URL(`${origin}/robots.txt`), false);
     } catch (error) {
-      if (error instanceof BudgetExceededError) throw error;
+      if (!isNetworkError(error)) throw error;
       return DISALLOW_ALL; // unreachable: assume nothing is allowed
     }
-    if (page.status === 429 || page.status >= 500) return DISALLOW_ALL;
+    // A site that answers robots.txt with 401, 403, 429, a captcha or a login page does not
+    // want bots. RFC 9309 would read 401/403 as "no robots.txt"; our rule is to stop instead.
+    this.assertNotBlocked(page);
+    if (page.status >= 500) return DISALLOW_ALL;
     if (page.status >= 400) return ALLOW_ALL; // no robots.txt: everything is allowed
     const policy = policyFor(parseRobotsTxt(page.text), this.userAgent);
     if (policy.crawlDelaySeconds !== null) {
@@ -164,34 +194,79 @@ export class PoliteFetcher {
     return policy;
   }
 
-  private async request(url: string, host: string): Promise<FetchedPage> {
-    if (this.requestCount >= this.maxRequests) throw new BudgetExceededError(this.maxRequests);
-    const wait = (this.nextSlot.get(host) ?? 0) - this.now();
-    if (wait > 0) await this.sleep(wait);
+  /**
+   * Requests a URL and follows up to five redirects by hand. Each hop is its own request with
+   * budget and pacing. A hop to a login page stops the run before it is requested, and for
+   * pages (not robots.txt) each hop must be allowed by the robots.txt of its host.
+   */
+  private async follow(start: URL, checkRobots: boolean): Promise<FetchedPage> {
+    let current = start;
+    for (let hops = 0; ; hops++) {
+      const response = await this.dispatch(current);
+      if (!REDIRECT_STATUSES.has(response.status) || !response.location) {
+        return { url: current.href, status: response.status, text: response.text };
+      }
+      if (hops >= MAX_REDIRECTS) throw new Error(`More than ${MAX_REDIRECTS} redirects from ${start.href}`);
+      const next = new URL(response.location, current);
+      if (next.protocol !== "https:" && next.protocol !== "http:") {
+        throw new Error(`Redirect to unsupported URL ${next.href}`);
+      }
+      if (LOGIN_PATH.test(next.pathname)) throw new BlockedError(next.href, "redirected to a login page");
+      if (checkRobots) await this.assertAllowed(next);
+      current = next;
+    }
+  }
 
-    this.requestCount += 1;
-    const delay = Math.max(this.minDelayMs, this.hostDelays.get(host) ?? 0);
+  /**
+   * One HTTP request. Requests to the same host wait in line, so two callers can never share
+   * a slot. The budget is checked and taken right before sending, with nothing in between.
+   */
+  private async dispatch(url: URL): Promise<{ status: number; location: string | null; text: string }> {
+    const host = url.host;
+    const previous = this.hostQueues.get(host) ?? Promise.resolve();
+    let release!: () => void;
+    const turn = new Promise<void>((resolve) => (release = resolve));
+    this.hostQueues.set(host, previous.then(() => turn));
+    await previous;
     try {
-      const response = await this.fetchImpl(url, {
-        headers: { "user-agent": this.userAgent, accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8" },
-        redirect: "follow",
-      });
-      return { url: response.url || url, status: response.status, text: await response.text() };
+      const wait = (this.nextSlot.get(host) ?? 0) - this.now();
+      if (wait > 0) await this.sleep(wait);
+      if (this.requestCount >= this.maxRequests) throw new BudgetExceededError(this.maxRequests);
+      this.requestCount += 1;
+
+      const delay = Math.max(this.minDelayMs, this.hostDelays.get(host) ?? 0);
+      try {
+        const response = await this.fetchImpl(url.href, {
+          headers: { "user-agent": this.userAgent, accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8" },
+          redirect: "manual",
+        });
+        return { status: response.status, location: response.headers.get("location"), text: await response.text() };
+      } finally {
+        this.nextSlot.set(host, this.now() + delay * (1 + this.jitterRatio * this.random()));
+      }
     } finally {
-      this.nextSlot.set(host, this.now() + delay * (1 + this.jitterRatio * this.random()));
+      release();
     }
   }
 
   private assertNotBlocked(page: FetchedPage): void {
     const reason = BLOCK_STATUSES.get(page.status);
     if (reason) throw new BlockedError(page.url, reason);
-    if (LOGIN_PATH.test(new URL(page.url).pathname)) throw new BlockedError(page.url, "redirected to a login page");
-    // Real pages can mention these words in passing; challenge pages are short and lead with them.
+    if (LOGIN_PATH.test(new URL(page.url).pathname)) throw new BlockedError(page.url, "login page");
     const head = page.text.slice(0, 20_000);
-    for (const [pattern, label] of CHALLENGE_MARKERS) {
-      if (pattern.test(head) && (page.status !== 200 || page.text.length < 50_000)) {
-        throw new BlockedError(page.url, label);
+    for (const [pattern, label] of CHALLENGE_SIGNATURES) {
+      if (pattern.test(head)) throw new BlockedError(page.url, label);
+    }
+    // Real pages can mention these words in passing; challenge pages are short and lead with them.
+    if (page.status !== 200 || page.text.length < 50_000) {
+      for (const [pattern, label] of CHALLENGE_WORDS) {
+        if (pattern.test(head)) throw new BlockedError(page.url, label);
       }
     }
   }
+}
+
+/** Errors worth another try: the request never got an answer (DNS, connection, TLS, reset). */
+function isNetworkError(error: unknown): boolean {
+  return error instanceof TypeError;
 }

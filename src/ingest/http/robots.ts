@@ -3,7 +3,8 @@
  * - a crawler obeys the group whose user-agent line matches its product token
  *   (case-insensitive), otherwise the "*" group; groups for the same agent are merged;
  * - the longest matching Allow/Disallow pattern wins, Allow wins a tie;
- * - "*" matches any run of characters and a trailing "$" anchors the end.
+ * - "*" matches any run of characters and a trailing "$" anchors the end;
+ * - percent-encoded unreserved characters are decoded before comparing, reserved ones are not.
  */
 
 export interface RobotsRule {
@@ -46,26 +47,67 @@ export function parseRobotsTxt(text: string): RobotsGroup[] {
       lastWasAgent = true;
       continue;
     }
+    // Other records, such as Sitemap, belong to no group and must not split one (RFC 9309).
+    if (key !== "allow" && key !== "disallow" && key !== "crawl-delay") continue;
     lastWasAgent = false;
     if (!current) continue;
-    if (key === "allow" || key === "disallow") {
-      // An empty Disallow means "allow everything" and adds no rule.
-      if (value) current.rules.push({ allow: key === "allow", pattern: value });
-    } else if (key === "crawl-delay") {
+    if (key === "crawl-delay") {
       const seconds = Number(value);
       if (Number.isFinite(seconds) && seconds >= 0) current.crawlDelaySeconds = seconds;
+    } else if (value) {
+      // An empty Disallow means "allow everything" and adds no rule.
+      current.rules.push({ allow: key === "allow", pattern: value });
     }
   }
   return groups;
 }
 
-function patternToRegExp(pattern: string): RegExp {
+const UNRESERVED = /^[A-Za-z0-9\-._~]$/;
+
+/**
+ * Brings a path or pattern into the form RFC 9309 compares: non-ASCII characters
+ * percent-encoded, percent-encoded unreserved characters decoded, other escapes upper-case.
+ */
+export function normalizePath(value: string): string {
+  return value
+    .replace(/[^\x00-\x7f]/gu, (char) => encodeURIComponent(char))
+    .replace(/%[0-9a-f]{2}/gi, (escape) => {
+      const char = String.fromCharCode(parseInt(escape.slice(1), 16));
+      return UNRESERVED.test(char) ? char : escape.toUpperCase();
+    });
+}
+
+interface CompiledPattern {
+  /** The literal pieces between the "*" wildcards. */
+  segments: string[];
+  /** The pattern ended in "$", so the last piece must end the path. */
+  anchored: boolean;
+}
+
+function compile(pattern: string): CompiledPattern {
   const anchored = pattern.endsWith("$");
-  const body = (anchored ? pattern.slice(0, -1) : pattern)
-    .split("*")
-    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
-    .join(".*");
-  return new RegExp(`^${body}${anchored ? "$" : ""}`);
+  return { segments: (anchored ? pattern.slice(0, -1) : pattern).split("*"), anchored };
+}
+
+/**
+ * Wildcard match without backtracking: the first piece must start the path and every later
+ * piece is taken at its earliest position, which leaves the most room for the rest. Runs in
+ * O(path × pattern), so a hostile robots.txt cannot stall the run the way a regex could.
+ */
+function matches({ segments, anchored }: CompiledPattern, path: string): boolean {
+  const [first, ...rest] = segments;
+  if (!path.startsWith(first)) return false;
+  if (rest.length === 0) return !anchored || path.length === first.length;
+
+  let position = first.length;
+  const last = rest.pop()!;
+  for (const segment of rest) {
+    const found = path.indexOf(segment, position);
+    if (found === -1) return false;
+    position = found + segment.length;
+  }
+  if (anchored) return path.length - last.length >= position && path.endsWith(last);
+  return path.indexOf(last, position) !== -1;
 }
 
 /** Picks the groups that apply to `userAgent` and merges them into one policy. */
@@ -74,19 +116,23 @@ export function policyFor(groups: RobotsGroup[], userAgent: string): RobotsPolic
   let selected = groups.filter((g) => g.agents.some((a) => a !== "*" && a === token));
   if (selected.length === 0) selected = groups.filter((g) => g.agents.includes("*"));
 
-  const rules = selected.flatMap((g) => g.rules).map((rule) => ({ ...rule, regex: patternToRegExp(rule.pattern) }));
+  const rules = selected
+    .flatMap((g) => g.rules)
+    .map((rule) => {
+      const pattern = normalizePath(rule.pattern);
+      return { allow: rule.allow, length: pattern.length, compiled: compile(pattern) };
+    });
   const delays = selected.map((g) => g.crawlDelaySeconds).filter((d): d is number => d !== null);
 
   return {
     crawlDelaySeconds: delays.length > 0 ? Math.max(...delays) : null,
     isAllowed(pathWithQuery: string) {
-      const path = pathWithQuery || "/";
+      const path = normalizePath(pathWithQuery || "/");
       let best: { allow: boolean; length: number } | null = null;
       for (const rule of rules) {
-        if (!rule.regex.test(path)) continue;
-        const length = rule.pattern.length;
-        if (!best || length > best.length || (length === best.length && rule.allow && !best.allow)) {
-          best = { allow: rule.allow, length };
+        if (!matches(rule.compiled, path)) continue;
+        if (!best || rule.length > best.length || (rule.length === best.length && rule.allow && !best.allow)) {
+          best = { allow: rule.allow, length: rule.length };
         }
       }
       return best ? best.allow : true;
