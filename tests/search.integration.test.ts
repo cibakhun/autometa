@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { haversineKm } from "@/core/geo";
 import { createDemoAdapter } from "@/ingest/adapters/demo";
 import { migrate } from "@/ingest/migrate";
+import { prepareData } from "@/ingest/prepare";
 import { runIngest } from "@/ingest/run";
 import { seedReferenceData } from "@/ingest/seed";
 import { parseFilters } from "@/search/filters";
@@ -119,5 +120,33 @@ describe.skipIf(!url)("search against Postgres", () => {
     // A listing that comes back is active again.
     await runIngest(pool, createDemoAdapter({ count: 600, seed: 3 }));
     expect((await searchListings(pool, parseFilters({}), null)).total).toBe(600);
+  });
+});
+
+describe.skipIf(!url)("preparing a fresh database", () => {
+  let pool: Pool;
+
+  beforeAll(async () => {
+    pool = new Pool({ connectionString: url });
+    await pool.query("drop schema public cascade; create schema public;");
+    await migrate(pool);
+  }, 60_000);
+
+  afterAll(async () => {
+    await pool?.end();
+  });
+
+  it("imports the demo listings into an empty database, then leaves them alone", async () => {
+    const demo = () => createDemoAdapter({ count: 40, seed: 7 });
+
+    const first = await prepareData(pool, demo);
+    expect(first.reference.makes).toBeGreaterThan(0);
+    expect(first.demo?.upserted).toBe(40);
+    expect(await resolveZip(pool, "10115")).not.toBeNull();
+
+    const second = await prepareData(pool, demo);
+    expect(second.demo).toBeNull();
+    const { rows } = await pool.query<{ count: string }>("select count(*) from ingest_runs");
+    expect(Number(rows[0].count)).toBe(1);
   });
 });

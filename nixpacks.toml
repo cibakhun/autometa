@@ -1,0 +1,14 @@
+# Same build setup as the other AgencyOS projects on Coolify: Node 22, a clean npm ci,
+# Next.js build. `npm run start` migrates and fills the database before Next.js starts.
+
+[phases.setup]
+nixPkgs = ["nodejs_22", "npm-10_x"]
+
+[phases.install]
+cmds = ["npm ci"]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "npm run start"

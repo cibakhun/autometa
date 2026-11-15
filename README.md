@@ -23,6 +23,7 @@ npm run dev                     # http://localhost:3000
 | `npm run dev` | Entwicklungsserver |
 | `npm run db:migrate` | SQL-Migrationen aus `supabase/migrations` anwenden |
 | `npm run db:seed` | Marken- und Modellliste sowie bekannte Postleitzahlen schreiben |
+| `npm run db:prepare` | `db:seed` und, solange die Datenbank keine Angebote hat, die Demo-Daten importieren (läuft bei jedem Start) |
 | `npm run ingest -- demo` | Eine Quelle importieren (hier: Demo-Daten) |
 | `npm test` | Tests; mit `TEST_DATABASE_URL` auch gegen eine echte Datenbank |
 | `npm run lint` / `npm run typecheck` / `npm run build` | Prüfungen wie in der CI |
@@ -54,14 +55,15 @@ Regeln für jeden Adapter:
 - Nur Quellen mit Erlaubnis oder offizieller Schnittstelle. Niemals Bot-Schutz, Captchas oder Logins umgehen.
 - Jedes Angebot verlinkt auf die Originalanzeige.
 
-## Deployment (Coolify)
+## Deployment (Coolify über AgencyOS)
 
-Das Hosting läuft über Coolify. Die App wird mit Nixpacks direkt aus diesem Repo gebaut, eine Dockerfile ist nicht nötig.
+AutoMeta läuft wie die anderen AgencyOS-Projekte als Coolify-App, die AgencyOS beim Anlegen des Projekts erstellt hat: Branch `main`, Nixpacks, Port 3000.
 
-- **Build:** Nixpacks erkennt Next.js (`npm ci`, `npm run build`, `npm start`). Node-Version kommt aus `.nvmrc` (22). Port 3000. Der Build braucht keine Datenbank.
-- **Umgebungsvariable:** `DATABASE_URL` (Postgres-Connection-String). Mit einer Postgres-Datenbank in Coolify ist das die interne URL aus deren Einstellungen.
-- **Migrationen:** laufen automatisch beim Start jedes neuen Containers (`npm start` ruft zuerst `db:migrate` auf), also mit dem Code der neuen Version und bevor sie Anfragen bekommt. Schlägt eine Migration fehl, startet der neue Container nicht und die alte Version läuft weiter. Ein Pre-deployment command ist nicht nötig.
-- **Einmalig nach dem ersten Deployment** (im Terminal der App in Coolify): `npm run db:seed && npm run ingest -- demo`.
+- **Build:** `nixpacks.toml` legt wie bei AgencyOS Node 22, `npm ci`, `npm run build` und `npm run start` fest. Der Build braucht keine Datenbank.
+- **Datenbank:** eine PostgreSQL-Ressource im selben Coolify-Projekt. Ihre interne URL kommt als `DATABASE_URL` in die Umgebungsvariablen der App, in Coolify oder im AgencyOS-Projekt.
+- **Start:** `npm run start` führt die Migrationen aus, schreibt Marken, Modelle und PLZ und importiert die Demo-Angebote, solange die Datenbank noch keine Angebote hat. Erst danach startet Next.js. Schlägt ein Schritt fehl, startet der neue Container nicht und die alte Version läuft weiter. Ein Terminal oder ein Pre-deployment command ist nicht nötig.
+- **Ausrollen:** den Pull Request in AgencyOS mit „Merge to Main“ zusammenführen und danach unter „Deployments“ ein Deployment starten. AgencyOS legt die App ohne GitHub-Webhook an, ein Push auf `main` allein rollt also nichts aus, solange in Coolify keiner eingerichtet ist.
+- **Domain:** die automatische sslip.io-Adresse ist von außen nicht erreichbar. Für eine öffentliche Adresse eine Subdomain in Cloudflare (proxied) auf den Server zeigen lassen und dieselbe Adresse bei der App als Domain eintragen.
 - **Importe regelmäßig:** in Coolify unter „Scheduled Tasks“ je Quelle einen Befehl wie `npm run ingest -- demo` mit einem Cron-Ausdruck anlegen.
 
 Alternativ funktioniert jede andere Postgres-Datenbank, zum Beispiel Supabase. Dort kann die App den gepoolten Connection-String (Transaction-Modus, Port 6543) nutzen. Migrationen brauchen aber eine direkte Verbindung oder den Session-Modus (Port 5432), weil sie eine Sperre über mehrere Transaktionen halten. Dafür `MIGRATION_DATABASE_URL` setzen. Mit Port 6543 bricht `db:migrate` absichtlich ab.
