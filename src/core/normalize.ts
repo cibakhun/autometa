@@ -1,0 +1,176 @@
+import { MAKES, type MakeDef } from "./taxonomy";
+import type { BodyType, Fuel, Transmission } from "./types";
+
+/** Lowercase, strip accents, turn every non-alphanumeric run into one space. */
+export function normalizeText(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/** Parses German or plain number strings: "12.990 €", "123.456 km", "12990" -> number. */
+export function parseInteger(value: string | number | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? Math.round(value) : null;
+  // Keep digits and separators, drop a German decimal part (",00"), then the thousands dots.
+  const digits = value
+    .replace(/[^\d.,-]/g, "")
+    .replace(/,\d*$/, "")
+    .replace(/[.,]/g, "");
+  if (!digits || digits === "-") return null;
+  const parsed = Number.parseInt(digits, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function psToKw(ps: number): number {
+  return Math.round(ps * 0.73549875);
+}
+
+export function kwToPs(kw: number): number {
+  return Math.round(kw / 0.73549875);
+}
+
+/** "110 kW (150 PS)" -> 110, "150 PS" -> 110, "110 kW" -> 110. */
+export function parsePowerKw(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const kw = value.match(/(\d+(?:[.,]\d+)?)\s*kw/i);
+  if (kw) return Math.round(Number(kw[1].replace(",", ".")));
+  const ps = value.match(/(\d+(?:[.,]\d+)?)\s*(ps|hp|cv)/i);
+  if (ps) return psToKw(Number(ps[1].replace(",", ".")));
+  return null;
+}
+
+/** "03/2018", "3.2018", "2018-03", "2018" -> "2018-03-01" (month defaults to January). */
+export function parseFirstRegistration(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  let year: number | undefined;
+  let month = 1;
+  let match = trimmed.match(/^(\d{1,2})[./-](\d{4})$/);
+  if (match) {
+    month = Number(match[1]);
+    year = Number(match[2]);
+  } else if ((match = trimmed.match(/^(\d{4})-(\d{1,2})(?:-\d{1,2})?$/))) {
+    year = Number(match[1]);
+    month = Number(match[2]);
+  } else if ((match = trimmed.match(/^(\d{4})$/))) {
+    year = Number(match[1]);
+  }
+  if (!year || year < 1900 || year > 2100 || month < 1 || month > 12) return null;
+  return `${year}-${String(month).padStart(2, "0")}-01`;
+}
+
+const FUEL_RULES: [RegExp, Fuel][] = [
+  [/plug ?in|phev/, "plugin_hybrid"],
+  [/hybrid|hev/, "hybrid"],
+  [/elektr|electric|^ev$|bev/, "electric"],
+  [/diesel|tdi|cdi|hdi|dci/, "diesel"],
+  [/autogas|lpg/, "lpg"],
+  [/erdgas|cng/, "cng"],
+  [/wasserstoff|hydrogen/, "hydrogen"],
+  [/benzin|petrol|gasoline|super|otto/, "petrol"],
+];
+
+export function normalizeFuel(value: string | null | undefined): Fuel | null {
+  if (!value) return null;
+  const text = normalizeText(value);
+  for (const [pattern, fuel] of FUEL_RULES) {
+    if (pattern.test(text)) return fuel;
+  }
+  return "other";
+}
+
+export function normalizeTransmission(value: string | null | undefined): Transmission | null {
+  if (!value) return null;
+  const text = normalizeText(value);
+  if (/automat|dsg|cvt|tiptronic|steptronic|s tronic|doppelkupplung|auto/.test(text)) return "automatic";
+  if (/schalt|manuell|manual|handschalt/.test(text)) return "manual";
+  return null;
+}
+
+const BODY_RULES: [RegExp, BodyType][] = [
+  [/kleinwagen|small|hatchback/, "small"],
+  [/kombi|estate|touring|avant|variant|sportswagon|wagon/, "estate"],
+  [/suv|gelande|offroad|crossover/, "suv"],
+  [/van|bus|mpv/, "van"],
+  [/cabrio|roadster|convertible/, "convertible"],
+  [/coupe|sportwagen/, "coupe"],
+  [/limousine|sedan|saloon/, "sedan"],
+];
+
+export function normalizeBodyType(value: string | null | undefined): BodyType | null {
+  if (!value) return null;
+  const text = normalizeText(value);
+  for (const [pattern, body] of BODY_RULES) {
+    if (pattern.test(text)) return body;
+  }
+  return "other";
+}
+
+export function resolveMake(raw: string): MakeDef | null {
+  const text = normalizeText(raw);
+  if (!text) return null;
+  return (
+    MAKES.find(
+      (make) =>
+        normalizeText(make.slug) === text ||
+        normalizeText(make.name) === text ||
+        (make.aliases ?? []).some((alias) => normalizeText(alias) === text),
+    ) ?? null
+  );
+}
+
+export interface ResolvedMakeModel {
+  makeSlug: string | null;
+  modelSlug: string | null;
+  /** The rest of the raw model string after the model name, e.g. "1.4 TSI Highline". */
+  variant: string | null;
+}
+
+/**
+ * Maps a source's make and model strings onto the canonical taxonomy.
+ * "VW" + "Golf VII 1.4 TSI" -> volkswagen / golf, variant "VII 1.4 TSI".
+ * The longest matching model name or alias wins.
+ */
+export function resolveMakeModel(makeRaw: string, modelRaw: string): ResolvedMakeModel {
+  const make = resolveMake(makeRaw);
+  if (!make) return { makeSlug: null, modelSlug: null, variant: modelRaw.trim() || null };
+
+  const words = normalizeText(modelRaw).split(" ").filter(Boolean);
+  const rawWords = modelRaw.trim().split(/\s+/).filter(Boolean);
+  let best: { slug: string; length: number } | null = null;
+
+  for (const model of make.models) {
+    const keys = [model.slug, model.name, ...(model.aliases ?? [])].map(normalizeText);
+    for (const key of keys) {
+      const keyWords = key.split(" ").filter(Boolean);
+      const matches = keyWords.length > 0 && keyWords.every((word, i) => words[i] === word);
+      if (matches && (!best || keyWords.length > best.length)) best = { slug: model.slug, length: keyWords.length };
+    }
+    if (!best && model.firstWord && words[0] && model.firstWord.test(words[0])) {
+      // Pattern hits (e.g. "320d") keep the matched word as part of the variant.
+      best = { slug: model.slug, length: 0 };
+    }
+  }
+
+  if (!best) return { makeSlug: make.slug, modelSlug: null, variant: modelRaw.trim() || null };
+
+  // Drop as many original words as the matched key had (handles "T-Roc" vs "t roc").
+  const consumed = consumedRawWords(rawWords, best.length);
+  const variant = rawWords.slice(consumed).join(" ").trim();
+  return { makeSlug: make.slug, modelSlug: best.slug, variant: variant || null };
+}
+
+/** How many raw (space-separated) words cover the first `normalizedCount` normalized words. */
+function consumedRawWords(rawWords: string[], normalizedCount: number): number {
+  let covered = 0;
+  let index = 0;
+  while (covered < normalizedCount && index < rawWords.length) {
+    covered += normalizeText(rawWords[index]).split(" ").filter(Boolean).length;
+    index += 1;
+  }
+  return index;
+}
