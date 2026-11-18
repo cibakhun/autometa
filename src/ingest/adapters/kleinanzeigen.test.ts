@@ -4,6 +4,7 @@ import { PoliteFetcher } from "../http/fetcher";
 import {
   createKleinanzeigenAdapter,
   firstPageUrl,
+  giveawayPageUrl,
   normalizeKleinanzeigen,
   pageUrl,
   parseKleinanzeigenPage,
@@ -143,6 +144,38 @@ describe("normalizeKleinanzeigen", () => {
     expect(normalize({ title: "Opel Corsa C für Bastler", price: "Zu verschenken" })).toMatchObject({ priceEur: 0, makeSlug: "opel", modelSlug: "corsa" });
     expect(normalize({ title: "Suche Auto zum Verschenken", price: "Zu verschenken" })).toBeNull();
   });
+
+  // Titles of real "Zu verschenken" ads in the car category.
+  it.each([
+    "VW Polo 1.2 zu verschenken",
+    "Fiat Punto Typ 188 zu verschenken",
+    "VW Beetle Unfall ohne Motor/Getriebe zu verschenken",
+    "VW Polo aus Erstbesitz, 3-Türer",
+    "VW Polo mit Winterreifen zu verschenken",
+    "VW Polo 1.2 – neuer Besitzer gesucht",
+  ])(
+    "keeps the car given away: %s",
+    (title) => expect(normalize({ title, price: "Zu verschenken" })).toMatchObject({ priceEur: 0 }),
+  );
+
+  it.each([
+    "Opel Corsa D Stahlfelgen zu verschenken",
+    "Hutablage Opel Corsa C zu verschenken",
+    "Winterreifen Opel Astra zu verschenken",
+    "Opel Tigra A Fahrertür",
+    "VW Polo Stoßstangen zu verschenken",
+    "VW Polo Winterreifen zu verschenken",
+    "VW Polo gesucht",
+    "Maxi-Cosi Autositz für VW Golf",
+    "Mustang 64 1/2 - 1973 Kabelpläne ZU VERSCHENKEN",
+    "Zum verschenken Fahrzeug für Feuerwehr gesucht",
+    "Auto zu Verschenken",
+    "reifen zu verschenken",
+  ])("drops what is given away but no car we can name: %s", (title) => expect(normalize({ title, price: "Zu verschenken" })).toBeNull());
+
+  it("judges only giveaways by the part words", () => {
+    expect(normalize({ title: "Opel Corsa D mit neuen Winterreifen", price: "2.500 €" })).toMatchObject({ priceEur: 2500 });
+  });
 });
 
 describe("Kleinanzeigen URLs", () => {
@@ -151,6 +184,8 @@ describe("Kleinanzeigen URLs", () => {
     expect(pageUrl(null, 2)).toBe("https://www.kleinanzeigen.de/s-autos/seite:2/c216");
     expect(firstPageUrl("mercedes-benz")).toBe("https://www.kleinanzeigen.de/s-autos/mercedes_benz/c216+autos.marke_s:mercedes_benz");
     expect(pageUrl("bmw", 5)).toBe("https://www.kleinanzeigen.de/s-autos/bmw/seite:5/c216+autos.marke_s:bmw");
+    expect(giveawayPageUrl(1)).toBe("https://www.kleinanzeigen.de/s-autos/verschenken/k0c216");
+    expect(giveawayPageUrl(2)).toBe("https://www.kleinanzeigen.de/s-autos/seite:2/verschenken/k0c216");
   });
 });
 
@@ -190,6 +225,65 @@ describe("createKleinanzeigenAdapter", () => {
     expect(site.requested).not.toContain(pageUrl("bmw", 4));
     expect(adapter.staleAfterDays).toBe(14);
     expect(adapter.fullSnapshot).toBe(false);
+  });
+
+  it("searches the car category for cars given away, after the makes and before the whole category", async () => {
+    const site = fakeSite({
+      "https://www.kleinanzeigen.de/robots.txt": "",
+      [pageUrl("bmw", 1)]: page(ads(1, 2)),
+      [giveawayPageUrl(1)]: page([{ id: "2", title: "BMW 320d 2" }, { id: "30", title: "VW Polo 1.2 zu verschenken", price: "Zu verschenken" }]),
+      [pageUrl(null, 1)]: page([...ads(30, 1), ...ads(40, 1)]),
+    });
+    const adapter = createKleinanzeigenAdapter({ fetcher: site.fetcher, makes: ["bmw"] });
+    const raws: RawListing[] = [];
+    for await (const raw of adapter.fetch()) raws.push(raw);
+
+    expect(raws.map((raw) => raw.externalId)).toEqual(["1", "2", "30", "40"]);
+    expect(adapter.normalize(raws[2])).toMatchObject({ priceEur: 0, makeSlug: "volkswagen", modelSlug: "polo" });
+    const order = [pageUrl("bmw", 1), giveawayPageUrl(1), pageUrl(null, 1)].map((url) => site.requested.indexOf(url));
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(order).not.toContain(-1);
+  });
+
+  it("goes on to the whole category when the search finds nothing", async () => {
+    const site = fakeSite({
+      "https://www.kleinanzeigen.de/robots.txt": "",
+      [giveawayPageUrl(1)]: page([]),
+      [pageUrl(null, 1)]: page(ads(1, 2)),
+    });
+    const adapter = createKleinanzeigenAdapter({ fetcher: site.fetcher, makes: [] });
+    const raws: RawListing[] = [];
+    for await (const raw of adapter.fetch()) raws.push(raw);
+    expect(raws.map((raw) => raw.externalId)).toEqual(["1", "2"]);
+    expect(site.requested).toContain(giveawayPageUrl(1));
+  });
+
+  it("keeps the last request of the budget for the whole category", async () => {
+    const routes = {
+      "https://www.kleinanzeigen.de/robots.txt": "",
+      [pageUrl("bmw", 1)]: page(ads(1, 2)),
+      [giveawayPageUrl(1)]: page(ads(20, 1)),
+      [pageUrl(null, 1)]: page(ads(30, 1)),
+    };
+    const site = fakeSite(routes);
+    // robots.txt, the BMW page and its repeat leave one request.
+    const fetcher = new PoliteFetcher({
+      fetchImpl: (async (input: string | URL) => {
+        const url = String(input);
+        site.requested.push(url);
+        const body = url === pageUrl("bmw", 2) ? routes[pageUrl("bmw", 1)] : routes[url];
+        return body === undefined ? new Response("not found", { status: 404 }) : new Response(body);
+      }) as typeof fetch,
+      sleep: async () => undefined,
+      minDelayMs: 0,
+      random: () => 0,
+      maxRequests: 4,
+    });
+    const adapter = createKleinanzeigenAdapter({ fetcher, makes: ["bmw"] });
+    const raws: RawListing[] = [];
+    for await (const raw of adapter.fetch()) raws.push(raw);
+    expect(site.requested).not.toContain(giveawayPageUrl(1));
+    expect(raws.map((raw) => raw.externalId)).toEqual(["1", "2", "30"]);
   });
 
   it("never reads past page 5", async () => {
