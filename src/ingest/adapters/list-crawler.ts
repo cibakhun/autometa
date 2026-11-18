@@ -4,10 +4,11 @@ import {
   detectFuel,
   detectTransmission,
   findMakeInTitle,
+  isNotForSale,
   parseFirstRegistration,
   parsePowerKw,
   resolveMake,
-  resolveMakeModel,
+  resolveModelInTitle,
 } from "@/core/normalize";
 import type { NormalizedListing, SellerType } from "@/core/types";
 import type { RawListing } from "../adapter";
@@ -167,12 +168,13 @@ export interface CardNormalizeOptions {
 export function normalizeCard(item: CardItem, options: CardNormalizeOptions): NormalizedListing | null {
   if (item.price === null || item.price < (options.minPrice ?? 300)) return null;
   if (options.requireVehicleFacts && item.mileageKm === null && item.firstRegistration === null) return null;
+  if (isNotForSale(item.title)) return null;
 
   const fromTitle = findMakeInTitle(item.title);
   const listMake = item.listMake ? resolveMake(item.listMake) : null;
   const make = listMake ?? fromTitle?.make ?? null;
   const rest = fromTitle && (!listMake || fromTitle.make.slug === listMake.slug) ? fromTitle.rest : item.title;
-  const resolved = make ? resolveMakeModel(make.name, rest) : { makeSlug: null, modelSlug: null, variant: null };
+  const resolved = make ? resolveModelInTitle(make.name, rest) : { makeSlug: null, modelSlug: null, variant: null };
   const titlePower = parsePowerKw(item.title);
 
   return {

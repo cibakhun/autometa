@@ -3,10 +3,11 @@ import {
   detectFuel,
   detectTransmission,
   findMakeInTitle,
+  isNotForSale,
   parseFirstRegistration,
   parseInteger,
   parsePowerKw,
-  resolveMakeModel,
+  resolveModelInTitle,
 } from "@/core/normalize";
 import { MAKES } from "@/core/taxonomy";
 import type { NormalizedListing } from "@/core/types";
@@ -119,13 +120,14 @@ export function normalizeKleinanzeigen(raw: RawListing): NormalizedListing | nul
   const item = raw.payload as unknown as KleinanzeigenItem;
   const price = item.price && /\d/.test(item.price) ? parseInteger(item.price) : null;
   if (price === null || price < 100) return null;
+  if (isNotForSale(item.title)) return null;
 
   // The make from the title wins when it agrees with the list; otherwise the list's make filter.
   const fromTitle = findMakeInTitle(item.title);
   const listMake = item.listMake ? MAKES.find((make) => make.slug === item.listMake) ?? null : null;
   const make = listMake ?? fromTitle?.make ?? null;
   const rest = fromTitle && (!listMake || fromTitle.make.slug === listMake.slug) ? fromTitle.rest : item.title;
-  const resolved = make ? resolveMakeModel(make.name, rest) : { makeSlug: null, modelSlug: null, variant: null };
+  const resolved = make ? resolveModelInTitle(make.name, rest) : { makeSlug: null, modelSlug: null, variant: null };
   const power = parsePowerKw(item.title);
 
   return {

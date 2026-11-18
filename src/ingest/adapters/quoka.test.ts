@@ -95,6 +95,12 @@ describe("Quoka result pages", () => {
       zip: "94351",
     });
     expect(normalizeQuoka({ externalId: accessory.id, payload: { ...accessory } })).toBeNull();
+    expect(normalizeQuoka({ externalId: "w1", payload: { ...car, title: "Suche VW Tiguan bis 20.000 €" } })).toBeNull();
+  });
+
+  it("finds make and model behind leading words", () => {
+    const [car] = parseQuokaPage(page([{ ...tiguan, title: "2023 Skoda Superb 2.0 TSI 140kW DSG" }]), listUrl(null), "skoda");
+    expect(normalizeQuoka({ externalId: car.id, payload: { ...car } })).toMatchObject({ makeSlug: "skoda", modelSlug: "superb", modelRaw: "Superb 2.0 TSI 140kW DSG" });
   });
 });
 
