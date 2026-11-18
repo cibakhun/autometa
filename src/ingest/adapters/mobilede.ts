@@ -207,6 +207,11 @@ export function parseMobileDeSearch(json: unknown, url = API_ORIGIN): ListPage<M
       country: str(address.country),
     });
   }
+  // Single odd ads are skipped, but a page none of whose ads can be read means the ad format changed.
+  // Counting it as read would let the run expire listings it never saw.
+  if (data.ads.length > 0 && items.length === 0) {
+    throw new ApiFormatError(url, `none of ${data.ads.length} ads has the expected fields (mobileAdId, detailPageUrl, make, model)`);
+  }
   return { items, total, pages };
 }
 
@@ -397,7 +402,9 @@ export function mobileDeApiFromEnv(): MobileDeApi {
     password,
     userAgent: process.env.SCRAPE_USER_AGENT?.trim() || DEFAULT_USER_AGENT,
     minDelayMs: readNumber("MOBILE_DE_MIN_DELAY_MS", 1000, 200),
-    maxRequests: readNumber("MOBILE_DE_MAX_REQUESTS", 1000, 1),
+    // A price range can take 20 pages (2000 results, 100 per page) and the sweep gets half of the
+    // requests, so smaller budgets could never read a large range to the end.
+    maxRequests: readNumber("MOBILE_DE_MAX_REQUESTS", 1000, 40),
   });
 }
 
@@ -412,6 +419,10 @@ export interface MobileDeOptions {
   log?: (message: string) => void;
 }
 
+/**
+ * One adapter per import run: the request budget lives in the API client and is not reset between
+ * fetches. The registry creates a new adapter and client for every run.
+ */
 export function createMobileDeAdapter(options: MobileDeOptions): SourceAdapter {
   const { api } = options;
   const makes = options.makes ?? MAKES.map((make) => make.slug);

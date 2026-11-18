@@ -130,7 +130,7 @@ export async function* crawlPriceSegments<T>(options: PriceSegmentCrawlOptions<T
   const store = new SegmentStore<PriceSegment>(options.db, options.sourceId);
 
   // The newest pass may use at most half of the run's requests, so the sweep always moves on.
-  const sweepShare = Math.floor(requestsLeft() / 2);
+  const sweepShare = Math.ceil(requestsLeft() / 2);
   newest: for (const make of makes) {
     for (let page = 1; page <= newestPages; page += 1) {
       if (requestsLeft() < 1) return;

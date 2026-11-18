@@ -555,7 +555,7 @@ describe.skipIf(!url)("reading the mobile.de Search-API", () => {
 
     // Every segment's attempt was recorded although its first page failed, so it moves to the back.
     const untried = await pool.query(
-      "select key from crawl_segments where source_id = 'mobilede' and key like 'audi:%' and not retired and last_started_at < $1",
+      "select key from crawl_segments where source_id = 'mobilede' and key like 'audi:%' and not retired and (last_started_at is null or last_started_at < $1)",
       [before],
     );
     expect(untried.rows).toEqual([]);

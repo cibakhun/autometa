@@ -120,14 +120,17 @@ describe("parseMobileDeSearch", () => {
 
   it("keeps a dealer's headline but never a private seller's free text", () => {
     const owner = { type: "FOR_SALE_BY_OWNER", address: { zipcode: "80331", city: "München", country: "DE" } };
-    const [dealer, privateAd, unknown] = parseMobileDeSearch(
+    const { items } = parseMobileDeSearch(
       answer([
         ad({ mobileAdId: "1" }),
         ad({ mobileAdId: "2", modelDescription: "Golf von Erika Musterfrau", seller: owner }),
         ad({ mobileAdId: "3", modelDescription: "Golf von Erika Musterfrau", seller: {} }),
         ad({ mobileAdId: "4", model: null, modelDescription: "Golf von Erika Musterfrau", seller: owner }),
       ]),
-    ).items;
+    );
+    // Without a structured model, a private ad is skipped rather than named after its headline.
+    expect(items.map((item) => item.id)).toEqual(["1", "2", "3"]);
+    const [dealer, privateAd, unknown] = items;
     expect(dealer.title).toBe("Golf 1.4 TSI Comfortline");
     expect(privateAd).toMatchObject({ model: "Golf", title: null });
     expect(unknown).toMatchObject({ model: "Golf", title: null, sellerType: null });
@@ -146,6 +149,12 @@ describe("parseMobileDeSearch", () => {
       ]),
     );
     expect(page.items.map((item) => [item.id, item.model])).toEqual([["ok", "Golf 1.4 TSI Comfortline"]]);
+  });
+
+  it("stops when no ad of a page has the expected fields, but not on an empty page", () => {
+    const renamed = [ad(), ad()].map(({ mobileAdId, ...rest }) => ({ ...rest, adId: mobileAdId }));
+    expect(() => parseMobileDeSearch(answer(renamed))).toThrow(/none of 2 ads/);
+    expect(parseMobileDeSearch(answer([], 0, 0)).items).toEqual([]);
   });
 
   it("only takes prices in euros", () => {
