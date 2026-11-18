@@ -8,6 +8,7 @@ import {
   parseInteger,
   parsePowerKw,
   resolveModelInTitle,
+  sourceImageUrl,
 } from "@/core/normalize";
 import { MAKES } from "@/core/taxonomy";
 import type { NormalizedListing } from "@/core/types";
@@ -74,6 +75,8 @@ export interface KleinanzeigenItem {
   city: string | null;
   /** Our make slug of the list the entry was found in, if it was a make's list. */
   listMake: string | null;
+  /** Address of the list's preview photo on Kleinanzeigen's image server. */
+  image: string | null;
 }
 
 /** Reads the result entries of a list page. Entries without an id or link are left out. */
@@ -100,6 +103,10 @@ export function parseKleinanzeigenPage(html: string, listMake: string | null = n
     const place = texts.map((t) => t.match(/^(\d{5}) ([^\d]{2,60})$/)).find(Boolean);
     const mileage = texts.find((t) => /^\d{1,3}(\.\d{3})* km$|^\d+ km$/.test(t)) ?? null;
     const registration = texts.map((t) => t.match(/^EZ (\d{1,2}\/\d{4})$/)).find(Boolean);
+    // The preview photo: the first image in the entry (lazy lists put its address in data-imgsrc).
+    const image =
+      article.match(/<img\b[^>]*?\s(?:src|data-src)="(https?:\/\/[^"]+)"/)?.[1] ??
+      article.match(/\sdata-imgsrc="(https?:\/\/[^"]+)"/)?.[1];
 
     items.push({
       id,
@@ -111,6 +118,7 @@ export function parseKleinanzeigenPage(html: string, listMake: string | null = n
       zip: place ? place[1] : null,
       city: place ? place[2].trim() : null,
       listMake,
+      image: image ? decodeEntities(image) : null,
     });
   }
   return items;
@@ -154,6 +162,7 @@ export function normalizeKleinanzeigen(raw: RawListing): NormalizedListing | nul
     city: item.city,
     lat: null,
     lng: null,
+    imageUrl: sourceImageUrl(item.image, "kleinanzeigen.de"),
   };
 }
 

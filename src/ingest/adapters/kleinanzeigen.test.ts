@@ -24,7 +24,7 @@ function article({ id, title, price = "12.500 € VB", place = "10115 Berlin", m
   return `
   <li class="ad-listitem">
     <article class="aditem" data-adid="${id}" data-href="/s-anzeige/${title.toLowerCase().replace(/\W+/g, "-")}/${id}-216-3331">
-      <div class="aditem-image"><img src="https://img.example/${id}.jpg" alt="${title}"></div>
+      <div class="aditem-image"><img src="https://img.kleinanzeigen.de/api/v1/prod-ads/images/90/${id}?rule=$_2.AUTO&amp;x=1" alt="${title}"></div>
       <div class="aditem-main">
         <div class="aditem-main--top">
           <div class="aditem-main--top--left"><i class="icon icon-small icon-pin-gray"></i> ${place}</div>
@@ -51,7 +51,7 @@ function article({ id, title, price = "12.500 € VB", place = "10115 Berlin", m
 const page = (ads: Ad[]) => `<!DOCTYPE html><html><body><ul id="srchrslt-adtable">${ads.map(article).join("")}</ul></body></html>`;
 
 describe("parseKleinanzeigenPage", () => {
-  it("reads facts only: no description, photo or contact", () => {
+  it("reads facts only: no description or contact, and the photo as a link", () => {
     const items = parseKleinanzeigenPage(page([{ id: "2712345678", title: "VW Golf 7 1.4 TSI DSG Highline" }]), "volkswagen");
     expect(items).toEqual<KleinanzeigenItem[]>([
       {
@@ -64,9 +64,10 @@ describe("parseKleinanzeigenPage", () => {
         zip: "10115",
         city: "Berlin",
         listMake: "volkswagen",
+        image: "https://img.kleinanzeigen.de/api/v1/prod-ads/images/90/2712345678?rule=$_2.AUTO&x=1",
       },
     ]);
-    expect(JSON.stringify(items)).not.toMatch(/Verkaufe|0170|img\.example/);
+    expect(JSON.stringify(items)).not.toMatch(/Verkaufe|0170/);
   });
 
   it("never takes the place from the seller's description", () => {
@@ -111,7 +112,17 @@ describe("normalizeKleinanzeigen", () => {
       sellerName: null,
       zip: "10115",
       city: "Berlin",
+      imageUrl: "https://img.kleinanzeigen.de/api/v1/prod-ads/images/90/1?rule=$_2.AUTO&x=1",
     });
+  });
+
+  it("keeps the photo link only for Kleinanzeigen's image server", () => {
+    const [item] = parseKleinanzeigenPage(page([{ id: "1", title: "VW Golf" }]));
+    const raw = (image: string | null): RawListing => ({ externalId: "1", payload: { ...item, image } });
+    expect(normalizeKleinanzeigen(raw("https://evil.example/kleinanzeigen.de.jpg"))?.imageUrl).toBeNull();
+    expect(normalizeKleinanzeigen(raw(null))?.imageUrl).toBeNull();
+    const html = page([{ id: "2", title: "VW Polo" }]).replace(/<img [^>]*>/, "");
+    expect(parseKleinanzeigenPage(html)[0].image).toBeNull();
   });
 
   it("uses the make of the list when the title does not name it", () => {

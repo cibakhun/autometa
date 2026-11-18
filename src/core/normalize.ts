@@ -12,6 +12,24 @@ export function normalizeText(value: string): string {
 }
 
 /** Parses German or plain number strings: "12.990 €", "123.456 km", "12990" -> number. */
+/**
+ * A link to a listing's preview photo, or null. Only https links to the source's own image
+ * servers (`host` or one of its subdomains) are kept, so a page cannot slip in other addresses.
+ */
+export function sourceImageUrl(value: unknown, host: string): string | null {
+  if (typeof value !== "string" || value.length > 1000) return null;
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol === "http:") url.protocol = "https:";
+  if (url.protocol !== "https:" || url.username || url.password) return null;
+  const hostname = url.hostname.toLowerCase();
+  return hostname === host || hostname.endsWith(`.${host}`) ? url.href : null;
+}
+
 export function parseInteger(value: string | number | null | undefined): number | null {
   if (value === null || value === undefined) return null;
   if (typeof value === "number") return Number.isFinite(value) ? Math.round(value) : null;

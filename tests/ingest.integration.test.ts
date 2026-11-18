@@ -56,6 +56,7 @@ function car(source: SourceInfo, externalId: string, overrides: Partial<Normaliz
     city: "Berlin",
     lat: null,
     lng: null,
+    imageUrl: null,
     ...overrides,
   };
 }
@@ -246,6 +247,22 @@ describe.skipIf(!url)("importing scraped portals", () => {
     // A sold listing leaves its group.
     await pool.query("update listings set status = 'gone' where external_id = 'b1'");
     expect(await updateDuplicates(pool)).toEqual({ clusters: 0, listings: 0 });
+  });
+
+  it("links the preview photo, keeps it when a sighting has none, and lends it to a duplicate", async () => {
+    const photo = "https://img.a.example/golf.jpg";
+    await runIngest(pool, fakePortal(PORTAL_A, [{ listing: car(PORTAL_A, "a1", { priceEur: 20500, imageUrl: photo }) }]));
+    await runIngest(pool, fakePortal(PORTAL_A, [{ listing: car(PORTAL_A, "a1", { priceEur: 20500, imageUrl: null }) }]));
+    // The same Golf on another portal, cheaper and without a photo.
+    await runIngest(pool, fakePortal(PORTAL_B, [{ listing: car(PORTAL_B, "b1", { priceEur: 19900 }) }]));
+    expect(await updateDuplicates(pool)).toEqual({ clusters: 1, listings: 2 });
+
+    const { items } = await searchListings(pool, parseFilters({}), null);
+    expect(items).toEqual([expect.objectContaining({ sourceName: "Portal B", priceEur: 19900, imageUrl: photo })]);
+    expect(await getListing(pool, items[0].id)).toMatchObject({ sourceName: "Portal B", imageUrl: photo });
+
+    await pool.query("update listings set status = 'gone' where external_id = 'a1'");
+    expect((await getListing(pool, items[0].id))?.imageUrl).toBeNull();
   });
 
   it("never groups two listings of the same portal", async () => {

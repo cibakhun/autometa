@@ -26,7 +26,7 @@ const car = (n: number, extra: Record<string, unknown> = {}) => ({
   mileageFromOdometer: { "@type": "QuantitativeValue", value: 38500, unitCode: "KMT" },
   vehicleEngine: { "@type": "EngineSpecification", enginePower: { "@type": "QuantitativeValue", value: 150, unitCode: "KWT" } },
   offers: { "@type": "Offer", price: "27990.00", priceCurrency: "EUR", url: `https://www.auto.de/search/vehicle/${uuid(n)}` },
-  image: ["https://img.auto.de/1.jpg"],
+  image: `https://images.auto.de/carimage/${uuid(n)}/0AlhRxz3Ino8/small`,
   ...extra,
 });
 
@@ -55,6 +55,7 @@ describe("auto.de offer pages", () => {
           vehicleEngine: { enginePower: { value: 190, unitCode: "N12" } },
           mileageFromOdometer: { value: "120000" },
           offers: { price: 18990 },
+          image: [{ "@type": "ImageObject", url: "https://images.auto.de/carimage/bmw/1/small" }, "https://images.auto.de/carimage/bmw/2/small"],
         }),
         car(4, { url: "https://www.auto.de/angebot/volkswagen/golf/", offers: { price: 1 } }),
         car(5, { offers: {} }),
@@ -76,10 +77,11 @@ describe("auto.de offer pages", () => {
         powerKw: 150,
         bodyType: "Limousine",
         color: "Grau",
+        image: `https://images.auto.de/carimage/${uuid(1)}/0AlhRxz3Ino8/small`,
       },
-      expect.objectContaining({ id: uuid(3), make: "BMW", model: "3er", variant: null, firstRegistration: "2018", powerKw: 140, mileageKm: 120000 }),
+      expect.objectContaining({ id: uuid(3), make: "BMW", model: "3er", variant: null, firstRegistration: "2018", powerKw: 140, mileageKm: 120000, image: "https://images.auto.de/carimage/bmw/1/small" }),
     ]);
-    expect(JSON.stringify(items)).not.toMatch(/WVWZZZ|Müller|0171|img\.auto\.de/);
+    expect(JSON.stringify(items)).not.toMatch(/WVWZZZ|Müller|0171/);
   });
 
   it("takes the offer pages from the sitemap, on https", () => {
@@ -107,6 +109,7 @@ describe("auto.de offer pages", () => {
       sellerType: "dealer",
       sellerName: null,
       zip: null,
+      imageUrl: `https://images.auto.de/carimage/${uuid(1)}/0AlhRxz3Ino8/small`,
     });
     const [tiguan] = parseAutoDePage(page([car(6, { model: "Sonstige", vehicleConfiguration: "Tiguan 2.0 TDI" })]));
     expect(normalizeAutoDe({ externalId: tiguan.id, payload: { ...tiguan } })).toMatchObject({ makeSlug: "volkswagen", modelSlug: "tiguan" });

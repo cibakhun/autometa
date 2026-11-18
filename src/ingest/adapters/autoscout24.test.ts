@@ -36,7 +36,7 @@ export function as24Listing(overrides: Record<string, unknown> = {}) {
     tracking: { firstRegistration: "03-2021", mileage: "45000" },
     seller: { type: "Dealer", companyName: "Autohaus Beispiel GmbH", contactName: "Max Mustermann" },
     location: { zip: "10115", city: "Berlin", countryCode: "DE" },
-    images: ["https://example.org/photo.jpg"],
+    images: ["https://prod.pictures.autoscout24.net/listing-images/8f6c2a1e-0000-4000-8000-000000000001_5e6f0463-7755-4412-be05-56b4fd2fec7a.jpg/250x188.webp", "https://prod.pictures.autoscout24.net/listing-images/second.jpg/250x188.webp"],
     searchResultType: "Organic",
     ...overrides,
   };
@@ -74,13 +74,14 @@ describe("parseAutoScout24Page", () => {
       city: "Berlin",
       countryCode: "DE",
       organic: true,
+      image: "https://prod.pictures.autoscout24.net/listing-images/8f6c2a1e-0000-4000-8000-000000000001_5e6f0463-7755-4412-be05-56b4fd2fec7a.jpg/250x188.webp",
     });
   });
 
-  it("never keeps a private seller's name, photos or contact data", () => {
+  it("never keeps a private seller's name or contact data, and of the photos only the first address", () => {
     const page = parseAutoScout24Page(as24Page([as24Listing({ seller: { type: "Private", companyName: "Erika Musterfrau" } })]));
     expect(page.items[0].dealerName).toBeNull();
-    expect(JSON.stringify(page.items[0])).not.toMatch(/Musterfrau|Mustermann|photo/);
+    expect(JSON.stringify(page.items[0])).not.toMatch(/Musterfrau|Mustermann|second\.jpg/);
   });
 
   it("marks ads that are mixed into the list", () => {
@@ -132,7 +133,14 @@ describe("normalizeAutoScout24", () => {
       sellerName: "Autohaus Beispiel GmbH",
       zip: "10115",
       city: "Berlin",
+      imageUrl: "https://prod.pictures.autoscout24.net/listing-images/8f6c2a1e-0000-4000-8000-000000000001_5e6f0463-7755-4412-be05-56b4fd2fec7a.jpg/250x188.webp",
     });
+  });
+
+  it("links only photos on AutoScout24's image server", () => {
+    expect(normalize({ images: ["https://tracker.example/pixel.gif"] })?.imageUrl).toBeNull();
+    expect(normalize({ images: [] })?.imageUrl).toBeNull();
+    expect(normalize({ images: undefined })?.imageUrl).toBeNull();
   });
 
   it("reads the first registration in every format the page uses", () => {

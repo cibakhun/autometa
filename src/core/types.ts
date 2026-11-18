@@ -82,4 +82,9 @@ export interface NormalizedListing {
   city: string | null;
   lat: number | null;
   lng: number | null;
+  /**
+   * The preview photo the source shows in its list, as a link to the source's image server
+   * (see sourceImageUrl). Never a copy of the photo.
+   */
+  imageUrl: string | null;
 }

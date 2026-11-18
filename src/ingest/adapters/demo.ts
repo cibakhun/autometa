@@ -210,6 +210,7 @@ export function createDemoAdapter(options: DemoAdapterOptions = {}): SourceAdapt
         city: p.location.city,
         lat: null,
         lng: null,
+        imageUrl: null,
       };
     },
   };

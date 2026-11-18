@@ -42,7 +42,7 @@ export function parseAutoheroPage(html: string, url: string): CardItem[] {
   return readCards(html, url, detailId).flatMap((card) => {
     const title = titleFromLabel(card.label) ?? card.title;
     if (!title) return [];
-    return [{ id: card.id, url: card.url, title: title.slice(0, 200), listMake: null, ...cardFacts(card.pieces) }];
+    return [{ id: card.id, url: card.url, title: title.slice(0, 200), listMake: null, image: card.image, ...cardFacts(card.pieces) }];
   });
 }
 
@@ -63,6 +63,7 @@ export function normalizeAutohero(raw: RawListing): NormalizedListing | null {
     sourceId: AUTOHERO.id,
     sellerType: "dealer",
     sellerName: "Autohero",
+    imageHost: "autohero.com",
     requireVehicleFacts: true,
   });
 }
