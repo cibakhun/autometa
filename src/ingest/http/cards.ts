@@ -27,6 +27,8 @@ export interface Card {
   url: string;
   /** Text of the card's first heading, else of its longest link to the listing. */
   title: string | null;
+  /** The aria-label or title of a link to the listing, e.g. "Mazda 6 - 2.0 Sports-Line - 14.690 €". */
+  label: string | null;
   pieces: TextPiece[];
 }
 
@@ -72,7 +74,8 @@ export function readCards(html: string, baseUrl: string, detail: DetailMatcher):
       if ((idsBelow.get(parent)?.size ?? 0) > 1) break;
       card = parent;
     }
-    cards.push({ id, url, title: titleOf(card, links.filter((l) => l.id === id).map((l) => l.element)), pieces: piecesOf(card) });
+    const anchors = links.filter((l) => l.id === id).map((l) => l.element);
+    cards.push({ id, url, title: titleOf(card, anchors), label: labelOf(anchors), pieces: piecesOf(card) });
   }
   return cards;
 }
@@ -94,6 +97,14 @@ function titleOf(card: Element, anchors: Element[]): string | null {
     ...anchors.map(joined).sort((a, b) => b.length - a.length),
   ];
   return candidates.find(Boolean) ?? null;
+}
+
+function labelOf(anchors: Element[]): string | null {
+  for (const anchor of anchors) {
+    const label = clean(getAttributeValue(anchor, "aria-label") ?? "") || clean(getAttributeValue(anchor, "title") ?? "");
+    if (label) return label;
+  }
+  return null;
 }
 
 function isStruck(element: Element): boolean {

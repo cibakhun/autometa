@@ -10,7 +10,8 @@ import { normalizeCard, PageLoader, readList, toRaw, type CardItem } from "./lis
  * Quoka (www.quoka.de), category "Automarkt". Its robots.txt allows the result lists, their
  * pages (?pag=N) and the ads. Each run reads the newest pages of every make's list and of the
  * whole category; the make lists are taken from the links on the category page, so a new or
- * renamed make path needs no code change. Listings that drop out of the newest pages are not
+ * renamed make path needs no code change. Some responses lack that menu; then our make slugs
+ * serve as paths. Listings that drop out of the newest pages are not
  * re-checked and leave the search staleAfterDays after they were last seen.
  *
  * The list mixes in parts and accessories; only entries with a price and a mileage or year count.
@@ -115,9 +116,13 @@ export function createQuokaAdapter(options: QuokaOptions): SourceAdapter {
         if (!first) throw new Error(`Quoka: category page ${listUrl(null)} not available`);
         const categoryItems = parseQuokaPage(first.text, first.url);
         if (categoryItems.length === 0) throw await loader.formatError(first, "no listings found; did the page change?");
-        const makes = parseMakeLinks(first.text).filter((list) => wanted.has(list.make));
-        // Without make links the run still reads the whole category, only less deep.
-        if (makes.length === 0) await loader.formatWarning(first, "no make links found; did the page change?");
+        let makes = parseMakeLinks(first.text).filter((list) => wanted.has(list.make));
+        if (makes.length === 0) {
+          // Quoka sometimes sends a lighter page without the make menu. Its make paths are our
+          // slugs ("volkswagen", "mercedes-benz"); a path it does not know just answers 404.
+          log("no make links on the category page, using our make slugs as paths");
+          makes = [...wanted].map((make) => ({ make, path: make, count: null }));
+        }
 
         // Makes first, so their listings keep the make of the list; the whole category last.
         for (const list of makes) {
