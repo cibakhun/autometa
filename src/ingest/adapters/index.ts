@@ -4,6 +4,7 @@ import { createFetcherFromEnv, readList } from "../http/config";
 import { createAutoScout24Adapter } from "./autoscout24";
 import { createDemoAdapter } from "./demo";
 import { createKleinanzeigenAdapter } from "./kleinanzeigen";
+import { createQuokaAdapter } from "./quoka";
 
 const DEFAULT_DEMO_COUNT = 3000;
 
@@ -43,5 +44,11 @@ export const ADAPTERS: Record<string, AdapterFactory> = {
       fetcher: createFetcherFromEnv(),
       makes: makesFromEnv("KLEINANZEIGEN_MAKES"),
       log: logFor("kleinanzeigen"),
+    }),
+  quoka: () =>
+    createQuokaAdapter({
+      fetcher: createFetcherFromEnv(),
+      makes: makesFromEnv("QUOKA_MAKES"),
+      log: logFor("quoka"),
     }),
 };
