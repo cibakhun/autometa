@@ -4,6 +4,7 @@ import {
   detectTransmission,
   findMakeInTitle,
   isNotForSale,
+  normalizeText,
   parseFirstRegistration,
   parseInteger,
   parsePowerKw,
@@ -18,10 +19,12 @@ import { decodeEntities, textOf } from "../http/html";
 
 /**
  * Kleinanzeigen (www.kleinanzeigen.de), car category "Autos" (c216). Its robots.txt allows the
- * result lists up to page 5 and the make filter, but not filters such as price, mileage or first
- * registration. So each run reads the newest listings: each make and then the whole category, up
- * to five pages each. Listings drop out of the newest pages after a while and are not re-checked,
- * so they leave the search staleAfterDays after they were last seen.
+ * result lists up to page 5, the make filter and a search word, but not filters such as price,
+ * mileage or first registration. So each run reads the newest listings: each make, then the
+ * search for "verschenken" (cars given away are rare and drop out of the newest pages before a run
+ * sees them), then the whole category, up to five pages each. Listings drop out of the newest
+ * pages after a while and are not re-checked, so they leave the search staleAfterDays after they
+ * were last seen.
  *
  * The result list does not say whether a seller is a dealer or a private person, so the seller
  * type stays unknown. Description texts and seller names are never stored.
@@ -61,6 +64,29 @@ export function firstPageUrl(make: string | null): string {
 export function pageUrl(make: string | null, page: number): string {
   const first = firstPageUrl(make);
   return page <= 1 ? first : first.replace("/c216", `/seite:${page}/c216`);
+}
+
+/** The car category searched for "verschenken": cars given away, and ads that mention it. */
+export function giveawayPageUrl(page: number): string {
+  return page <= 1 ? `${ORIGIN}/s-autos/verschenken/k0c216` : `${ORIGIN}/s-autos/seite:${page}/verschenken/k0c216`;
+}
+
+// Things given away in the car category that are not a car: parts, tyres, seats, toys.
+const CAR_PART = new RegExp(
+  String.raw`\b(?:\w*reifen|\w*felgen?|\w*rader|radkappen?|hutablage|kopfstutzen?|(?:kinder|auto|ruck|fahrer|beifahrer)?sitze?|sitzbank|` +
+    String.raw`sitzbezug\w*|kabel\w*|zubehor|(?:ersatz|karosserie|anbau|auto|kfz)?teile?|` +
+    String.raw`(?:fahrer|beifahrer)?tur(?:en)?|turverkleidung\w*|sto(?: |ss)stange|kotflugel|motorhaube|spiegel|scheinwerfer|rucklicht\w*|` +
+    String.raw`batterie|dachbox|dachtrager|fussmatten?|anhangerkupplung|modellauto\w*|spielzeug\w*|bobbycar)\b`,
+);
+
+/**
+ * A listing given away counts only when it is a car we can name: the title resolves to a make and
+ * a model, and it is no part ("Opel Corsa D Stahlfelgen zu verschenken") or wanted ad ("Fahrzeug
+ * für die Feuerwehr gesucht").
+ */
+export function isGiveawayCar(title: string, resolved: { makeSlug: string | null; modelSlug: string | null }): boolean {
+  const text = normalizeText(title);
+  return Boolean(resolved.makeSlug && resolved.modelSlug) && !CAR_PART.test(text) && !/\bgesucht\b/.test(text);
 }
 
 /** One result list entry as we store it: facts only. */
@@ -138,6 +164,7 @@ export function normalizeKleinanzeigen(raw: RawListing): NormalizedListing | nul
   const make = listMake ?? fromTitle?.make ?? null;
   const rest = fromTitle && (!listMake || fromTitle.make.slug === listMake.slug) ? fromTitle.rest : item.title;
   const resolved = make ? resolveModelInTitle(make.name, rest) : { makeSlug: null, modelSlug: null, variant: null };
+  if (giveaway && !isGiveawayCar(item.title, resolved)) return null;
   const power = parsePowerKw(item.title);
 
   return {
@@ -215,18 +242,24 @@ export function createKleinanzeigenAdapter(options: KleinanzeigenOptions): Sourc
       failuresInARow = 0;
       const seen = new Set<string>();
       try {
-        // Makes first, so their listings keep the make filter's make; the whole category last.
-        for (const make of [...makes, null]) {
+        // Makes first, so their listings keep the make filter's make; then the cars given away;
+        // the whole category last.
+        const lists = [
+          ...makes.map((make) => ({ make, url: (page: number) => pageUrl(make, page), whole: false })),
+          { make: null, url: giveawayPageUrl, whole: false },
+          { make: null, url: (page: number) => pageUrl(null, page), whole: true },
+        ];
+        for (const { make, url: urlOf, whole } of lists) {
           const inList = new Set<string>();
           for (let page = 1; page <= pagesPerList; page += 1) {
             if (fetcher.requestsLeft < 1) return;
-            const url = pageUrl(make, page);
+            const url = urlOf(page);
             const html = await load(url);
             if (html === null) break;
             const items = parseKleinanzeigenPage(html, make);
-            // A make may have no listings, but the whole category always has some: none there
-            // means the page layout changed.
-            if (make === null && page === 1 && items.length === 0) {
+            // A make or the search may have no listings, but the whole category always has some:
+            // none there means the page layout changed.
+            if (whole && page === 1 && items.length === 0) {
               throw new Error(`Kleinanzeigen: no listings found on ${url}; did the page change?`);
             }
             const newInList = items.filter((item) => !inList.has(item.id));
