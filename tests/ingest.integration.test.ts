@@ -392,17 +392,24 @@ describe.skipIf(!url)("crawling AutoScout24 result lists", () => {
     expect(steady.completedSegments!()).toContain("skoda:0-");
   });
 
-  it("stops quietly when the request budget is used up and keeps what it read", async () => {
+  it("keeps to the request budget, leaves half of it for the sweep and keeps what it read", async () => {
     await pool.query("delete from sources");
-    const fetchImpl = (async (input: string | URL) =>
-      String(input).endsWith("/robots.txt")
+    const requested: string[] = [];
+    const fetchImpl = (async (input: string | URL) => {
+      requested.push(String(input));
+      return String(input).endsWith("/robots.txt")
         ? new Response("User-agent: *\nAllow: /\n")
-        : new Response(page(cars(String(input), [5000, 6000]), 2, 1))) as typeof fetch;
-    const fetcher = new PoliteFetcher({ fetchImpl, sleep: async () => undefined, minDelayMs: 0, random: () => 0, maxRequests: 3 });
+        : new Response(page(cars(String(input), [5000, 6000]), 2, 1));
+    }) as typeof fetch;
+    const fetcher = new PoliteFetcher({ fetchImpl, sleep: async () => undefined, minDelayMs: 0, random: () => 0, maxRequests: 6 });
     const adapter = createAutoScout24Adapter({ fetcher, makes: ["bmw", "audi", "opel", "ford"] });
     const result = await runIngest(pool, adapter);
-    expect(fetcher.requestsMade).toBe(3);
     expect(result.upserted).toBeGreaterThan(0);
+    // robots.txt and the newest pages of BMW and Audi use half; the sweep reads two whole makes.
+    // One request stays unused: a segment is only started with two left.
+    expect(requested.filter((href) => href.endsWith("/robots.txt"))).toHaveLength(1);
+    expect(fetcher.requestsMade).toBe(5);
+    expect(adapter.completedSegments!()).toEqual(["audi:0-", "bmw:0-"]);
   });
 
   it("needs only the import's own database connection", async () => {
@@ -438,9 +445,9 @@ describe.skipIf(!url)("reading the mobile.de Search-API", () => {
     }));
   const answer = (list: unknown[], total: number, maxPages: number) => JSON.stringify({ total, currentPage: 1, maxPages, pageSize: PAGE, ads: list });
   const range = (from: number, to: number | null) => ({ from, to });
-  const search = (page: number, price?: { from: number; to: number | null }) => searchUrl("bmw", page, price, PAGE);
+  const search = (page: number, price?: { from: number; to: number | null }, make = "bmw") => searchUrl(make, page, price, PAGE);
 
-  function fakeApi(routes: Map<string, string>) {
+  function fakeApi(routes: Map<string, string>, status = 200) {
     const requests: { url: string; authorization: string }[] = [];
     const api = new MobileDeApi({
       user: "test-user",
@@ -449,11 +456,14 @@ describe.skipIf(!url)("reading the mobile.de Search-API", () => {
       sleep: async () => undefined,
       fetchImpl: (async (input: string | URL, init?: RequestInit) => {
         requests.push({ url: String(input), authorization: (init?.headers as Record<string, string>).authorization });
-        return new Response(routes.get(String(input)) ?? answer([], 0, 0));
+        return new Response(routes.get(String(input)) ?? answer([], 0, 0), { status });
       }) as typeof fetch,
     });
     return { api, requests };
   }
+
+  const adapterFor = (make: string, routes: Map<string, string>, status = 200) =>
+    createMobileDeAdapter({ api: fakeApi(routes, status).api, makes: [make], pageSize: PAGE });
 
   beforeAll(async () => {
     pool = await freshTestDatabase();
@@ -509,5 +519,45 @@ describe.skipIf(!url)("reading the mobile.de Search-API", () => {
     expect(gone.rows.map((row) => row.external_id)).toEqual(["cheap-1"]);
     // The segment that changed while it was read never takes anything out.
     expect((await pool.query("select status from listings where external_id = 'mid-0'")).rows[0].status).toBe("active");
+  });
+  it("moves listings of a split range to the smaller ranges, so their misses still count", async () => {
+    const routes = new Map<string, string>([
+      [search(1, undefined, "audi"), answer(ads("a-new", [30000]), 2500, 1250)],
+      [search(1, range(1000, 2000), "audi"), answer(ads("a", [1100, 1600]), 2, 1)],
+    ]);
+    await runIngest(pool, adapterFor("audi", routes));
+    const tagged = await pool.query("select segment from listings where external_id = 'a-1'");
+    expect(tagged.rows[0].segment).toBe("audi:1000-2000");
+
+    // The range grew too large and is split; the 1600 EUR car was sold meanwhile.
+    routes.set(search(1, range(1000, 2000), "audi"), answer(ads("a", [1100]), 2500, 1250));
+    routes.set(search(1, range(1000, 1500), "audi"), answer(ads("a", [1100]), 1, 1));
+    const second = adapterFor("audi", routes);
+    await runIngest(pool, second);
+    expect(second.completedSegments!()).toEqual(expect.arrayContaining(["audi:1000-1500", "audi:1500-2000"]));
+    const sold = await pool.query("select segment, missed_runs from listings where external_id = 'a-1'");
+    expect(sold.rows[0]).toEqual({ segment: "audi:1500-2000", missed_runs: 1 });
+  });
+
+  it("counts cars without a price when it reads a whole make", async () => {
+    const unpriced = { ...ads("o-np", [1000])[0], price: {} };
+    const routes = new Map([[search(1, undefined, "opel"), answer([...ads("o", [5000]), unpriced], 2, 1)]]);
+    const adapter = adapterFor("opel", routes);
+    await runIngest(pool, adapter);
+    expect(adapter.completedSegments!()).toContain("opel:0-");
+  });
+
+  it("fails a run in which every search is rejected, and takes nothing out", async () => {
+    await pool.query("update listings set last_seen_at = now() - interval '40 days' where external_id = 'a-0'");
+    const before = (await pool.query<{ now: Date }>("select now()")).rows[0].now;
+    await expect(runIngest(pool, adapterFor("audi", new Map(), 400))).rejects.toThrow(/none of \d+ searches succeeded/);
+    expect((await pool.query("select status from listings where external_id = 'a-0'")).rows[0].status).toBe("active");
+
+    // Every segment's attempt was recorded although its first page failed, so it moves to the back.
+    const untried = await pool.query(
+      "select key from crawl_segments where source_id = 'mobilede' and key like 'audi:%' and not retired and last_started_at < $1",
+      [before],
+    );
+    expect(untried.rows).toEqual([]);
   });
 });

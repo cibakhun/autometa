@@ -176,17 +176,20 @@ export function parseMobileDeSearch(json: unknown, url = API_ORIGIN): ListPage<M
     const id = str(ad.mobileAdId);
     const link = str(ad.detailPageUrl);
     const make = str(ad.make);
-    const model = str(ad.model) ?? str(ad.modelDescription);
-    if (!id || !link || !make || !model || !isMobileDeUrl(link)) continue;
     const seller = obj(ad.seller);
     const address = obj(seller.address);
     const sellerType = str(seller.type) ?? (seller.commercial === true ? "DEALER" : seller.commercial === false ? "FOR_SALE_BY_OWNER" : null);
+    // modelDescription is free text by the seller. Dealers use it for the version ("320d Touring
+    // M Sport"); a private seller might write their name into it, so theirs is never kept.
+    const headline = sellerType === "DEALER" ? str(ad.modelDescription) : null;
+    const model = str(ad.model) ?? headline;
+    if (!id || !link || !make || !model || !isMobileDeUrl(link)) continue;
     items.push({
       id,
       url: link,
       make,
       model,
-      title: str(ad.modelDescription)?.slice(0, 160) ?? null,
+      title: headline?.slice(0, 160) ?? null,
       price: parsePrice(obj(ad.price)),
       mileage: int(ad.mileage),
       firstRegistration: str(ad.firstRegistration),
@@ -278,7 +281,9 @@ export function normalizeMobileDe(raw: RawListing): NormalizedListing | null {
     makeRaw: item.make,
     modelRaw: item.model,
     variant,
-    priceEur: Math.round(item.price),
+    // Cut off, not rounded: price ranges end at whole euros, and 999.80 EUR belongs to 0-1000, so the
+    // stored price must stay below 1000 for the listing's segment to match its price.
+    priceEur: Math.floor(item.price),
     mileageKm: item.mileage,
     firstRegistration: firstRegistrationDate(item.firstRegistration),
     fuel,
@@ -350,23 +355,28 @@ export class MobileDeApi {
     const wait = this.nextSlot - this.now();
     if (wait > 0) await this.sleep(wait);
     this.requestCount += 1;
-    let response: Response;
+    let text: string;
     try {
-      response = await this.fetchImpl(url, {
+      const response = await this.fetchImpl(url, {
         headers: { authorization: this.authorization, accept: ACCEPT, "user-agent": this.userAgent },
         // The credentials must never follow a redirect to another address.
         redirect: "error",
         signal: AbortSignal.timeout(this.timeoutMs),
       });
+      if (!response.ok) {
+        // Free the connection; a failing cancel must not hide the status.
+        await response.body?.cancel().catch(() => undefined);
+        if (response.status === 401 || response.status === 403) {
+          throw new BlockedError(url, `HTTP ${response.status}: API account rejected or without access to this search`);
+        }
+        if (response.status === 429) throw new BlockedError(url, "HTTP 429: rate limit reached");
+        throw new HttpStatusError(url, response.status);
+      }
+      text = await response.text();
     } finally {
+      // The pause starts once the answer was read completely, or the request failed.
       this.nextSlot = this.now() + this.minDelayMs;
     }
-    if (response.status === 401 || response.status === 403) {
-      throw new BlockedError(url, `HTTP ${response.status}: API account rejected or without access to this search`);
-    }
-    if (response.status === 429) throw new BlockedError(url, "HTTP 429: rate limit reached");
-    if (!response.ok) throw new HttpStatusError(url, response.status);
-    const text = await response.text();
     try {
       return JSON.parse(text);
     } catch {
@@ -409,12 +419,14 @@ export function createMobileDeAdapter(options: MobileDeOptions): SourceAdapter {
   const log = options.log ?? (() => undefined);
   let completed: string[] = [];
   let failuresInARow = 0;
+  let pagesRead = 0;
 
   /** One search page, or null when it is skipped (rejected query, temporary error). */
   async function load(url: string): Promise<ListPage<MobileDeItem> | null> {
     try {
       const page = parseMobileDeSearch(await api.getJson(url), url);
       failuresInARow = 0;
+      pagesRead += 1;
       return page;
     } catch (error) {
       if (error instanceof BlockedError || error instanceof BudgetExceededError || error instanceof ApiFormatError) throw error;
@@ -439,6 +451,7 @@ export function createMobileDeAdapter(options: MobileDeOptions): SourceAdapter {
       if (!context) throw new Error("mobile.de needs the import's database connection");
       completed = [];
       failuresInARow = 0;
+      pagesRead = 0;
       try {
         yield* crawlPriceSegments<MobileDeItem>(
           {
@@ -462,6 +475,9 @@ export function createMobileDeAdapter(options: MobileDeOptions): SourceAdapter {
         if (!(error instanceof BudgetExceededError)) throw error;
       }
       log(`requests: ${api.requestsMade}, segments read completely: ${completed.length}`);
+      // A run in which every search was rejected must fail: otherwise it would look like a normal
+      // run, and the expiry after staleAfterDays would take listings out without any new reading.
+      if (pagesRead === 0) throw new Error(`mobile.de: none of ${api.requestsMade} searches succeeded; nothing was read`);
     },
   };
 }

@@ -47,7 +47,7 @@ export function segmentKey({ make, priceFrom, priceTo }: PriceSegment): string {
 /** Smaller price ranges replacing one that has too many results, or [] when it cannot be split. */
 export function splitSegment(params: PriceSegment): PriceSegment[] {
   const { make, priceFrom, priceTo } = params;
-  if (priceFrom === 0 && priceTo === null) {
+  if (isRoot(params)) {
     return PRICE_LADDER.map((from, i) => ({ make, priceFrom: from, priceTo: PRICE_LADDER[i + 1] ?? null }));
   }
   if (priceTo === null) {
@@ -67,6 +67,10 @@ export function splitSegment(params: PriceSegment): PriceSegment[] {
 
 export function inPriceRange(price: number | null, { priceFrom, priceTo }: PriceSegment): boolean {
   return price !== null && price >= priceFrom && (priceTo === null || price < priceTo);
+}
+
+function isRoot({ priceFrom, priceTo }: PriceSegment): boolean {
+  return priceFrom === 0 && priceTo === null;
 }
 
 function rootSegment(make: string): SegmentDraft<PriceSegment> {
@@ -101,6 +105,21 @@ export interface PriceSegmentCrawlOptions<T> {
 }
 
 /**
+ * Gives listings still tagged with a retired segment the smaller range their price falls into, so
+ * complete reads of the new ranges count their misses, too. Stored prices are whole euros, cents
+ * cut off, and range bounds are whole euros, so the stored price decides the range exactly.
+ */
+async function moveListingsToRanges(db: PoolClient, sourceId: string, from: string, ranges: PriceSegment[]): Promise<void> {
+  await db.query(
+    `update listings set segment = r.key
+       from unnest($3::text[], $4::bigint[], $5::bigint[]) as r (key, price_from, price_to)
+      where listings.source_id = $1 and listings.segment = $2
+        and listings.price_eur >= r.price_from and (r.price_to is null or listings.price_eur < r.price_to)`,
+    [sourceId, from, ranges.map(segmentKey), ranges.map((r) => r.priceFrom), ranges.map((r) => r.priceTo)],
+  );
+}
+
+/**
  * Runs the newest pass and then the sweep until the request budget is used up or every segment
  * was read once. Keys of segments read completely are pushed to `completed` as they finish.
  */
@@ -110,9 +129,15 @@ export async function* crawlPriceSegments<T>(options: PriceSegmentCrawlOptions<T
   const isOrganic = options.isOrganic ?? (() => true);
   const store = new SegmentStore<PriceSegment>(options.db, options.sourceId);
 
-  for (const make of makes) {
+  // The newest pass may use at most half of the run's requests, so the sweep always moves on.
+  const sweepShare = Math.floor(requestsLeft() / 2);
+  newest: for (const make of makes) {
     for (let page = 1; page <= newestPages; page += 1) {
       if (requestsLeft() < 1) return;
+      if (requestsLeft() <= sweepShare) {
+        log(`newest pass stopped at ${make}: half of the run's requests are kept for the sweep`);
+        break newest;
+      }
       const result = await loadPage(make, page);
       if (!result) break;
       for (const item of result.items) yield toRaw(item);
@@ -136,9 +161,11 @@ export async function* crawlPriceSegments<T>(options: PriceSegmentCrawlOptions<T
   async function* sweep(segment: Segment<PriceSegment>): AsyncGenerator<RawListing> {
     const params = segment.params;
     const price = { from: params.priceFrom, to: params.priceTo };
+    // Recorded before the request, so a segment whose first page fails still moves to the back.
+    await store.attempted(segment.key);
     const first = await loadPage(params.make, 1, price);
     if (!first) return;
-    await store.started(segment.key, first.total);
+    await store.counted(segment.key, first.total);
 
     const reachablePages = Math.min(first.pages, maxPagesPerSegment);
     if (first.total > reachablePages * pageSize) {
@@ -147,6 +174,7 @@ export async function* crawlPriceSegments<T>(options: PriceSegmentCrawlOptions<T
         await store.split(
           segment.key,
           children.map((child) => ({ key: segmentKey(child), params: child })),
+          (db) => moveListingsToRanges(db, options.sourceId, segment.key, children),
         );
         log(`split ${segment.key} (${first.total} results) into ${children.length} price ranges`);
         // The page is still useful; its listings get their segment once the smaller ranges are read.
@@ -155,10 +183,12 @@ export async function* crawlPriceSegments<T>(options: PriceSegmentCrawlOptions<T
       }
     }
 
+    // The whole make has no price filter, so it also lists cars without a price.
+    const whole = isRoot(params);
     const seen = new Set<string>();
     const emit = function* (items: T[]) {
       for (const item of items) {
-        const own = isOrganic(item) && inPriceRange(options.itemPrice(item), params);
+        const own = isOrganic(item) && (whole || inPriceRange(options.itemPrice(item), params));
         if (own) seen.add(options.itemId(item));
         yield toRaw(item, own ? segment.key : undefined);
       }
@@ -177,10 +207,11 @@ export async function* crawlPriceSegments<T>(options: PriceSegmentCrawlOptions<T
     }
     if (!unchanged) log(`${segment.key} changed while it was read; it is read again in a later run`);
 
-    // Only a read that saw every reported listing may count the others as sold. Listings that moved
-    // between pages, or a list that grew or shrank while we read, leave the segment incomplete for
-    // this run; it stays in the plan and is read again.
-    if (unchanged && first.total <= reachablePages * pageSize && seen.size >= first.total) {
+    // Only a read that saw exactly the reported listings may count the others as sold. Listings that
+    // moved between pages, or a list that grew or shrank while we read, leave the segment incomplete
+    // for this run; it stays in the plan and is read again. A shift that keeps every count the same
+    // can still hide a listing for one read; it is gone only after two complete reads without it.
+    if (unchanged && first.total <= reachablePages * pageSize && seen.size === first.total) {
       completed.push(segment.key);
       await store.completed(segment.key);
     }

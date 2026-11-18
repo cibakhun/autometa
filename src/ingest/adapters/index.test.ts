@@ -68,6 +68,8 @@ describe("ADAPTERS", () => {
   it("creates the mobile.de adapter once the API account is set", () => {
     vi.stubEnv("MOBILE_DE_API_USER", "test-user");
     vi.stubEnv("MOBILE_DE_API_PASSWORD", "test-password");
+    // Independent of the developer's own mobile.de settings.
+    for (const name of ["MOBILE_DE_MAX_REQUESTS", "MOBILE_DE_MIN_DELAY_MS", "MOBILE_DE_MAKES", "SCRAPE_USER_AGENT"]) vi.stubEnv(name, "");
     expect(ADAPTERS.mobilede({ pool: undefined as never }).source).toMatchObject({ id: "mobilede", kind: "api" });
   });
 });

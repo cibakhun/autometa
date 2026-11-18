@@ -118,6 +118,22 @@ describe("parseMobileDeSearch", () => {
     }
   });
 
+  it("keeps a dealer's headline but never a private seller's free text", () => {
+    const owner = { type: "FOR_SALE_BY_OWNER", address: { zipcode: "80331", city: "München", country: "DE" } };
+    const [dealer, privateAd, unknown] = parseMobileDeSearch(
+      answer([
+        ad({ mobileAdId: "1" }),
+        ad({ mobileAdId: "2", modelDescription: "Golf von Erika Musterfrau", seller: owner }),
+        ad({ mobileAdId: "3", modelDescription: "Golf von Erika Musterfrau", seller: {} }),
+        ad({ mobileAdId: "4", model: null, modelDescription: "Golf von Erika Musterfrau", seller: owner }),
+      ]),
+    ).items;
+    expect(dealer.title).toBe("Golf 1.4 TSI Comfortline");
+    expect(privateAd).toMatchObject({ model: "Golf", title: null });
+    expect(unknown).toMatchObject({ model: "Golf", title: null, sellerType: null });
+    expect(JSON.stringify([privateAd, unknown])).not.toContain("Musterfrau");
+  });
+
   it("skips ads without id, make, model or a link to mobile.de", () => {
     const page = parseMobileDeSearch(
       answer([
@@ -211,6 +227,16 @@ describe("normalizeMobileDe", () => {
     expect(normalizeMobileDe(raw(item({ firstRegistration: "201913" })))!.firstRegistration).toBeNull();
   });
 
+  it("cuts off cents so a price stays in the range it was found in", () => {
+    expect(normalizeMobileDe(raw(item({ price: { consumerPriceGross: "999.80", currency: "EUR" } })))!.priceEur).toBe(999);
+    expect(normalizeMobileDe(raw(item({ price: { consumerPriceGross: "1000.20", currency: "EUR" } })))!.priceEur).toBe(1000);
+  });
+
+  it("names private sellers' cars by make and model only", () => {
+    const listing = normalizeMobileDe(raw(item({ seller: { type: "FOR_SALE_BY_OWNER" }, modelDescription: "Golf 1.4 TSI von Erika" })));
+    expect(listing).toMatchObject({ title: "Volkswagen Golf", modelSlug: "golf", variant: null, sellerName: null });
+  });
+
   it("uses the model when the title names no known model", () => {
     const listing = normalizeMobileDe(raw(item({ make: "MERCEDES-BENZ", model: "C 220", modelDescription: "C 220 d T-Modell Avantgarde" })));
     expect(listing).toMatchObject({ makeSlug: "mercedes-benz", title: "Mercedes-Benz C 220 d T-Modell Avantgarde" });
@@ -257,6 +283,51 @@ describe("MobileDeApi", () => {
       const { api } = fakeApi([() => new Response("nope", { status })]);
       await expect(api.getJson("https://services.mobile.de/search-api/search")).rejects.toBeInstanceOf(BlockedError);
     }
+  });
+
+  it("starts the pause after the answer was read to the end", async () => {
+    let clock = 0;
+    const starts: number[] = [];
+    const api = new MobileDeApi({
+      user: "u",
+      password: "p",
+      minDelayMs: 1000,
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+      fetchImpl: (async () => {
+        starts.push(clock);
+        // The headers come at once, the body takes five seconds.
+        return {
+          ok: true,
+          status: 200,
+          text: async () => {
+            clock += 5000;
+            return JSON.stringify(answer([]));
+          },
+        } as unknown as Response;
+      }) as typeof fetch,
+    });
+    await api.getJson("https://services.mobile.de/search-api/search?a=1");
+    await api.getJson("https://services.mobile.de/search-api/search?a=2");
+    expect(starts).toEqual([0, 6000]);
+  });
+
+  it("frees the connection of a refused answer without hiding its status", async () => {
+    let cancelled = false;
+    const body = new ReadableStream({
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const { api } = fakeApi([() => new Response(body, { status: 404 })]);
+    await expect(api.getJson("https://services.mobile.de/search-api/search")).rejects.toMatchObject({ status: 404 });
+    expect(cancelled).toBe(true);
+
+    const failingCancel = { ok: false, status: 403, body: { cancel: () => Promise.reject(new Error("socket gone")) } } as unknown as Response;
+    const refused = fakeApi([() => failingCancel]);
+    await expect(refused.api.getJson("https://services.mobile.de/search-api/search")).rejects.toBeInstanceOf(BlockedError);
   });
 
   it("reports answers that are not JSON and keeps to the request budget", async () => {
