@@ -17,6 +17,9 @@
     "worker": "tsx scripts/worker.ts"
   },
   "dependencies": {
+    "domhandler": "^6.0.1",
+    "domutils": "^4.0.2",
+    "htmlparser2": "^12.0.0",
     "next": "16.4.6",
     "pg": "^8.23.1",
     "pg-connection-string": "^2.14.1",

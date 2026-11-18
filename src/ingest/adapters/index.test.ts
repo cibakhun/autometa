@@ -52,6 +52,6 @@ describe("makesFromEnv", () => {
 
 describe("ADAPTERS", () => {
   it("knows the demo source and the scraped portals", () => {
-    expect(Object.keys(ADAPTERS).sort()).toEqual(["autoscout24", "demo", "kleinanzeigen"]);
+    expect(Object.keys(ADAPTERS).sort()).toEqual(["autoscout24", "demo", "kleinanzeigen", "quoka"]);
   });
 });
