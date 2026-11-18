@@ -247,7 +247,7 @@ async function ingestLocked(client: PoolClient, adapter: SourceAdapter): Promise
           pending.push({
             listing: { ...listing, sourceId: source.id },
             segment: raw.segment ?? null,
-            inspection: detectInspection(listing.title, listing.firstRegistration),
+            inspection: detectInspection(listing),
           });
         }
         if (raws.length >= BATCH_SIZE) await flush();

@@ -1,4 +1,5 @@
 import { normalizeText } from "./normalize";
+import type { NormalizedListing } from "./types";
 
 /**
  * Where a listing's HU/TÜV date comes from:
@@ -19,6 +20,14 @@ export interface Inspection {
 
 /** The new car's first HU is due this many months after the first registration. */
 const FIRST_INSPECTION_MONTHS = 36;
+/**
+ * The registration fallback trusts a first registration only for a plausible young car: no car
+ * under three years sells for less than this, and none drives more than this per month. Below
+ * that, the listing is junk in the car category (rims, a lease takeover, a games console) or the
+ * seller typed a wrong date.
+ */
+const YOUNG_CAR_MIN_PRICE_EUR = 3000;
+const MAX_KM_PER_MONTH = 10_000;
 /** A fresh HU lasts this long. */
 const FRESH_INSPECTION_MONTHS = 24;
 
@@ -41,11 +50,14 @@ function addMonths(date: Date, months: number): string {
   return monthStart(Math.floor(total / 12), (total % 12) + 1);
 }
 
+export type InspectionInput = Pick<NormalizedListing, "title" | "firstRegistration" | "priceEur" | "mileageKm">;
+
 /**
  * The HU/TÜV validity a listing's title states, else the one its first registration implies.
  * Null when neither says anything. `now` is when the listing was seen.
  */
-export function detectInspection(title: string, firstRegistration: string | null, now = new Date()): Inspection | null {
+export function detectInspection(listing: InspectionInput, now = new Date()): Inspection | null {
+  const { title, firstRegistration, priceEur, mileageKm } = listing;
   const text = normalizeText(title);
   const thisYear = now.getUTCFullYear();
 
@@ -72,11 +84,15 @@ export function detectInspection(title: string, firstRegistration: string | null
     return { until: addMonths(now, Number(months[1])), basis: "relative" };
   }
 
-  if (firstRegistration) {
+  const thisMonth = monthStart(thisYear, now.getUTCMonth() + 1);
+  // A registration after this month is a typo, not a young car.
+  if (firstRegistration && firstRegistration <= thisMonth && priceEur >= YOUNG_CAR_MIN_PRICE_EUR) {
     const registered = new Date(`${firstRegistration}T00:00:00Z`);
     if (!Number.isNaN(registered.getTime())) {
       const until = addMonths(registered, FIRST_INSPECTION_MONTHS);
-      if (until >= monthStart(thisYear, now.getUTCMonth() + 1)) return { until, basis: "registration" };
+      const ageMonths = (thisYear - registered.getUTCFullYear()) * 12 + now.getUTCMonth() - registered.getUTCMonth();
+      const plausibleKm = mileageKm === null || mileageKm <= Math.max(ageMonths, 1) * MAX_KM_PER_MONTH;
+      if (plausibleKm && until >= thisMonth) return { until, basis: "registration" };
     }
   }
   return null;

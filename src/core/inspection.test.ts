@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { detectInspection } from "./inspection";
 
 const NOW = new Date("2026-11-18T12:00:00Z");
-const of = (title: string, firstRegistration: string | null = null) => detectInspection(title, firstRegistration, NOW);
+const of = (title: string, firstRegistration: string | null = null, priceEur = 15000, mileageKm: number | null = 40000) =>
+  detectInspection({ title, firstRegistration, priceEur, mileageKm }, NOW);
 
 describe("detectInspection", () => {
   it("reads a month or year the title states", () => {
@@ -36,6 +37,25 @@ describe("detectInspection", () => {
     expect(of("Skoda Octavia Combi", "2023-11-01")).toEqual({ until: "2026-11-01", basis: "registration" });
     expect(of("Skoda Octavia Combi", "2023-10-01")).toBeNull();
     expect(of("Skoda Octavia Combi TÜV 06/2027", "2024-03-01")).toEqual({ until: "2027-06-01", basis: "stated" });
+    expect(of("Skoda Octavia Combi", "2024-03-01", 15000, null)).toEqual({ until: "2027-03-01", basis: "registration" });
+  });
+
+  it("trusts the first registration only for a plausible young car", () => {
+    // Junk in the car category with a recent first registration, seen on Kleinanzeigen.
+    expect(of("4 Audi Alufelgen mit Reifen – 235/60 R18 350€ VB", "2025-03-01", 350, 0)).toBeNull();
+    expect(of("Ps5 zu verkaufen", "2025-03-01", 765, 222222)).toBeNull();
+    // A wrong date: 207,000 km in six months.
+    expect(of("Audi A4 2.0 Benzin", "2026-05-01", 24300, 207000)).toBeNull();
+    // A taxi can drive 300,000 km in three years.
+    expect(of("Mercedes E 200 Taxi", "2023-12-01", 18900, 300000)).toEqual({ until: "2026-12-01", basis: "registration" });
+    // The limits hold inclusively; a car registered this month counts as one month old.
+    expect(of("Skoda Fabia", "2026-11-01", 3000, 10000)).toEqual({ until: "2029-11-01", basis: "registration" });
+    expect(of("Skoda Fabia", "2026-11-01", 2999, 10000)).toBeNull();
+    expect(of("Skoda Fabia", "2026-11-01", 3000, 10001)).toBeNull();
+    // A registration after this month is a typo.
+    expect(of("Skoda Fabia", "2027-05-01", 15000, null)).toBeNull();
+    // A stated date does not depend on price or mileage.
+    expect(of("Golf 4 TÜV 05/2027", "2025-03-01", 450, 300000)).toEqual({ until: "2027-05-01", basis: "stated" });
   });
 
   it("ignores TÜV seals, reports and other numbers", () => {
