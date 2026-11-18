@@ -6,6 +6,7 @@ import {
   psToKw,
   resolveMakeModel,
   resolveModelInTitle,
+  sourceImageUrl,
 } from "@/core/normalize";
 import type { NormalizedListing } from "@/core/types";
 import type { FetchContext, RawListing, SourceAdapter, SourceInfo } from "../adapter";
@@ -17,8 +18,9 @@ import { PageLoader, readSitemapLocs, rotate, toRaw } from "./list-crawler";
  * auto.de, a marketplace for dealer cars. Its robots.txt forbids the search (/search/), but allows
  * the offer pages (/angebot/<make>/<model>/...), which its own sitemap lists. Each of these pages
  * describes about 15 cars for search engines (schema.org ItemList of Car); every run reads a
- * rotating share of the pages. Only the facts are kept: no VIN, description, photos or dealer
- * contacts. New cars are left out. The cars' place is not on these pages.
+ * rotating share of the pages. Only the facts are kept: no VIN, description or dealer contacts,
+ * and of the photos only the address of the small preview. New cars are left out. The cars'
+ * place is not on these pages.
  */
 
 export const AUTODE: SourceInfo = {
@@ -48,6 +50,8 @@ export interface AutoDeItem {
   powerKw: number | null;
   bodyType: string | null;
   color: string | null;
+  /** Address of the small preview photo on auto.de's image server. */
+  image: string | null;
 }
 
 type Json = Record<string, unknown>;
@@ -70,6 +74,12 @@ function registration(value: unknown): string | null {
   if (!Number.isFinite(ms)) return null;
   const date = new Date(ms + HALF_A_DAY_MS);
   return `${String(date.getUTCMonth() + 1).padStart(2, "0")}/${date.getUTCFullYear()}`;
+}
+
+/** schema.org image: an address, a list of them or an ImageObject; the first address. */
+function firstImage(value: unknown): string | null {
+  const first = Array.isArray(value) ? value[0] : value;
+  return text(first) ?? text(obj(first)?.url) ?? text(obj(first)?.contentUrl);
 }
 
 /** schema.org enginePower: KWT is kW; N12 (metric horsepower), BHP and PS are horsepower. */
@@ -117,6 +127,7 @@ export function parseAutoDePage(html: string): AutoDeItem[] {
       powerKw: power(obj(car.vehicleEngine)?.enginePower),
       bodyType: text(car.bodyType),
       color: text(car.color)?.slice(0, 40) ?? null,
+      image: firstImage(car.image),
     });
   }
   return items;
@@ -166,6 +177,7 @@ export function normalizeAutoDe(raw: RawListing): NormalizedListing | null {
     city: null,
     lat: null,
     lng: null,
+    imageUrl: sourceImageUrl(item.image, "auto.de"),
   };
 }
 

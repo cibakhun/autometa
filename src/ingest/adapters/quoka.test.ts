@@ -13,7 +13,7 @@ interface Ad {
 
 const adHtml = (ad: Ad) => `
   <li class="q-ln hlisting">
-    <a class="img" href="/anzeigen/auto-motorrad/automarkt/anzeige/${ad.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}/${ad.id}.html"><img src="x.jpg"></a>
+    <a class="img" href="/anzeigen/auto-motorrad/automarkt/anzeige/${ad.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}/${ad.id}.html"><img src="https://s3.quoka.de/quoka/top/20261115/1158/${ad.id}.webp" width="200" height="200"></a>
     <div class="q-col n2">
       <a href="https://www.quoka.de/anzeigen/auto-motorrad/automarkt/anzeige/x/${ad.id}.html"><h2 class="fn">${ad.title}</h2></a>
       ${ad.facts ? `<div class="attributes">${ad.facts}</div>` : ""}
@@ -93,6 +93,7 @@ describe("Quoka result pages", () => {
       sellerType: null,
       sellerName: null,
       zip: "94351",
+      imageUrl: `https://s3.quoka.de/quoka/top/20261115/1158/${tiguan.id}.webp`,
     });
     expect(normalizeQuoka({ externalId: accessory.id, payload: { ...accessory } })).toBeNull();
     expect(normalizeQuoka({ externalId: "w1", payload: { ...car, title: "Suche VW Tiguan bis 20.000 €" } })).toBeNull();

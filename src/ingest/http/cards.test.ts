@@ -137,6 +137,20 @@ describe("cards of a result list", () => {
     expect(cardFacts(cards[1].pieces, NOW)).toMatchObject({ price: 14110, mileageKm: 96699, fuel: "petrol", firstRegistration: "2018" });
   });
 
+  it("takes the first photo of a card, skipping icons, badges and placeholders", () => {
+    const detail = (url: URL) => url.pathname.match(/^\/x\/(\d+)$/)?.[1] ?? null;
+    const card = (inner: string) => readCards(`<div><a href="/x/1">Golf</a>${inner}<span>5.000 €</span></div>`, "https://www.a.example/list/", detail)[0].image;
+    expect(card(`<img src="/icons/heart.svg"><img src="/badge.png" width="18" height="18"><img src="data:image/gif;base64,R0lGOD"><img src="/p/1.jpg" width="200">`)).toBe(
+      "https://www.a.example/p/1.jpg",
+    );
+    expect(card(`<img src="data:image/gif;base64,R0lGOD" data-src="https://img.a.example/1.webp">`)).toBe("https://img.a.example/1.webp");
+    expect(card(`<picture><source srcset="https://img.a.example/1.avif 1x, https://img.a.example/1@2.avif 2x"><img></picture>`)).toBe(
+      "https://img.a.example/1.avif",
+    );
+    expect(card(`<img src="javascript:alert(1)">`)).toBeNull();
+    expect(card("")).toBeNull();
+  });
+
   it("uses the link's title when it has no text", () => {
     const cards = readCards(`<div><a href="/x/1" title="BMW 320d"><img></a><span>5.000 €</span></div><div><a href="/x/2">Opel</a></div>`, "https://a.example/", (url) => url.pathname.match(/^\/x\/(\d+)$/)?.[1] ?? null);
     expect(cards[0]).toMatchObject({ id: "1", title: "BMW 320d" });

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { BODY_TYPE_LABELS, FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
+import { ListingPhoto } from "@/components/listing-photo";
 import { getPool } from "@/lib/db";
 import { formatKm, formatPower, formatPrice, formatRegistration } from "@/lib/format";
 import { getListing } from "@/search/query";
@@ -46,9 +47,13 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
             Dieses Angebot ist bei {listing.sourceName} nicht mehr zu finden und wahrscheinlich verkauft.
           </p>
         )}
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <h1 className="min-w-0 text-2xl font-bold leading-tight [overflow-wrap:anywhere]">{listing.title}</h1>
-          <p className="text-2xl font-bold">{formatPrice(listing.priceEur)}</p>
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
+          {/* The portal's small list photo; more photos are in the original listing. */}
+          <ListingPhoto src={listing.imageUrl} alt={listing.title} className="aspect-[4/3] w-full shrink-0 rounded-lg sm:w-72" />
+          <div className="flex min-w-0 flex-1 flex-wrap items-start justify-between gap-4">
+            <h1 className="min-w-0 text-2xl font-bold leading-tight [overflow-wrap:anywhere]">{listing.title}</h1>
+            <p className="text-2xl font-bold">{formatPrice(listing.priceEur)}</p>
+          </div>
         </div>
         <dl className="mt-6 grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
           {rows
@@ -69,7 +74,7 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
           >
             Zum Angebot bei {listing.sourceName}
           </a>
-          <p className="text-xs text-muted">Fotos, Beschreibung und Kontakt findest du in der Originalanzeige.</p>
+          <p className="text-xs text-muted">Weitere Fotos, Beschreibung und Kontakt findest du in der Originalanzeige.</p>
         </div>
         {listing.otherOffers.length > 0 && (
           <section className="mt-6 border-t border-line pt-4">

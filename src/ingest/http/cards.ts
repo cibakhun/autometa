@@ -29,6 +29,8 @@ export interface Card {
   title: string | null;
   /** The aria-label or title of a link to the listing, e.g. "Mazda 6 - 2.0 Sports-Line - 14.690 €". */
   label: string | null;
+  /** Absolute address of the card's first photo (not icons or logos), as the portal links it. */
+  image: string | null;
   pieces: TextPiece[];
 }
 
@@ -75,7 +77,7 @@ export function readCards(html: string, baseUrl: string, detail: DetailMatcher):
       card = parent;
     }
     const anchors = links.filter((l) => l.id === id).map((l) => l.element);
-    cards.push({ id, url, title: titleOf(card, anchors), label: labelOf(anchors), pieces: piecesOf(card) });
+    cards.push({ id, url, title: titleOf(card, anchors), label: labelOf(anchors), image: imageOf(card, baseUrl), pieces: piecesOf(card) });
   }
   return cards;
 }
@@ -103,6 +105,32 @@ function labelOf(anchors: Element[]): string | null {
   for (const anchor of anchors) {
     const label = clean(getAttributeValue(anchor, "aria-label") ?? "") || clean(getAttributeValue(anchor, "title") ?? "");
     if (label) return label;
+  }
+  return null;
+}
+
+/** Attributes that hold an image's address, lazy-loading ones included. */
+const IMAGE_SOURCES = ["src", "data-src", "data-lazy-src", "data-original", "srcset", "data-srcset"];
+
+/**
+ * The card's first photo: the first image with an http(s) address that is not a vector icon and
+ * not declared smaller than 60 pixels (badges, ratings, logos).
+ */
+function imageOf(card: Element, baseUrl: string): string | null {
+  for (const img of findAll((node) => node.name === "img" || node.name === "source", [card])) {
+    const size = Math.min(...["width", "height"].map((name) => Number(img.attribs[name] ?? Infinity)));
+    if (size < 60) continue;
+    for (const name of IMAGE_SOURCES) {
+      // A srcset lists "address width" pairs; its first address is enough.
+      const value = img.attribs[name]?.trim().split(/\s+/)[0]?.replace(/,$/, "");
+      if (!value || value.startsWith("data:")) continue;
+      try {
+        const url = new URL(value, baseUrl);
+        if ((url.protocol === "https:" || url.protocol === "http:") && !/\.svg$/i.test(url.pathname)) return url.href;
+      } catch {
+        // not an address
+      }
+    }
   }
   return null;
 }

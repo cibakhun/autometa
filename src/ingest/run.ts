@@ -46,6 +46,7 @@ const LISTING_COLUMNS = [
   "city",
   "lat",
   "lng",
+  "image_url",
   "segment",
 ] as const;
 
@@ -79,6 +80,7 @@ function listingValues({ listing: l, segment }: PendingListing): unknown[] {
     l.city,
     l.lat,
     l.lng,
+    l.imageUrl ?? null,
     segment,
   ];
 }
@@ -135,7 +137,8 @@ async function writeBatch(client: PoolClient, sourceId: string, raws: RawListing
     }
     if (pending.length > 0) {
       const updates = LISTING_COLUMNS.filter((c) => c !== "source_id" && c !== "external_id" && c !== "segment")
-        .map((c) => `${c} = excluded.${c}`)
+        // A sighting without a photo keeps the one seen before.
+        .map((c) => (c === "image_url" ? `${c} = coalesce(excluded.${c}, listings.${c})` : `${c} = excluded.${c}`))
         .join(", ");
       await client.query(
         `insert into listings (${LISTING_COLUMNS.join(", ")})

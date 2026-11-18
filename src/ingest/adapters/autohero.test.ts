@@ -21,7 +21,7 @@ const uuid = (n: number) => `0b5c1c3e-1a2b-4c3d-8e9f-${String(n).padStart(12, "0
 const cardHtml = (car: Car) => `
   <div class="cardWrapper___a1">
     <a class="card___b2" href="/de/${car.slug}/id/${car.id}/"${car.label === false ? "" : ` aria-label="${car.make} - ${car.subtitle} - ${car.price}"`}>
-      <img src="https://img.autohero.com/img/abc/400x300.jpg" alt="">
+      <img src="https://img.autohero.com/img/abc/400x300.jpg" alt="" style="max-width:0;max-height:0">
       ${car.oldPrice ? `<p class="text___UvZz3">Spare 2.450 €</p>` : ""}
       <h2 class="title___SL5Yb adTitle___MuOmz" data-qa-selector="title">${car.make}</h2>
       <div class="price___GXOg8 withDownPrice___tlRFA">
@@ -79,6 +79,7 @@ describe("Autohero pages", () => {
         transmission: "automatic",
         zip: null,
         city: null,
+        image: "https://img.autohero.com/img/abc/400x300.jpg",
       },
       expect.objectContaining({ id: fiesta.id, title: "Ford Fiesta", price: 11490, mileageKm: 41200, transmission: "manual" }),
     ]);
@@ -95,6 +96,7 @@ describe("Autohero pages", () => {
       sellerType: "dealer",
       sellerName: "Autohero",
       zip: null,
+      imageUrl: "https://img.autohero.com/img/abc/400x300.jpg",
     });
     expect(normalizeAutohero({ externalId: "x", payload: { ...car, mileageKm: null, firstRegistration: null } })).toBeNull();
   });

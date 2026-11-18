@@ -6,6 +6,7 @@ import {
   parseInteger,
   parsePowerKw,
   resolveMakeModel,
+  sourceImageUrl,
 } from "@/core/normalize";
 import { MAKES } from "@/core/taxonomy";
 import type { NormalizedListing, SellerType } from "@/core/types";
@@ -70,7 +71,7 @@ export interface AutoScout24Options {
   log?: (message: string) => void;
 }
 
-/** One result list entry as we store it: facts only, no photos, texts or contact data. */
+/** One result list entry as we store it: facts only, no texts or contact data, the preview photo as a link. */
 export interface AutoScout24Item {
   id: string;
   url: string;
@@ -93,6 +94,8 @@ export interface AutoScout24Item {
   countryCode: string | null;
   /** False for ads AutoScout24 mixes into the list regardless of the filters. */
   organic: boolean;
+  /** Address of the list's preview photo on AutoScout24's image server. */
+  image: string | null;
 }
 
 export interface AutoScout24Page {
@@ -176,6 +179,7 @@ export function parseAutoScout24Page(html: string, url = ORIGIN): AutoScout24Pag
       city: str(location.city),
       countryCode: str(location.countryCode),
       organic: (str(listing.searchResultType) ?? "Organic") === "Organic",
+      image: Array.isArray(listing.images) ? str(listing.images[0]) : null,
     });
   }
   return { items, total, pages };
@@ -220,6 +224,7 @@ export function normalizeAutoScout24(raw: RawListing): NormalizedListing | null 
     city: item.city,
     lat: null,
     lng: null,
+    imageUrl: sourceImageUrl(item.image, "autoscout24.net"),
   };
 }
 

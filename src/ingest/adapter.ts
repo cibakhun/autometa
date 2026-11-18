@@ -11,7 +11,10 @@ export interface SourceInfo {
 /** One listing as delivered by a source, before normalization. Stored as-is in raw_listings. */
 export interface RawListing {
   externalId: string;
-  /** Facts only: no photos, description texts or contact data of private sellers. */
+  /**
+   * Facts only: no description texts or contact data of private sellers. Photos are never
+   * copied; the address of the list's preview photo may be kept as a link.
+   */
   payload: Record<string, unknown>;
   /**
    * The part of the source's inventory this listing was found in (see crawl_segments).
@@ -29,8 +32,9 @@ export interface AdapterContext {
 
 /**
  * Every source (marketplace API, dealer feed, scraped portal, demo data) implements this interface.
- * Rules every adapter must follow: only facts, no photos or description texts,
- * no personal data of private sellers, never bypass bot protection, logins or captchas.
+ * Rules every adapter must follow: only facts, no description texts and no copies of photos
+ * (a link to the preview photo is fine), no personal data of private sellers, never bypass bot
+ * protection, logins or captchas.
  * Scrapers fetch only through PoliteFetcher (src/ingest/http/fetcher.ts) and set
  * fullSnapshot to false unless they really read the source's whole inventory.
  */

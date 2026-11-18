@@ -9,6 +9,7 @@ import {
   parsePowerKw,
   resolveMake,
   resolveModelInTitle,
+  sourceImageUrl,
 } from "@/core/normalize";
 import type { NormalizedListing, SellerType } from "@/core/types";
 import type { RawListing } from "../adapter";
@@ -152,10 +153,14 @@ export interface CardItem extends CardFacts, ListItem {
   title: string;
   /** Our make slug when the list was a make's list. */
   listMake: string | null;
+  /** Address of the card's preview photo. */
+  image: string | null;
 }
 
 export interface CardNormalizeOptions {
   sourceId: string;
+  /** The source's image server domain; preview photos elsewhere are dropped. */
+  imageHost: string;
   sellerType: SellerType | null;
   sellerName: string | null;
   /** Lowest price that can be a car rather than a part or a monthly rate. */
@@ -201,6 +206,7 @@ export function normalizeCard(item: CardItem, options: CardNormalizeOptions): No
     city: item.city,
     lat: null,
     lng: null,
+    imageUrl: sourceImageUrl(item.image, options.imageHost),
   };
 }
 

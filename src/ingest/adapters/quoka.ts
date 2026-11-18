@@ -47,7 +47,7 @@ export type QuokaItem = CardItem;
 export function parseQuokaPage(html: string, url: string, listMake: string | null = null): QuokaItem[] {
   return readCards(html, url, detailId).flatMap((card) => {
     if (!card.title) return [];
-    return [{ id: card.id, url: card.url, title: card.title.slice(0, 200), listMake, ...cardFacts(card.pieces) }];
+    return [{ id: card.id, url: card.url, title: card.title.slice(0, 200), listMake, image: card.image, ...cardFacts(card.pieces) }];
   });
 }
 
@@ -84,6 +84,7 @@ export function normalizeQuoka(raw: RawListing): NormalizedListing | null {
     sourceId: QUOKA.id,
     sellerType: null,
     sellerName: null,
+    imageHost: "quoka.de",
     requireVehicleFacts: true,
   });
 }

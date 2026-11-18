@@ -35,6 +35,8 @@ export interface ListingSummary {
   distanceKm: number | null;
   /** The same vehicle on other portals (duplicates), cheapest first. */
   otherOffers: Offer[];
+  /** Link to the preview photo on the source's image server, if it showed one. */
+  imageUrl: string | null;
 }
 
 /** One portal's listing of a vehicle. */
@@ -114,6 +116,11 @@ export async function searchListings(pool: Pool, filters: SearchFilters, origin:
            to_char(l.first_registration, 'YYYY-MM-DD') as first_registration,
            l.fuel, l.transmission, l.power_kw, l.body_type, l.seller_type, l.zip, l.city, l.cluster_id,
            s.id as source_id, s.name as source_name,
+           -- The cheapest listing of a duplicate group may come without a photo; another may have one.
+           coalesce(l.image_url, (select d.image_url from listings d
+                                   where l.cluster_id is not null and d.cluster_id = l.cluster_id
+                                     and d.status = 'active' and d.image_url is not null
+                                   order by d.price_eur, d.id limit 1)) as image_url,
            ${distance ? `round(${distance}::numeric, 1)::float8` : "null::float8"} as distance_km
       from (
         select l.*, row_number() over (partition by ${GROUP} order by l.price_eur asc, l.id asc) as group_rank
@@ -161,6 +168,7 @@ export async function searchListings(pool: Pool, filters: SearchFilters, origin:
         sourceName: row.source_name,
         distanceKm: row.distance_km,
         otherOffers: (offers.get(Number(row.cluster_id)) ?? []).filter((offer) => offer.id !== id),
+        imageUrl: row.image_url,
       };
     }),
   };
@@ -281,7 +289,11 @@ export interface ListingDetail extends ListingSummary {
 
 export async function getListing(pool: Pool, id: number): Promise<ListingDetail | null> {
   const { rows } = await pool.query(
-    `select l.*, to_char(l.first_registration, 'YYYY-MM-DD') as first_registration_text, s.name as source_name
+    `select l.*, to_char(l.first_registration, 'YYYY-MM-DD') as first_registration_text, s.name as source_name,
+            coalesce(l.image_url, (select d.image_url from listings d
+                                    where l.cluster_id is not null and d.cluster_id = l.cluster_id
+                                      and d.status = 'active' and d.image_url is not null
+                                    order by d.price_eur, d.id limit 1)) as shown_image_url
        from listings l join sources s on s.id = l.source_id
       where l.id = $1`,
     [id],
@@ -309,6 +321,7 @@ export async function getListing(pool: Pool, id: number): Promise<ListingDetail 
     sourceName: row.source_name,
     distanceKm: null,
     otherOffers: offers.filter((offer) => offer.id !== Number(row.id)),
+    imageUrl: row.shown_image_url,
     variant: row.variant,
     color: row.color,
     sellerName: row.seller_name,

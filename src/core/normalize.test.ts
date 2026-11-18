@@ -14,6 +14,7 @@ import {
   parsePowerKw,
   resolveMakeModel,
   resolveModelInTitle,
+  sourceImageUrl,
 } from "./normalize";
 
 describe("parseInteger", () => {
@@ -257,5 +258,26 @@ describe("Mercedes-Benz classes", () => {
     expect(resolveMakeModel("Mercedes-Benz", "C220d AMG Line").modelSlug).toBe("c-klasse");
     expect(resolveMakeModel("Mercedes-Benz", "V250 4Matic").modelSlug).toBe("v-klasse");
     expect(resolveMakeModel("Mercedes-Benz", "GLC 300").modelSlug).toBe("glc");
+  });
+});
+
+describe("sourceImageUrl", () => {
+  it("keeps https links to the source's image servers only", () => {
+    expect(sourceImageUrl("https://img.kleinanzeigen.de/api/v1/prod-ads/images/90/x?rule=$_2.AUTO", "kleinanzeigen.de")).toBe(
+      "https://img.kleinanzeigen.de/api/v1/prod-ads/images/90/x?rule=$_2.AUTO",
+    );
+    expect(sourceImageUrl("http://s3.quoka.de/quoka/top/1.webp", "quoka.de")).toBe("https://s3.quoka.de/quoka/top/1.webp");
+    expect(sourceImageUrl("https://quoka.de/1.webp", "quoka.de")).toBe("https://quoka.de/1.webp");
+  });
+
+  it("drops other hosts, schemes and anything that is not an address", () => {
+    expect(sourceImageUrl("https://notquoka.de/1.webp", "quoka.de")).toBeNull();
+    expect(sourceImageUrl("https://quoka.de.evil.example/1.webp", "quoka.de")).toBeNull();
+    expect(sourceImageUrl("https://user:pw@s3.quoka.de/1.webp", "quoka.de")).toBeNull();
+    expect(sourceImageUrl("javascript:alert(1)", "quoka.de")).toBeNull();
+    expect(sourceImageUrl("data:image/png;base64,AAAA", "quoka.de")).toBeNull();
+    expect(sourceImageUrl("/relative.jpg", "quoka.de")).toBeNull();
+    expect(sourceImageUrl(undefined, "quoka.de")).toBeNull();
+    expect(sourceImageUrl(`https://s3.quoka.de/${"a".repeat(1000)}`, "quoka.de")).toBeNull();
   });
 });
