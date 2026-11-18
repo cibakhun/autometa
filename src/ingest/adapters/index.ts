@@ -1,6 +1,8 @@
 import { MAKES } from "@/core/taxonomy";
 import type { AdapterFactory } from "../adapter";
 import { createFetcherFromEnv, readList } from "../http/config";
+import { createAutoDeAdapter } from "./autode";
+import { createAutoheroAdapter } from "./autohero";
 import { createAutoScout24Adapter } from "./autoscout24";
 import { createDemoAdapter } from "./demo";
 import { createKleinanzeigenAdapter } from "./kleinanzeigen";
@@ -51,4 +53,6 @@ export const ADAPTERS: Record<string, AdapterFactory> = {
       makes: makesFromEnv("QUOKA_MAKES"),
       log: logFor("quoka"),
     }),
+  autohero: () => createAutoheroAdapter({ fetcher: createFetcherFromEnv(), log: logFor("autohero") }),
+  autode: () => createAutoDeAdapter({ fetcher: createFetcherFromEnv(), log: logFor("autode") }),
 };

@@ -203,3 +203,21 @@ export function normalizeCard(item: CardItem, options: CardNormalizeOptions): No
     lng: null,
   };
 }
+
+/** The page URLs listed in a sitemap (<loc> entries), entities decoded. */
+export function readSitemapLocs(xml: string): string[] {
+  return [...xml.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map((match) =>
+    match[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'"),
+  );
+}
+
+/**
+ * The share of a long page list for this run: `count` entries from an offset that moves on by
+ * `count` every `slotMs`, wrapping around. Consecutive runs so cover the whole list in turn
+ * without keeping any state.
+ */
+export function rotate<T>(items: T[], count: number, now = Date.now(), slotMs = 3_600_000): T[] {
+  if (items.length <= count) return [...items];
+  const offset = (Math.floor(now / slotMs) * count) % items.length;
+  return Array.from({ length: count }, (_, i) => items[(offset + i) % items.length]);
+}

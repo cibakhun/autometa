@@ -150,18 +150,25 @@ describe("Quoka adapter", () => {
     expect(site.requested).not.toContain(listUrl(null, 4));
   });
 
-  it("reads the whole category when the make links are missing", async () => {
+  it("uses our make slugs as paths when the page has no make menu", async () => {
     const site = fakeSite({
       "https://www.quoka.de/robots.txt": "User-agent: *\nAllow: /\n",
       [listUrl(null)]: page(ads(1, 2)),
       [listUrl(null, 2)]: page(ads(3, 1)),
+      [listUrl("mercedes-benz")]: page(ads(10, 1, "Mercedes-Benz C 220 d")),
     });
     const messages: string[] = [];
-    const adapter = createQuokaAdapter({ fetcher: site.fetcher, pagesPerList: 2, log: (m) => messages.push(m) });
+    const adapter = createQuokaAdapter({ fetcher: site.fetcher, makes: ["mercedes-benz", "lada"], pagesPerList: 2, log: (m) => messages.push(m) });
     const raws = [];
-    for await (const raw of adapter.fetch()) raws.push(raw);
-    expect(raws.map((r) => r.externalId)).toEqual(["ad00000001", "ad00000002", "ad00000003"]);
-    expect(messages.some((m) => m.includes("no make links found"))).toBe(true);
+    for await (const raw of adapter.fetch()) raws.push([raw.externalId, (raw.payload as { listMake: string | null }).listMake]);
+    expect(raws).toEqual([
+      ["ad00000010", "mercedes-benz"],
+      ["ad00000001", null],
+      ["ad00000002", null],
+      ["ad00000003", null],
+    ]);
+    expect(site.requested).toContain(listUrl("lada"));
+    expect(messages.some((m) => m.includes("no make links"))).toBe(true);
   });
 
   it("stops with a clear error when the category page has no ads", async () => {
