@@ -75,18 +75,24 @@ export function giveawayPageUrl(page: number): string {
 const CAR_PART = new RegExp(
   String.raw`\b(?:\w*reifen|\w*felgen?|\w*rader|radkappen?|hutablage|kopfstutzen?|(?:kinder|auto|ruck|fahrer|beifahrer)?sitze?|sitzbank|` +
     String.raw`sitzbezug\w*|kabel\w*|zubehor|(?:ersatz|karosserie|anbau|auto|kfz)?teile?|` +
-    String.raw`(?:fahrer|beifahrer)?tur(?:en)?|turverkleidung\w*|sto(?: |ss)stange|kotflugel|motorhaube|spiegel|scheinwerfer|rucklicht\w*|` +
+    String.raw`(?:fahrer|beifahrer)?tur(?:en)?|turverkleidung\w*|sto(?: |ss)stangen?|kotflugel|motorhaube|spiegel|scheinwerfer|rucklicht\w*|` +
     String.raw`batterie|dachbox|dachtrager|fussmatten?|anhangerkupplung|modellauto\w*|spielzeug\w*|bobbycar)\b`,
 );
 
+// "gesucht" after these words offers the car ("neuer Besitzer gesucht"); otherwise it asks for one.
+const OFFERED_WITH_GESUCHT = /\b(?:besitzer|eigentumer|liebhaber|bastler|schrauber|abholer|zuhause|heim) gesucht\b/;
+
 /**
  * A listing given away counts only when it is a car we can name: the title resolves to a make and
- * a model, and it is no part ("Opel Corsa D Stahlfelgen zu verschenken") or wanted ad ("Fahrzeug
- * für die Feuerwehr gesucht").
+ * a model (from the title, or from the make filter of the list it was found in), and it is no part
+ * ("Opel Corsa D Stahlfelgen zu verschenken") or wanted ad ("Fahrzeug für die Feuerwehr gesucht").
+ * Parts named after "mit" or "inkl." come with the car ("VW Polo mit Winterreifen").
  */
 export function isGiveawayCar(title: string, resolved: { makeSlug: string | null; modelSlug: string | null }): boolean {
   const text = normalizeText(title);
-  return Boolean(resolved.makeSlug && resolved.modelSlug) && !CAR_PART.test(text) && !/\bgesucht\b/.test(text);
+  const offered = text.split(/\b(?:mit|inkl|inklusive|samt|plus)\b/)[0];
+  const wanted = /\bgesucht\b/.test(text) && !OFFERED_WITH_GESUCHT.test(text);
+  return Boolean(resolved.makeSlug && resolved.modelSlug) && !CAR_PART.test(offered) && !wanted;
 }
 
 /** One result list entry as we store it: facts only. */
@@ -244,15 +250,18 @@ export function createKleinanzeigenAdapter(options: KleinanzeigenOptions): Sourc
       try {
         // Makes first, so their listings keep the make filter's make; then the cars given away;
         // the whole category last.
+        // The search keeps one request back for the first page of the whole category, which also
+        // checks that the page layout is still the one we read.
         const lists = [
-          ...makes.map((make) => ({ make, url: (page: number) => pageUrl(make, page), whole: false })),
-          { make: null, url: giveawayPageUrl, whole: false },
-          { make: null, url: (page: number) => pageUrl(null, page), whole: true },
+          ...makes.map((make) => ({ make, url: (page: number) => pageUrl(make, page), whole: false, reserve: 0 })),
+          { make: null, url: giveawayPageUrl, whole: false, reserve: 1 },
+          { make: null, url: (page: number) => pageUrl(null, page), whole: true, reserve: 0 },
         ];
-        for (const { make, url: urlOf, whole } of lists) {
+        for (const { make, url: urlOf, whole, reserve } of lists) {
           const inList = new Set<string>();
           for (let page = 1; page <= pagesPerList; page += 1) {
             if (fetcher.requestsLeft < 1) return;
+            if (fetcher.requestsLeft <= reserve) break;
             const url = urlOf(page);
             const html = await load(url);
             if (html === null) break;
