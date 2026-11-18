@@ -51,7 +51,25 @@ describe("makesFromEnv", () => {
 });
 
 describe("ADAPTERS", () => {
-  it("knows the demo source and the scraped portals", () => {
-    expect(Object.keys(ADAPTERS).sort()).toEqual(["autoscout24", "demo", "kleinanzeigen"]);
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("knows the demo source, the scraped portals and the mobile.de API", () => {
+    expect(Object.keys(ADAPTERS).sort()).toEqual(["autoscout24", "demo", "kleinanzeigen", "mobilede"]);
+  });
+
+  it("refuses to start mobile.de without an API account", () => {
+    vi.stubEnv("MOBILE_DE_API_USER", "");
+    vi.stubEnv("MOBILE_DE_API_PASSWORD", "");
+    expect(() => ADAPTERS.mobilede({ pool: undefined as never })).toThrow(/MOBILE_DE_API_USER and MOBILE_DE_API_PASSWORD/);
+  });
+
+  it("creates the mobile.de adapter once the API account is set", () => {
+    vi.stubEnv("MOBILE_DE_API_USER", "test-user");
+    vi.stubEnv("MOBILE_DE_API_PASSWORD", "test-password");
+    // Independent of the developer's own mobile.de settings.
+    for (const name of ["MOBILE_DE_MAX_REQUESTS", "MOBILE_DE_MIN_DELAY_MS", "MOBILE_DE_MAKES", "SCRAPE_USER_AGENT"]) vi.stubEnv(name, "");
+    expect(ADAPTERS.mobilede({ pool: undefined as never }).source).toMatchObject({ id: "mobilede", kind: "api" });
   });
 });

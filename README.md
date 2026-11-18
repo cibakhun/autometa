@@ -35,7 +35,7 @@ npm run dev                     # http://localhost:3000
 supabase/migrations/   Datenbankschema (läuft auf Postgres und Supabase)
 src/core/              Datenmodell, Marken-/Modellliste, Normalisierung, Geo-Funktionen
 src/ingest/            Adapter-Schnittstelle, Import-Lauf, Dubletten, Segmente, Migrationen, Seed
-src/ingest/adapters/   ein Adapter je Quelle: autoscout24, kleinanzeigen, demo
+src/ingest/adapters/   ein Adapter je Quelle: autoscout24, kleinanzeigen, mobilede (offizielle API), demo
 src/ingest/http/       PoliteFetcher (Abstand, robots.txt, Abbruch bei Sperren), HTML-Helfer
 src/search/            Filter aus der URL lesen, SQL-Suche, PLZ-Auflösung
 src/app/               Next.js-Seiten: Suche, Detailseite /angebot/[id], Weiterleitung /go/[id], API /api/search
@@ -54,13 +54,15 @@ Wann ein Angebot aus der Suche verschwindet:
 
 | Börse | Was gelesen wird | Abdeckung | Aus der Suche nach |
 | --- | --- | --- | --- |
-| AutoScout24 | Ergebnislisten `/lst/<marke>` (robots.txt erlaubt sie, Detailseiten nicht) | Je Lauf erst die neuesten Angebote je Marke, dann reihum Marke × Preisbereich. Hat ein Bereich mehr Treffer, als die Liste durchblättern lässt, wird er geteilt (`crawl_segments`). | zwei vollständigen Läufen seines Preisbereichs ohne das Angebot, spätestens 30 Tagen |
-| Kleinanzeigen | Kategorie „Autos“, je Marke und gesamt die ersten 5 Seiten (mehr erlaubt die robots.txt nicht, Filter auch nicht) | nur die neuesten Anzeigen; ob privat oder Händler, steht nicht in der Liste | 14 Tagen ohne Sichtung |
-| mobile.de | nichts | Die robots.txt verbietet die Suche, und die Seite sperrt unseren Bot (403). | |
+| AutoScout24 | Ergebnislisten `/lst/<marke>` (robots.txt erlaubt sie, Detailseiten nicht) | Je Lauf erst die neuesten Angebote je Marke, dann reihum Marke × Preisbereich. Hat ein Bereich mehr Treffer, als die Liste durchblättern lässt, wird er geteilt (`crawl_segments`). | zwei vollständigen Läufen seines Preisbereichs ohne das Angebot, spätestens dem ersten erfolgreichen Lauf nach 30 Tagen ohne Sichtung |
+| Kleinanzeigen | Kategorie „Autos“, je Marke und gesamt die ersten 5 Seiten (mehr erlaubt die robots.txt nicht, Filter auch nicht) | nur die neuesten Anzeigen; ob privat oder Händler, steht nicht in der Liste | dem ersten erfolgreichen Lauf nach 14 Tagen ohne Sichtung |
+| mobile.de | nur über die offizielle [Search-API](https://services.mobile.de/docs/search-api.html) mit einem API-Account von mobile.de | wie AutoScout24: neueste Änderungen je Marke, dann Marke × Preisbereich (höchstens 2000 Treffer je Abfrage, 100 je Seite). Läuft erst, wenn `MOBILE_DE_API_USER` und `MOBILE_DE_API_PASSWORD` gesetzt sind. | zwei vollständigen Läufen seines Preisbereichs ohne das Angebot, spätestens dem ersten erfolgreichen Lauf nach 30 Tagen ohne Sichtung |
 
 Der Bot hält die robots.txt jeder Börse ein (Entscheidung vom 15.11.2026). Gespeichert werden nur Fakten, keine Fotos, Beschreibungen oder Namen privater Verkäufer. Hat eine Börse ihr Seitenformat geändert, bricht der Lauf mit einer klaren Meldung ab, statt leere Daten zu speichern.
 
-Wie weit AutoScout24 pro Lauf kommt, hängt vom Budget ab: Bei 5 Sekunden Abstand und 500 Abrufen dauert ein Lauf gut 40 Minuten. Mit `AUTOSCOUT24_MAKES` und `KLEINANZEIGEN_MAKES` lassen sich die Marken eingrenzen (Slugs wie `volkswagen,bmw`).
+mobile.de wird nie gescrapt: Die AGB verbieten es (§ 11), die robots.txt sperrt die Suche, und die Seite sperrt Bots (403). Den API-Account vergibt der mobile.de-Kundenservice ([API-Übersicht](https://services.mobile.de/)). Die API liefert auch Telefonnummern und E-Mail-Adressen der Verkäufer; der Adapter speichert sie nicht.
+
+Wie weit AutoScout24 pro Lauf kommt, hängt vom Budget ab: Bei 5 Sekunden Abstand und 500 Abrufen dauert ein Lauf gut 40 Minuten. Bei mobile.de liegen standardmäßig 1 Sekunde zwischen zwei Abfragen und höchstens 1000 Abfragen je Lauf (`MOBILE_DE_MIN_DELAY_MS`, `MOBILE_DE_MAX_REQUESTS`), das sind bis zu 100.000 Angebote. Mit `AUTOSCOUT24_MAKES`, `KLEINANZEIGEN_MAKES` und `MOBILE_DE_MAKES` lassen sich die Marken eingrenzen (Slugs wie `volkswagen,bmw`).
 
 ## Eine neue Quelle anbinden
 
@@ -92,6 +94,7 @@ AutoMeta läuft wie die anderen AgencyOS-Projekte als Coolify-App, die AgencyOS 
 - **Ausrollen:** den Pull Request in AgencyOS mit „Merge to Main“ zusammenführen und danach unter „Deployments“ ein Deployment starten. AgencyOS legt die App ohne GitHub-Webhook an, ein Push auf `main` allein rollt also nichts aus, solange in Coolify keiner eingerichtet ist.
 - **Domain:** die automatische sslip.io-Adresse ist von außen nicht erreichbar. Für eine öffentliche Adresse eine Subdomain in Cloudflare (proxied) auf den Server zeigen lassen und dieselbe Adresse bei der App als Domain eintragen.
 - **Echte Angebote:** `nixpacks.toml` setzt für das Deployment `SCRAPE_SOURCES=autoscout24,kleinanzeigen`, der Worker läuft also nach jedem Ausrollen ohne weiteren Schritt. Ein eigener Wert für `SCRAPE_SOURCES` in den Umgebungsvariablen der App in Coolify geht vor (zum Beispiel nur `autoscout24`). Der Worker läuft im selben Container, importiert sofort und dann alle `SCRAPE_INTERVAL_MINUTES` Minuten (Standard 60). Stürzt er ab, startet ihn der Container neu, die Website läuft davon unabhängig. Sobald eine echte Quelle Angebote geliefert hat, löscht der Import die Demo-Daten. Die Logs der App zeigen jeden Lauf (`[autoscout24] …`, `duplicates: …`).
+- **mobile.de einschalten:** sobald mobile.de einen API-Account freigeschaltet hat, `MOBILE_DE_API_USER` und `MOBILE_DE_API_PASSWORD` in den Umgebungsvariablen der App setzen (als Secret), in Coolify `SCRAPE_SOURCES=autoscout24,kleinanzeigen,mobilede` setzen (der Wert aus `nixpacks.toml` enthält mobile.de nicht) und neu ausrollen. Fehlen die Zugangsdaten, meldet der Lauf das im Log, die anderen Quellen laufen weiter. Lehnt mobile.de die Zugangsdaten ab (401/403) oder bremst (429), bricht der Lauf sofort ab.
 
 - **Quellen-Status:** Mit `ADMIN_TOKEN` (mindestens 16 Zeichen, in den Umgebungsvariablen der App) zeigt `/admin/quellen?token=<ADMIN_TOKEN>` je Quelle die aktiven Angebote, den letzten Lauf mit Fehlermeldung und die letzten Läufe. Ohne `ADMIN_TOKEN` antworten alle `/admin`-Adressen mit 404.
 - **Testabruf vom Server:** Auf derselben Seite lässt sich eine Seite der bekannten Börsen (AutoScout24, Kleinanzeigen, Quoka, Autohero, auto.de, pkw.de) über den Server abrufen, auf Wunsch mit den eigenen Skripten der Seite. Es gelten dieselben Regeln wie beim Import (robots.txt, Abstand, Abbruch bei Sperren). Die Antwort wird in `scrape_samples` gespeichert (die neuesten 80) und lässt sich als Text lesen, mit `&grep=` nur um die Treffer herum. So sieht man, was eine Börse unserem Bot wirklich schickt, bevor man einen Adapter baut oder repariert.

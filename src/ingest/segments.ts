@@ -36,13 +36,17 @@ export class SegmentStore<P> {
     );
   }
 
-  /** Segments to read, the longest unread first; never-read segments come first of all. */
+  /**
+   * Segments to read, the longest untried first; never-tried segments come first of all. Ordering by
+   * the last attempt (not the last complete read) lets a segment that keeps failing take its turn
+   * like any other instead of using up every run's requests.
+   */
   async active(): Promise<Segment<P>[]> {
     const { rows } = await this.db.query(
       `select key, params, last_total, last_started_at, last_completed_at
          from crawl_segments
         where source_id = $1 and not retired
-        order by coalesce(last_completed_at, last_started_at) asc nulls first, key`,
+        order by last_started_at asc nulls first, key`,
       [this.sourceId],
     );
     return rows.map((row) => ({
@@ -54,11 +58,21 @@ export class SegmentStore<P> {
     }));
   }
 
-  async started(key: string, total: number | null): Promise<void> {
-    await this.db.query(
-      "update crawl_segments set last_started_at = now(), last_total = $3 where source_id = $1 and key = $2",
-      [this.sourceId, key, total],
-    );
+  /** Records an attempt to read a segment, before its first request. */
+  async attempted(key: string): Promise<void> {
+    await this.db.query("update crawl_segments set last_started_at = now() where source_id = $1 and key = $2", [
+      this.sourceId,
+      key,
+    ]);
+  }
+
+  /** Records how many results the source reported for a segment. */
+  async counted(key: string, total: number): Promise<void> {
+    await this.db.query("update crawl_segments set last_total = $3 where source_id = $1 and key = $2", [
+      this.sourceId,
+      key,
+      total,
+    ]);
   }
 
   async completed(key: string): Promise<void> {
@@ -68,8 +82,11 @@ export class SegmentStore<P> {
     ]);
   }
 
-  /** Retires a segment and adds its smaller replacements in one transaction. */
-  async split(key: string, children: SegmentDraft<P>[]): Promise<void> {
+  /**
+   * Retires a segment and adds its smaller replacements in one transaction. `alsoInTransaction`
+   * runs in the same transaction, e.g. to move the retired segment's listings to the new ones.
+   */
+  async split(key: string, children: SegmentDraft<P>[], alsoInTransaction?: (db: PoolClient) => Promise<void>): Promise<void> {
     await this.db.query("begin");
     try {
       await this.db.query("update crawl_segments set retired = true where source_id = $1 and key = $2", [this.sourceId, key]);
@@ -79,6 +96,7 @@ export class SegmentStore<P> {
          on conflict (source_id, key) do update set retired = false, params = excluded.params`,
         [this.sourceId, children.map((c) => c.key), children.map((c) => JSON.stringify(c.params))],
       );
+      await alsoInTransaction?.(this.db);
       await this.db.query("commit");
     } catch (error) {
       await this.db.query("rollback");

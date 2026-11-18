@@ -4,6 +4,7 @@ import type { NormalizedListing } from "@/core/types";
 import type { RawListing, SourceAdapter, SourceInfo } from "@/ingest/adapter";
 import { createAutoScout24Adapter, listUrl } from "@/ingest/adapters/autoscout24";
 import { createDemoAdapter } from "@/ingest/adapters/demo";
+import { createMobileDeAdapter, MobileDeApi, searchUrl } from "@/ingest/adapters/mobilede";
 import { updateDuplicates } from "@/ingest/duplicates";
 import { PoliteFetcher } from "@/ingest/http/fetcher";
 import { migrate } from "@/ingest/migrate";
@@ -391,17 +392,24 @@ describe.skipIf(!url)("crawling AutoScout24 result lists", () => {
     expect(steady.completedSegments!()).toContain("skoda:0-");
   });
 
-  it("stops quietly when the request budget is used up and keeps what it read", async () => {
+  it("keeps to the request budget, leaves half of it for the sweep and keeps what it read", async () => {
     await pool.query("delete from sources");
-    const fetchImpl = (async (input: string | URL) =>
-      String(input).endsWith("/robots.txt")
+    const requested: string[] = [];
+    const fetchImpl = (async (input: string | URL) => {
+      requested.push(String(input));
+      return String(input).endsWith("/robots.txt")
         ? new Response("User-agent: *\nAllow: /\n")
-        : new Response(page(cars(String(input), [5000, 6000]), 2, 1))) as typeof fetch;
-    const fetcher = new PoliteFetcher({ fetchImpl, sleep: async () => undefined, minDelayMs: 0, random: () => 0, maxRequests: 3 });
+        : new Response(page(cars(String(input), [5000, 6000]), 2, 1));
+    }) as typeof fetch;
+    const fetcher = new PoliteFetcher({ fetchImpl, sleep: async () => undefined, minDelayMs: 0, random: () => 0, maxRequests: 6 });
     const adapter = createAutoScout24Adapter({ fetcher, makes: ["bmw", "audi", "opel", "ford"] });
     const result = await runIngest(pool, adapter);
-    expect(fetcher.requestsMade).toBe(3);
     expect(result.upserted).toBeGreaterThan(0);
+    // robots.txt and the newest pages of BMW and Audi use half; the sweep reads two whole makes.
+    // One request stays unused: a segment is only started with two left.
+    expect(requested.filter((href) => href.endsWith("/robots.txt"))).toHaveLength(1);
+    expect(fetcher.requestsMade).toBe(5);
+    expect(adapter.completedSegments!()).toEqual(["audi:0-", "bmw:0-"]);
   });
 
   it("needs only the import's own database connection", async () => {
@@ -413,5 +421,171 @@ describe.skipIf(!url)("crawling AutoScout24 result lists", () => {
     } finally {
       await single.end();
     }
+  });
+});
+
+describe.skipIf(!url)("reading the mobile.de Search-API", () => {
+  let pool: Pool;
+  const PAGE = 2;
+
+  /** Ads in the Search-API's JSON format, named prefix-0, prefix-1, ... with the given prices. */
+  const ads = (prefix: string, prices: number[]) =>
+    prices.map((price, i) => ({
+      mobileAdId: `${prefix}-${i}`,
+      make: "BMW",
+      model: "320",
+      modelDescription: "320d Touring",
+      detailPageUrl: `https://suchen.mobile.de/auto-inserat/bmw-320/${prefix}-${i}.html?source=api`,
+      mileage: 120000,
+      firstRegistration: "201505",
+      fuel: "DIESEL",
+      gearbox: "AUTOMATIC_GEAR",
+      seller: { type: "DEALER", companyName: "Autohaus Köln", phones: [{ number: "0221 1" }], address: { zipcode: "50667", city: "Köln", country: "DE" } },
+      price: { consumerPriceGross: `${price}.00`, currency: "EUR" },
+    }));
+  const answer = (list: unknown[], total: number, maxPages: number) => JSON.stringify({ total, currentPage: 1, maxPages, pageSize: PAGE, ads: list });
+  const range = (from: number, to: number | null) => ({ from, to });
+  const search = (page: number, price?: { from: number; to: number | null }, make = "bmw") => searchUrl(make, page, price, PAGE);
+
+  function fakeApi(routes: Map<string, string>, status = 200, maxRequests?: number) {
+    const requests: { url: string; authorization: string }[] = [];
+    const api = new MobileDeApi({
+      user: "test-user",
+      password: "test-password",
+      minDelayMs: 0,
+      maxRequests,
+      sleep: async () => undefined,
+      fetchImpl: (async (input: string | URL, init?: RequestInit) => {
+        requests.push({ url: String(input), authorization: (init?.headers as Record<string, string>).authorization });
+        return new Response(routes.get(String(input)) ?? answer([], 0, 0), { status });
+      }) as typeof fetch,
+    });
+    return { api, requests };
+  }
+
+  const adapterFor = (make: string, routes: Map<string, string>, status = 200, maxRequests?: number) =>
+    createMobileDeAdapter({ api: fakeApi(routes, status, maxRequests).api, makes: [make], pageSize: PAGE });
+
+  beforeAll(async () => {
+    pool = await freshTestDatabase();
+  }, 60_000);
+
+  afterAll(async () => {
+    await pool?.end();
+  });
+
+  it("reads newest ads and price segments and counts misses only in segments read completely", async () => {
+    const routes = new Map<string, string>([
+      // Newest changes and the whole make: more than the API pages through, so it is split.
+      [search(1), answer(ads("new", [25000, 31000]), 2500, 1250)],
+      // 0-1000: three ads on two pages.
+      [search(1, range(0, 1000)), answer(ads("cheap", [500, 900]), 3, 2)],
+      [search(2, range(0, 1000)), answer(ads("cheap2", [700]), 3, 2)],
+      // 1000-2000: the list grows while it is read, so it does not count as complete.
+      [search(1, range(1000, 2000)), answer(ads("mid", [1100, 1200]), 3, 2)],
+      [search(2, range(1000, 2000)), answer(ads("mid2", [1300, 1400]), 4, 2)],
+    ]);
+    const crawl = () => {
+      const fake = fakeApi(routes);
+      return { ...fake, adapter: createMobileDeAdapter({ api: fake.api, makes: ["bmw"], pageSize: PAGE }) };
+    };
+
+    const first = crawl();
+    await runIngest(pool, first.adapter);
+    expect(first.adapter.completedSegments!()).toContain("bmw:0-1000");
+    expect(first.adapter.completedSegments!()).not.toContain("bmw:1000-2000");
+    expect(first.adapter.completedSegments!()).not.toContain("bmw:0-");
+    // Only the API is asked, always with the API account.
+    expect(first.requests.every((r) => r.url.startsWith("https://services.mobile.de/search-api/search?"))).toBe(true);
+    expect(first.requests.every((r) => r.authorization.startsWith("Basic "))).toBe(true);
+
+    const source = await pool.query("select name, kind from sources where id = 'mobilede'");
+    expect(source.rows[0]).toEqual({ name: "mobile.de", kind: "api" });
+    const stored = await pool.query<{ external_id: string; segment: string | null; model_slug: string | null; seller_name: string | null; fuel: string; zip: string }>(
+      "select external_id, segment, model_slug, seller_name, fuel, zip from listings where source_id = 'mobilede' order by external_id",
+    );
+    const byId = new Map(stored.rows.map((row) => [row.external_id, row]));
+    expect(byId.get("cheap-1")).toMatchObject({ segment: "bmw:0-1000", seller_name: "Autohaus Köln", fuel: "diesel", zip: "50667" });
+    expect(byId.get("new-0")?.segment).toBeNull();
+    const raw = await pool.query("select payload::text as payload from raw_listings where source_id = 'mobilede'");
+    expect(raw.rows.some((row) => row.payload.includes("0221"))).toBe(false);
+
+    // The 900 EUR car is sold: gone after two complete reads of its segment without it.
+    routes.set(search(1, range(0, 1000)), answer([...ads("cheap", [500]), ...ads("cheap2", [700])], 2, 1));
+    await runIngest(pool, crawl().adapter);
+    const once = await pool.query("select status, missed_runs from listings where external_id = 'cheap-1'");
+    expect(once.rows[0]).toEqual({ status: "active", missed_runs: 1 });
+    await runIngest(pool, crawl().adapter);
+    const gone = await pool.query("select external_id from listings where source_id = 'mobilede' and status = 'gone'");
+    expect(gone.rows.map((row) => row.external_id)).toEqual(["cheap-1"]);
+    // The segment that changed while it was read never takes anything out.
+    expect((await pool.query("select status from listings where external_id = 'mid-0'")).rows[0].status).toBe("active");
+  });
+  it("moves listings of a split range to the smaller ranges, so their misses still count", async () => {
+    const routes = new Map<string, string>([
+      [search(1, undefined, "audi"), answer(ads("a-new", [30000]), 2500, 1250)],
+      [search(1, range(1000, 2000), "audi"), answer(ads("a", [1100, 1600]), 2, 1)],
+    ]);
+    await runIngest(pool, adapterFor("audi", routes));
+    const tagged = await pool.query("select segment from listings where external_id = 'a-1'");
+    expect(tagged.rows[0].segment).toBe("audi:1000-2000");
+
+    // The range grew too large and is split; the 1600 EUR car was sold meanwhile.
+    routes.set(search(1, range(1000, 2000), "audi"), answer(ads("a", [1100]), 2500, 1250));
+    routes.set(search(1, range(1000, 1500), "audi"), answer(ads("a", [1100]), 1, 1));
+    const second = adapterFor("audi", routes);
+    await runIngest(pool, second);
+    expect(second.completedSegments!()).toEqual(expect.arrayContaining(["audi:1000-1500", "audi:1500-2000"]));
+    const sold = await pool.query("select segment, missed_runs from listings where external_id = 'a-1'");
+    expect(sold.rows[0]).toEqual({ segment: "audi:1500-2000", missed_runs: 1 });
+  });
+
+  it("counts cars without a price when it reads a whole make", async () => {
+    const unpriced = { ...ads("o-np", [1000])[0], price: {} };
+    const routes = new Map([[search(1, undefined, "opel"), answer([...ads("o", [5000]), unpriced], 2, 1)]]);
+    const adapter = adapterFor("opel", routes);
+    await runIngest(pool, adapter);
+    expect(adapter.completedSegments!()).toContain("opel:0-");
+  });
+
+  it("fails a run in which every search is rejected, and takes nothing out", async () => {
+    // A listing read in an earlier run and not seen for 40 days since.
+    await runIngest(pool, adapterFor("audi", new Map([[search(1, undefined, "audi"), answer(ads("stale", [8000]), 1, 1)]])));
+    await pool.query("update listings set last_seen_at = now() - interval '40 days' where external_id = 'stale-0'");
+    const before = (await pool.query<{ now: Date }>("select now()")).rows[0].now;
+    await expect(runIngest(pool, adapterFor("audi", new Map(), 400))).rejects.toThrow(/none of \d+ searches succeeded/);
+    expect((await pool.query("select status from listings where external_id = 'stale-0'")).rows).toEqual([{ status: "active" }]);
+
+    // Every segment's attempt was recorded although its first page failed, so it moves to the back.
+    const untried = await pool.query(
+      "select key from crawl_segments where source_id = 'mobilede' and key like 'audi:%' and not retired and (last_started_at is null or last_started_at < $1)",
+      [before],
+    );
+    expect(untried.rows).toEqual([]);
+  });
+  it("leaves a range the remaining requests cannot finish for the start of the next run", async () => {
+    await pool.query("insert into sources (id, name, kind) values ('mobilede', 'mobile.de', 'api') on conflict do nothing");
+    // A small range that comes first and a five-page range behind it.
+    await pool.query(
+      `insert into crawl_segments (source_id, key, params, retired, last_total, last_started_at) values
+         ('mobilede', 'skoda:0-', '{"make":"skoda","priceFrom":0,"priceTo":null}', true, 2500, now() - interval '3 days'),
+         ('mobilede', 'skoda:0-1000', '{"make":"skoda","priceFrom":0,"priceTo":1000}', false, 2, now() - interval '2 days'),
+         ('mobilede', 'skoda:1000-2000', '{"make":"skoda","priceFrom":1000,"priceTo":2000}', false, 10, now() - interval '1 day')`,
+    );
+    const routes = new Map<string, string>([[search(1, range(0, 1000), "skoda"), answer(ads("s", [500, 600]), 2, 1)]]);
+    for (let page = 1; page <= 5; page += 1) {
+      routes.set(search(page, range(1000, 2000), "skoda"), answer(ads(`b${page}`, [1000 + page * 10, 1005 + page * 10]), 10, 5));
+    }
+
+    // 6 requests: 1 for the newest page, 5 for the sweep. After the small range 4 are left, too few
+    // for the five pages, so the large range is not started.
+    const first = adapterFor("skoda", routes, 200, 6);
+    await runIngest(pool, first);
+    expect(first.completedSegments!()).toEqual(["skoda:0-1000"]);
+
+    // The next run starts with it and reads it to the end.
+    const second = adapterFor("skoda", routes, 200, 6);
+    await runIngest(pool, second);
+    expect(second.completedSegments!()).toContain("skoda:1000-2000");
   });
 });
