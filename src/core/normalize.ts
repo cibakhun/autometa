@@ -178,23 +178,60 @@ export function resolveMake(raw: string): MakeDef | null {
   );
 }
 
+/** How many words may come before the make in a title: "2023 Skoda Superb", "Verkaufe meinen VW Golf". */
+const MAX_WORDS_BEFORE_MAKE = 3;
+
 /**
- * Finds a make at the start of a free-text title: "Mercedes Benz V250 4Matic" -> Mercedes-Benz
- * with the rest "V250 4Matic". The longest matching name or alias wins.
+ * Finds a make near the start of a free-text title: "Mercedes Benz V250 4Matic" -> Mercedes-Benz
+ * with the rest "V250 4Matic"; "2023 Skoda Superb" -> Škoda with "Superb". The earliest match
+ * wins, and the longest name or alias at that position.
  */
 export function findMakeInTitle(title: string): { make: MakeDef; rest: string } | null {
   const rawWords = title.trim().split(/\s+/).filter(Boolean);
   const words = normalizeText(title).split(" ").filter(Boolean);
-  let best: { make: MakeDef; length: number } | null = null;
-  for (const make of MAKES) {
-    for (const key of [make.slug, make.name, ...(make.aliases ?? [])].map(normalizeText)) {
-      const keyWords = key.split(" ").filter(Boolean);
-      const matches = keyWords.length > 0 && keyWords.every((word, i) => words[i] === word);
-      if (matches && (!best || keyWords.length > best.length)) best = { make, length: keyWords.length };
+  for (let start = 0; start <= MAX_WORDS_BEFORE_MAKE && start < words.length; start += 1) {
+    let best: { make: MakeDef; length: number } | null = null;
+    for (const make of MAKES) {
+      for (const key of [make.slug, make.name, ...(make.aliases ?? [])].map(normalizeText)) {
+        const keyWords = key.split(" ").filter(Boolean);
+        const matches = keyWords.length > 0 && keyWords.every((word, i) => words[start + i] === word);
+        if (matches && (!best || keyWords.length > best.length)) best = { make, length: keyWords.length };
+      }
     }
+    if (best) return { make: best.make, rest: restAfter(rawWords, start + best.length) };
   }
-  if (!best) return null;
-  return { make: best.make, rest: restAfter(rawWords, best.length) };
+  return null;
+}
+
+/**
+ * The model in a title that does not start with it, for a known make: "Verkaufe Polo R-Line"
+ * or "E46 330i Touring" (BMW). Tries the first few words as the start of the model. Words of
+ * one character and engine sizes are skipped, so "1. Hand" never becomes smart #1 and
+ * "Tribute 3.0 V6" never a Mazda 3.
+ */
+export function resolveModelInTitle(makeName: string, title: string): ResolvedMakeModel {
+  const rawWords = title.trim().split(/\s+/).filter(Boolean);
+  const direct = resolveMakeModel(makeName, title);
+  if (direct.modelSlug || !direct.makeSlug) return direct;
+  for (let start = 1; start <= MAX_WORDS_BEFORE_MAKE && start < rawWords.length; start += 1) {
+    if (normalizeText(rawWords[start]).length < 2 || /^\d+[.,]\d/.test(rawWords[start])) continue;
+    const resolved = resolveMakeModel(makeName, rawWords.slice(start).join(" "));
+    if (resolved.modelSlug) return resolved;
+  }
+  return direct;
+}
+
+/**
+ * Ads that offer no car for sale: wanted ads ("Suche Golf 7"), dealers buying up cars
+ * ("Ankauf aller Fahrzeuge") and lease takeovers, whose price is a monthly rate.
+ */
+export function isNotForSale(title: string): boolean {
+  const text = normalizeText(title);
+  return (
+    // At the start only: sale ads may say "neuer Besitzer gesucht" or "Ankauf möglich" later on.
+    /^(?:\S+ )?(?:suche|ich suche|wir suchen|kaufe|wir kaufen|kaufgesuch|ankauf)\b/.test(text) ||
+    /\b(?:leasingubernahme|leasing ubernahme)\b/.test(text)
+  );
 }
 
 export interface ResolvedMakeModel {

@@ -4,6 +4,7 @@ import {
   detectFuel,
   detectTransmission,
   findMakeInTitle,
+  isNotForSale,
   kwToPs,
   normalizeBodyType,
   normalizeFuel,
@@ -12,6 +13,7 @@ import {
   parseInteger,
   parsePowerKw,
   resolveMakeModel,
+  resolveModelInTitle,
 } from "./normalize";
 
 describe("parseInteger", () => {
@@ -182,9 +184,58 @@ describe("findMakeInTitle", () => {
     expect(findMakeInTitle("VW-Golf-1.4 TSI")).toMatchObject({ make: { slug: "volkswagen" }, rest: "Golf-1.4 TSI" });
   });
 
-  it("returns null when the title does not start with a make", () => {
+  it("finds the make after a few leading words", () => {
+    expect(findMakeInTitle("2023 Skoda Superb 2.0 TSI")).toMatchObject({ make: { slug: "skoda" }, rest: "Superb 2.0 TSI" });
+    expect(findMakeInTitle("Export / Bastler Opel Astra J GTC")).toMatchObject({ make: { slug: "opel" }, rest: "Astra J GTC" });
+    expect(findMakeInTitle("Verkaufe meinen VW Golf")).toMatchObject({ make: { slug: "volkswagen" }, rest: "Golf" });
+  });
+
+  it("returns null when no make is among the first words", () => {
     expect(findMakeInTitle("Suche Golf 7")).toBeNull();
+    expect(findMakeInTitle("Sehr schöner gepflegter Wagen VW Golf")).toBeNull();
     expect(findMakeInTitle("")).toBeNull();
+  });
+});
+
+describe("resolveModelInTitle", () => {
+  it("finds the model behind leading words", () => {
+    expect(resolveModelInTitle("VW", "Verkaufe Polo R-Line")).toMatchObject({ makeSlug: "volkswagen", modelSlug: "polo", variant: "R-Line" });
+    expect(resolveModelInTitle("BMW", "E46 330i Touring")).toMatchObject({ modelSlug: "3er" });
+    expect(resolveModelInTitle("VW", "Golf 7 GTI")).toMatchObject({ modelSlug: "golf", variant: "7 GTI" });
+  });
+
+  it("does not read one-letter words or engine sizes as models", () => {
+    expect(resolveModelInTitle("smart", "Erstbesitz 1. Hand").modelSlug).toBeNull();
+    expect(resolveModelInTitle("Mazda", "Tribute 3.0 V6").modelSlug).toBeNull();
+  });
+});
+
+describe("isNotForSale", () => {
+  it.each(["‼️ Suche Opel Astra Vectra Signum", "Motorschaden Ankauf Opel Corsa Astra", "Leasingübernahme Opel Corsa 100 PS", "Kaufe Ihr Auto sofort"])(
+    "skips %s",
+    (title) => expect(isNotForSale(title)).toBe(true),
+  );
+
+  it.each(["VW Golf 7, neuer Besitzer gesucht", "BMW 320d Inzahlungnahme und Ankauf möglich", "Verkaufe Polo R-Line"])("keeps %s", (title) =>
+    expect(isNotForSale(title)).toBe(false),
+  );
+});
+
+describe("models sellers write in their own way", () => {
+  it.each([
+    ["Volvo", "XC 60 Summum", "xc60"],
+    ["Lexus", "IS200 Sport", "is"],
+    ["Lexus", "RX450h F Sport", "rx"],
+    ["Porsche", "992 Carrera S", "911"],
+    ["Tesla", "Modell 3 Long Range", "model-3"],
+    ["Tesla", "S85D Performance", "model-s"],
+    ["Peugeot", "207cc Cabrio", "207"],
+    ["DS Automobiles", "Citroen DS3 Automatik", "ds3"],
+    ["smart", "451 Cabrio", "fortwo"],
+    ["Abarth", "595C Competizione", "500"],
+    ["Kia", "K4 Spirit 1.6T", "k4"],
+  ])("%s %s", (make, model, slug) => {
+    expect(resolveMakeModel(make, model).modelSlug).toBe(slug);
   });
 });
 
