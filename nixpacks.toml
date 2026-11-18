@@ -12,3 +12,9 @@ cmds = ["npm run build"]
 
 [start]
 cmd = "npm run start"
+
+# The deployed app imports real listings from these portals and follows their robots.txt.
+# Values set in the app's environment variables in Coolify override these.
+[variables]
+SCRAPE_SOURCES = "autoscout24,kleinanzeigen"
+SCRAPE_RESPECT_ROBOTS = "true"
