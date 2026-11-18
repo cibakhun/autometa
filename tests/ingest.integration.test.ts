@@ -548,10 +548,12 @@ describe.skipIf(!url)("reading the mobile.de Search-API", () => {
   });
 
   it("fails a run in which every search is rejected, and takes nothing out", async () => {
-    await pool.query("update listings set last_seen_at = now() - interval '40 days' where external_id = 'a-0'");
+    // A listing read in an earlier run and not seen for 40 days since.
+    await runIngest(pool, adapterFor("audi", new Map([[search(1, undefined, "audi"), answer(ads("stale", [8000]), 1, 1)]])));
+    await pool.query("update listings set last_seen_at = now() - interval '40 days' where external_id = 'stale-0'");
     const before = (await pool.query<{ now: Date }>("select now()")).rows[0].now;
     await expect(runIngest(pool, adapterFor("audi", new Map(), 400))).rejects.toThrow(/none of \d+ searches succeeded/);
-    expect((await pool.query("select status from listings where external_id = 'a-0'")).rows[0].status).toBe("active");
+    expect((await pool.query("select status from listings where external_id = 'stale-0'")).rows).toEqual([{ status: "active" }]);
 
     // Every segment's attempt was recorded although its first page failed, so it moves to the back.
     const untried = await pool.query(
