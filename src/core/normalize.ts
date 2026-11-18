@@ -66,6 +66,8 @@ export function parseFirstRegistration(value: string | null | undefined): string
 const FUEL_RULES: [RegExp, Fuel][] = [
   [/plug ?in|phev/, "plugin_hybrid"],
   [/hybrid|hev/, "hybrid"],
+  // AutoScout24 writes hybrids as "Elektro/Benzin" or "Elektro/Diesel".
+  [/elektro (benzin|diesel)|(benzin|diesel) elektro/, "hybrid"],
   [/elektr|electric|^ev$|bev/, "electric"],
   [/diesel|tdi|cdi|hdi|dci/, "diesel"],
   [/autogas|lpg/, "lpg"],
@@ -81,6 +83,39 @@ export function normalizeFuel(value: string | null | undefined): Fuel | null {
     if (pattern.test(text)) return fuel;
   }
   return "other";
+}
+
+/**
+ * Words in a free-text title that reliably name the fuel. Unlike normalizeFuel, which reads a
+ * dedicated fuel field, this returns null when the title does not say.
+ */
+const TITLE_FUEL_RULES: [RegExp, Fuel][] = [
+  [/\b(plug ?in|phev|gte|e hybrid|ehybrid)\b/, "plugin_hybrid"],
+  [/\bhybrid\b/, "hybrid"],
+  [/\b(elektro (benzin|diesel)|(benzin|diesel) elektro)\b/, "hybrid"],
+  [/\b(elektro|electric|e tron|bev)\b/, "electric"],
+  [/\b(diesel|tdi|cdi|crdi|hdi|bluehdi|dci|tdci|cdti|d4d|jtd|multijet|\d{3}d|\d{2}d)\b/, "diesel"],
+  [/\b(autogas|lpg)\b/, "lpg"],
+  [/\b(erdgas|cng|tgi)\b/, "cng"],
+  [/\b(benzin|benziner|tsi|tfsi|fsi|mpi|ecoboost|\d{3}i)\b/, "petrol"],
+];
+
+export function detectFuel(text: string | null | undefined): Fuel | null {
+  if (!text) return null;
+  const normalized = normalizeText(text);
+  for (const [pattern, fuel] of TITLE_FUEL_RULES) {
+    if (pattern.test(normalized)) return fuel;
+  }
+  return null;
+}
+
+/** Like detectFuel, for the gearbox: only clear words count ("Auto" alone does not). */
+export function detectTransmission(text: string | null | undefined): Transmission | null {
+  if (!text) return null;
+  const normalized = normalizeText(text);
+  if (/\b(automatik|automatic|dsg|s tronic|tiptronic|steptronic|cvt|doppelkupplung)\b/.test(normalized)) return "automatic";
+  if (/\b(schaltgetriebe|schalter|handschalter|manuell|6 gang|5 gang)\b/.test(normalized)) return "manual";
+  return null;
 }
 
 export function normalizeTransmission(value: string | null | undefined): Transmission | null {
@@ -110,6 +145,26 @@ export function normalizeBodyType(value: string | null | undefined): BodyType | 
   return "other";
 }
 
+const TITLE_BODY_RULES: [RegExp, BodyType][] = [
+  [/\b(kombi|estate|touring|avant|variant|sportswagon|sports tourer|tourer|wagon|t modell|sw)\b/, "estate"],
+  [/\b(cabrio|cabriolet|roadster|convertible|spider|spyder)\b/, "convertible"],
+  [/\b(coupe|coupé)\b/, "coupe"],
+  [/\b(suv|gelandewagen|offroad|crossover)\b/, "suv"],
+  [/\b(van|kleinbus|bus|bulli|mpv|minivan|camper|wohnmobil)\b/, "van"],
+  [/\b(limousine|lim|sedan|saloon)\b/, "sedan"],
+  [/\b(kleinwagen)\b/, "small"],
+];
+
+/** Body type named in a free-text title or model line, or null when it does not say. */
+export function detectBodyType(text: string | null | undefined): BodyType | null {
+  if (!text) return null;
+  const normalized = normalizeText(text);
+  for (const [pattern, body] of TITLE_BODY_RULES) {
+    if (pattern.test(normalized)) return body;
+  }
+  return null;
+}
+
 export function resolveMake(raw: string): MakeDef | null {
   const text = normalizeText(raw);
   if (!text) return null;
@@ -121,6 +176,25 @@ export function resolveMake(raw: string): MakeDef | null {
         (make.aliases ?? []).some((alias) => normalizeText(alias) === text),
     ) ?? null
   );
+}
+
+/**
+ * Finds a make at the start of a free-text title: "Mercedes Benz V250 4Matic" -> Mercedes-Benz
+ * with the rest "V250 4Matic". The longest matching name or alias wins.
+ */
+export function findMakeInTitle(title: string): { make: MakeDef; rest: string } | null {
+  const rawWords = title.trim().split(/\s+/).filter(Boolean);
+  const words = normalizeText(title).split(" ").filter(Boolean);
+  let best: { make: MakeDef; length: number } | null = null;
+  for (const make of MAKES) {
+    for (const key of [make.slug, make.name, ...(make.aliases ?? [])].map(normalizeText)) {
+      const keyWords = key.split(" ").filter(Boolean);
+      const matches = keyWords.length > 0 && keyWords.every((word, i) => words[i] === word);
+      if (matches && (!best || keyWords.length > best.length)) best = { make, length: keyWords.length };
+    }
+  }
+  if (!best) return null;
+  return { make: best.make, rest: restAfter(rawWords, best.length) };
 }
 
 export interface ResolvedMakeModel {
@@ -159,18 +233,43 @@ export function resolveMakeModel(makeRaw: string, modelRaw: string): ResolvedMak
   if (!best) return { makeSlug: make.slug, modelSlug: null, variant: modelRaw.trim() || null };
 
   // Drop as many original words as the matched key had (handles "T-Roc" vs "t roc").
-  const consumed = consumedRawWords(rawWords, best.length);
-  const variant = rawWords.slice(consumed).join(" ").trim();
+  const variant = restAfter(rawWords, best.length);
   return { makeSlug: make.slug, modelSlug: best.slug, variant: variant || null };
 }
 
-/** How many raw (space-separated) words cover the first `normalizedCount` normalized words. */
-function consumedRawWords(rawWords: string[], normalizedCount: number): number {
+/**
+ * The raw text after the first `normalizedCount` normalized words. A raw word that holds more than
+ * the match keeps its rest as written: "VW-Golf-1.4 TSI" after one word is "Golf-1.4 TSI".
+ */
+function restAfter(rawWords: string[], normalizedCount: number): string {
   let covered = 0;
-  let index = 0;
-  while (covered < normalizedCount && index < rawWords.length) {
-    covered += normalizeText(rawWords[index]).split(" ").filter(Boolean).length;
-    index += 1;
+  for (let index = 0; index < rawWords.length; index += 1) {
+    if (covered >= normalizedCount) return rawWords.slice(index).join(" ");
+    const parts = normalizeText(rawWords[index]).split(" ").filter(Boolean).length;
+    if (covered + parts > normalizedCount) {
+      const tail = afterWordRuns(rawWords[index], normalizedCount - covered);
+      return [tail, ...rawWords.slice(index + 1)].filter(Boolean).join(" ");
+    }
+    covered += parts;
   }
-  return index;
+  return "";
+}
+
+/**
+ * The part of one raw word after its first `count` runs of letters or digits, as normalizeText
+ * splits them, without the separator in between: ("Golf-1.4", 1) -> "1.4".
+ */
+function afterWordRuns(word: string, count: number): string {
+  const chars = Array.from(word.normalize("NFC"));
+  let runs = 0;
+  let inRun = false;
+  for (let index = 0; index < chars.length; index += 1) {
+    const isWordChar = normalizeText(chars[index]) !== "";
+    if (isWordChar && !inRun) {
+      if (runs === count) return chars.slice(index).join("");
+      runs += 1;
+    }
+    inRun = isWordChar;
+  }
+  return "";
 }

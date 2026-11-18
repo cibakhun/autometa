@@ -26,12 +26,22 @@ export interface ListingSummary {
   transmission: Transmission | null;
   powerKw: number | null;
   bodyType: BodyType | null;
-  sellerType: SellerType;
+  /** Null when the source does not say. */
+  sellerType: SellerType | null;
   zip: string | null;
   city: string | null;
   sourceId: string;
   sourceName: string;
   distanceKm: number | null;
+  /** The same vehicle on other portals (duplicates), cheapest first. */
+  otherOffers: Offer[];
+}
+
+/** One portal's listing of a vehicle. */
+export interface Offer {
+  id: number;
+  sourceName: string;
+  priceEur: number;
 }
 
 export interface SearchResult {
@@ -55,7 +65,7 @@ const escapeLike = (value: string) => value.replace(/[\\%_]/g, (char) => `\\${ch
 
 /** Builds the WHERE clause; returns the SQL and, when a radius applies, the distance expression. */
 export function buildWhere(filters: SearchFilters, origin: Origin | null, params: Params) {
-  const where = ["l.status = 'active'"];
+  const where = ["l.status = 'active'", "l.source_id in (select id from sources where active)"];
   const add = (sql: (p: (value: unknown) => string) => string) => where.push(sql((value) => params.add(value)));
 
   if (filters.make) add((p) => `l.make_slug = ${p(filters.make)}`);
@@ -70,6 +80,7 @@ export function buildWhere(filters: SearchFilters, origin: Origin | null, params
   if (filters.body.length > 0) add((p) => `l.body_type = any(${p(filters.body)}::text[])`);
   if (filters.transmission) add((p) => `l.transmission = ${p(filters.transmission)}`);
   if (filters.seller) add((p) => `l.seller_type = ${p(filters.seller)}`);
+  if (filters.source.length > 0) add((p) => `l.source_id = any(${p(filters.source)}::text[])`);
   if (filters.q) add((p) => `l.title ilike ${p(`%${escapeLike(filters.q!)}%`)}`);
 
   let distance: string | null = null;
@@ -87,22 +98,30 @@ export function buildWhere(filters: SearchFilters, origin: Origin | null, params
   return { where: where.join("\n  and "), distance };
 }
 
+/** The listing a group of duplicates is shown with: the cheapest one that matches the filters. */
+const GROUP = "coalesce(l.cluster_id, l.id)";
+
 export async function searchListings(pool: Pool, filters: SearchFilters, origin: Origin | null): Promise<SearchResult> {
   const params = new Params();
   const { where, distance } = buildWhere(filters, origin, params);
   const sort: Sort = filters.sort === "distance" && !distance ? "newest" : filters.sort;
   const offset = (filters.page - 1) * PAGE_SIZE;
 
-  const countSql = `select count(*)::int as total from listings l where ${where}`;
+  // A vehicle listed on several portals counts once.
+  const countSql = `select count(distinct ${GROUP})::int as total from listings l where ${where}`;
   const itemsSql = `
     select l.id, l.title, l.make_slug, l.model_slug, l.price_eur, l.mileage_km,
            to_char(l.first_registration, 'YYYY-MM-DD') as first_registration,
-           l.fuel, l.transmission, l.power_kw, l.body_type, l.seller_type, l.zip, l.city,
+           l.fuel, l.transmission, l.power_kw, l.body_type, l.seller_type, l.zip, l.city, l.cluster_id,
            s.id as source_id, s.name as source_name,
            ${distance ? `round(${distance}::numeric, 1)::float8` : "null::float8"} as distance_km
-      from listings l
+      from (
+        select l.*, row_number() over (partition by ${GROUP} order by l.price_eur asc, l.id asc) as group_rank
+          from listings l
+         where ${where}
+      ) l
       join sources s on s.id = l.source_id
-     where ${where}
+     where l.group_rank = 1
      order by ${ORDER_BY[sort]}
      limit ${PAGE_SIZE} offset ${offset}`;
 
@@ -111,32 +130,59 @@ export async function searchListings(pool: Pool, filters: SearchFilters, origin:
     pool.query(itemsSql, params.values),
   ]);
   const total = count.rows[0]?.total ?? 0;
+  const offers = await getOffers(
+    pool,
+    items.rows.filter((row) => row.cluster_id !== null).map((row) => Number(row.cluster_id)),
+  );
 
   return {
     total,
     page: filters.page,
     pageSize: PAGE_SIZE,
     pageCount: Math.max(1, Math.ceil(total / PAGE_SIZE)),
-    items: items.rows.map((row) => ({
-      id: Number(row.id),
-      title: row.title,
-      makeSlug: row.make_slug,
-      modelSlug: row.model_slug,
-      priceEur: row.price_eur,
-      mileageKm: row.mileage_km,
-      firstRegistration: row.first_registration,
-      fuel: row.fuel,
-      transmission: row.transmission,
-      powerKw: row.power_kw,
-      bodyType: row.body_type,
-      sellerType: row.seller_type,
-      zip: row.zip,
-      city: row.city,
-      sourceId: row.source_id,
-      sourceName: row.source_name,
-      distanceKm: row.distance_km,
-    })),
+    items: items.rows.map((row) => {
+      const id = Number(row.id);
+      return {
+        id,
+        title: row.title,
+        makeSlug: row.make_slug,
+        modelSlug: row.model_slug,
+        priceEur: row.price_eur,
+        mileageKm: row.mileage_km,
+        firstRegistration: row.first_registration,
+        fuel: row.fuel,
+        transmission: row.transmission,
+        powerKw: row.power_kw,
+        bodyType: row.body_type,
+        sellerType: row.seller_type,
+        zip: row.zip,
+        city: row.city,
+        sourceId: row.source_id,
+        sourceName: row.source_name,
+        distanceKm: row.distance_km,
+        otherOffers: (offers.get(Number(row.cluster_id)) ?? []).filter((offer) => offer.id !== id),
+      };
+    }),
   };
+}
+
+/** Active listings of the given duplicate groups, cheapest first, by cluster id. */
+async function getOffers(pool: Pool, clusterIds: number[]): Promise<Map<number, Offer[]>> {
+  const offers = new Map<number, Offer[]>();
+  if (clusterIds.length === 0) return offers;
+  const { rows } = await pool.query(
+    `select l.cluster_id, l.id, s.name as source_name, l.price_eur
+       from listings l join sources s on s.id = l.source_id
+      where l.cluster_id = any($1::int8[]) and l.status = 'active' and s.active
+      order by l.price_eur asc, l.id asc`,
+    [clusterIds],
+  );
+  for (const row of rows) {
+    const list = offers.get(Number(row.cluster_id)) ?? [];
+    list.push({ id: Number(row.id), sourceName: row.source_name, priceEur: row.price_eur });
+    offers.set(Number(row.cluster_id), list);
+  }
+  return offers;
 }
 
 /** Exact postal code, or the numerically closest known one in the same region (first two digits). */
@@ -162,11 +208,11 @@ export interface MakeFacet {
 /** Makes and models that currently have active listings, with counts, for the filter form. */
 export async function getMakeFacets(pool: Pool): Promise<MakeFacet[]> {
   const { rows } = await pool.query<{ make_slug: string; make_name: string; model_slug: string | null; model_name: string | null; count: number }>(
-    `select l.make_slug, mk.name as make_name, l.model_slug, md.name as model_name, count(*)::int as count
+    `select l.make_slug, mk.name as make_name, l.model_slug, md.name as model_name, count(distinct ${GROUP})::int as count
        from listings l
        join makes mk on mk.slug = l.make_slug
        left join models md on md.make_slug = l.make_slug and md.slug = l.model_slug
-      where l.status = 'active'
+      where l.status = 'active' and l.source_id in (select id from sources where active)
       group by 1, 2, 3, 4
       order by mk.name, md.name`,
   );
@@ -180,10 +226,55 @@ export async function getMakeFacets(pool: Pool): Promise<MakeFacet[]> {
   return [...makes.values()];
 }
 
+export interface SourceFacet {
+  id: string;
+  name: string;
+  count: number;
+}
+
+/** Portals that currently have active listings, with counts, for the filter form. */
+export async function getSourceFacets(pool: Pool): Promise<SourceFacet[]> {
+  const { rows } = await pool.query<SourceFacet>(
+    `select s.id, s.name, count(*)::int as count
+       from listings l join sources s on s.id = l.source_id
+      where l.status = 'active' and s.active
+      group by s.id, s.name
+      order by s.name`,
+  );
+  return rows;
+}
+
+export interface SourceStatus {
+  id: string;
+  name: string;
+  kind: string;
+  /** End of the last import that stored listings, ISO timestamp, or null. */
+  lastImportAt: string | null;
+}
+
+/** Active sources and when each last delivered listings, for the notice above the search. */
+export async function getSourceStatus(pool: Pool): Promise<SourceStatus[]> {
+  const { rows } = await pool.query(
+    `select s.id, s.name, s.kind,
+            (select max(r.finished_at) from ingest_runs r where r.source_id = s.id and r.upserted > 0) as last_import_at
+       from sources s
+      where s.active and exists (select 1 from listings l where l.source_id = s.id and l.status = 'active')
+      order by s.name`,
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    kind: row.kind,
+    lastImportAt: row.last_import_at ? new Date(row.last_import_at).toISOString() : null,
+  }));
+}
+
 export interface ListingDetail extends ListingSummary {
   variant: string | null;
   color: string | null;
   sellerName: string | null;
+  /** 'gone' once the listing disappeared from its portal. */
+  status: "active" | "gone";
   firstSeenAt: string;
   lastSeenAt: string;
 }
@@ -197,6 +288,8 @@ export async function getListing(pool: Pool, id: number): Promise<ListingDetail 
   );
   const row = rows[0];
   if (!row) return null;
+  const clusterId = row.cluster_id === null ? null : Number(row.cluster_id);
+  const offers = clusterId === null ? [] : ((await getOffers(pool, [clusterId])).get(clusterId) ?? []);
   return {
     id: Number(row.id),
     title: row.title,
@@ -215,9 +308,11 @@ export async function getListing(pool: Pool, id: number): Promise<ListingDetail 
     sourceId: row.source_id,
     sourceName: row.source_name,
     distanceKm: null,
+    otherOffers: offers.filter((offer) => offer.id !== Number(row.id)),
     variant: row.variant,
     color: row.color,
     sellerName: row.seller_name,
+    status: row.status,
     firstSeenAt: new Date(row.first_seen_at).toISOString(),
     lastSeenAt: new Date(row.last_seen_at).toISOString(),
   };

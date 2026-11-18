@@ -6,7 +6,7 @@ import { useState, type FormEvent } from "react";
 import { BODY_TYPE_LABELS, BODY_TYPES, FUEL_LABELS, FUELS, SELLER_TYPE_LABELS, SELLER_TYPES, TRANSMISSION_LABELS, TRANSMISSIONS } from "@/core/types";
 import type { SearchFilters } from "@/search/filters";
 import { RADII_KM, SORT_LABELS, SORTS } from "@/search/filters";
-import type { MakeFacet } from "@/search/query";
+import type { MakeFacet, SourceFacet } from "@/search/query";
 
 const KM_STEPS = [10_000, 25_000, 50_000, 75_000, 100_000, 150_000, 200_000];
 const PS_STEPS = [60, 75, 100, 125, 150, 200, 250, 300];
@@ -18,7 +18,7 @@ const fieldClass =
   "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/20";
 const labelClass = "mb-1 block text-xs font-medium text-muted";
 
-export function FilterForm({ facets, filters }: { facets: MakeFacet[]; filters: SearchFilters }) {
+export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; sources: SourceFacet[]; filters: SearchFilters }) {
   const router = useRouter();
   const [make, setMake] = useState(filters.make ?? "");
   const [open, setOpen] = useState(false);
@@ -176,6 +176,20 @@ export function FilterForm({ facets, filters }: { facets: MakeFacet[]; filters: 
             </select>
           </div>
         </div>
+
+        {sources.length > 1 && (
+          <fieldset>
+            <legend className={labelClass}>Börsen</legend>
+            <div className="grid grid-cols-1 gap-y-1">
+              {sources.map((source) => (
+                <label key={source.id} className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" name="source" value={source.id} defaultChecked={filters.source.includes(source.id)} className="accent-accent" />
+                  {source.name} <span className="text-muted">({nf.format(source.count)})</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        )}
 
         <div className="grid grid-cols-2 gap-2">
           <div>

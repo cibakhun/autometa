@@ -30,7 +30,7 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
     ["Fahrzeugtyp", listing.bodyType ? BODY_TYPE_LABELS[listing.bodyType] : null],
     ["Farbe", listing.color],
     ["Standort", [listing.zip, listing.city].filter(Boolean).join(" ") || null],
-    ["Anbieter", listing.sellerName ?? SELLER_TYPE_LABELS[listing.sellerType]],
+    ["Anbieter", listing.sellerName ?? (listing.sellerType ? SELLER_TYPE_LABELS[listing.sellerType] : null)],
     ["Quelle", listing.sourceName],
     ["Zuletzt gesehen", new Date(listing.lastSeenAt).toLocaleDateString("de-DE")],
   ];
@@ -41,8 +41,13 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
         ← Zurück zur Suche
       </Link>
       <article className="mt-3 rounded-xl border border-line bg-surface p-6">
+        {listing.status === "gone" && (
+          <p className="mb-4 rounded-md border border-warn-line bg-warn-bg px-3 py-2 text-sm text-warn-text">
+            Dieses Angebot ist bei {listing.sourceName} nicht mehr zu finden und wahrscheinlich verkauft.
+          </p>
+        )}
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <h1 className="text-2xl font-bold leading-tight">{listing.title}</h1>
+          <h1 className="min-w-0 text-2xl font-bold leading-tight [overflow-wrap:anywhere]">{listing.title}</h1>
           <p className="text-2xl font-bold">{formatPrice(listing.priceEur)}</p>
         </div>
         <dl className="mt-6 grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
@@ -66,6 +71,24 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
           </a>
           <p className="text-xs text-muted">Fotos, Beschreibung und Kontakt findest du in der Originalanzeige.</p>
         </div>
+        {listing.otherOffers.length > 0 && (
+          <section className="mt-6 border-t border-line pt-4">
+            <h2 className="text-sm font-semibold">Dieses Fahrzeug gibt es auch bei</h2>
+            <ul className="mt-2 space-y-1 text-sm">
+              {listing.otherOffers.map((offer) => (
+                <li key={offer.id} className="flex items-center justify-between gap-4">
+                  <a href={`/go/${offer.id}`} target="_blank" rel="noopener nofollow" className="font-medium text-accent hover:underline">
+                    {offer.sourceName}
+                  </a>
+                  <span className="font-medium">{formatPrice(offer.priceEur)}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-xs text-muted">
+              Erkannt an Marke, Modell, Erstzulassung, Kilometerstand, Preis und Standort. Ein Treffer kann in seltenen Fällen ein anderes Fahrzeug sein.
+            </p>
+          </section>
+        )}
       </article>
     </div>
   );

@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { Pool } from "pg";
+import type { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { haversineKm } from "@/core/geo";
 import { createDemoAdapter } from "@/ingest/adapters/demo";
@@ -11,6 +11,7 @@ import { runIngest } from "@/ingest/run";
 import { seedReferenceData } from "@/ingest/seed";
 import { parseFilters } from "@/search/filters";
 import { getMakeFacets, recordClick, resolveZip, searchListings } from "@/search/query";
+import { emptyTestDatabase } from "./test-database";
 
 /**
  * Runs against a real Postgres. Set TEST_DATABASE_URL to a database whose name contains "test";
@@ -22,9 +23,7 @@ describe.skipIf(!url)("search against Postgres", () => {
   let pool: Pool;
 
   beforeAll(async () => {
-    if (!new URL(url!).pathname.includes("test")) throw new Error("TEST_DATABASE_URL must point to a *test* database");
-    pool = new Pool({ connectionString: url });
-    await pool.query("drop schema public cascade; create schema public;");
+    pool = await emptyTestDatabase();
     await migrate(pool);
     await seedReferenceData(pool);
     await runIngest(pool, createDemoAdapter({ count: 600, seed: 3 }));
@@ -36,6 +35,14 @@ describe.skipIf(!url)("search against Postgres", () => {
 
   it("is idempotent when migrations run again", async () => {
     expect(await migrate(pool)).toEqual([]);
+  });
+
+  it("accepts scraped portals as a source kind", async () => {
+    await pool.query("insert into sources (id, name, kind) values ('scrape-probe', 'Probe', 'scrape')");
+    await pool.query("delete from sources where id = 'scrape-probe'");
+    await expect(pool.query("insert into sources (id, name, kind) values ('bad-probe', 'Probe', 'crawl')")).rejects.toThrow(
+      /sources_kind_check/,
+    );
   });
 
   it("applies a migration once when two runs start at the same time", async () => {
@@ -85,10 +92,13 @@ describe.skipIf(!url)("search against Postgres", () => {
   });
 
   it("falls back to a nearby postal code", async () => {
-    const origin = await resolveZip(pool, "10999");
-    expect(origin).toMatchObject({ city: "Berlin", exact: false });
-    expect(haversineKm(origin!.lat, origin!.lng, 52.52, 13.405)).toBeLessThan(1);
-    expect(await resolveZip(pool, "27999")).toBeNull();
+    expect(await resolveZip(pool, "10999")).toMatchObject({ city: "Berlin Kreuzberg", exact: true });
+    // 10875 belongs to a single company and is not in the list; the numerically closest code in the region is used.
+    const origin = await resolveZip(pool, "10875");
+    expect(origin).toMatchObject({ zip: "10829", city: "Berlin", exact: false });
+    expect(haversineKm(origin!.lat, origin!.lng, 52.52, 13.405)).toBeLessThan(10);
+    // No German postal code starts with 05.
+    expect(await resolveZip(pool, "05999")).toBeNull();
   });
 
   it("escapes LIKE wildcards in the free-text search", async () => {
@@ -127,8 +137,7 @@ describe.skipIf(!url)("preparing a fresh database", () => {
   let pool: Pool;
 
   beforeAll(async () => {
-    pool = new Pool({ connectionString: url });
-    await pool.query("drop schema public cascade; create schema public;");
+    pool = await emptyTestDatabase();
     await migrate(pool);
   }, 60_000);
 
