@@ -126,8 +126,10 @@ export function parseKleinanzeigenPage(html: string, listMake: string | null = n
 
 export function normalizeKleinanzeigen(raw: RawListing): NormalizedListing | null {
   const item = raw.payload as unknown as KleinanzeigenItem;
-  const price = item.price && /\d/.test(item.price) ? parseInteger(item.price) : null;
-  if (price === null || price < 100) return null;
+  // Cars given away ("Zu verschenken") are kept at 0 €; other prices under 100 € are placeholders.
+  const giveaway = item.price === "Zu verschenken";
+  const price = giveaway ? 0 : item.price && /\d/.test(item.price) ? parseInteger(item.price) : null;
+  if (price === null || (!giveaway && price < 100)) return null;
   if (isNotForSale(item.title)) return null;
 
   // The make from the title wins when it agrees with the list; otherwise the list's make filter.

@@ -4,7 +4,7 @@ import { Suspense } from "react";
 import { BODY_TYPE_LABELS, FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
 import { ListingPhoto } from "@/components/listing-photo";
 import { getPool } from "@/lib/db";
-import { formatKm, formatPower, formatPrice, formatRegistration } from "@/lib/format";
+import { formatInspection, formatKm, formatPower, formatPrice, formatRegistration } from "@/lib/format";
 import { getListing } from "@/search/query";
 
 export default function ListingPage({ params }: PageProps<"/angebot/[id]">) {
@@ -28,6 +28,7 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
     ["Leistung", formatPower(listing.powerKw)],
     ["Kraftstoff", listing.fuel ? FUEL_LABELS[listing.fuel] : null],
     ["Getriebe", listing.transmission ? TRANSMISSION_LABELS[listing.transmission] : null],
+    ["HU/TÜV", formatInspection(listing.huUntil, listing.huBasis)],
     ["Fahrzeugtyp", listing.bodyType ? BODY_TYPE_LABELS[listing.bodyType] : null],
     ["Farbe", listing.color],
     ["Standort", [listing.zip, listing.city].filter(Boolean).join(" ") || null],

@@ -265,6 +265,42 @@ describe.skipIf(!url)("importing scraped portals", () => {
     expect((await getListing(pool, items[0].id))?.imageUrl).toBeNull();
   });
 
+  it("reads the HU from the title or the first registration and filters by it", async () => {
+    const now = new Date();
+    const thisMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-01`;
+    await runIngest(
+      pool,
+      fakePortal(PORTAL_A, [
+        { listing: car(PORTAL_A, "fresh", { title: "VW Golf 1.4 TÜV neu", firstRegistration: "2012-01-01" }) },
+        { listing: car(PORTAL_A, "stated", { title: `VW Golf HU 12/${now.getUTCFullYear() + 1}`, firstRegistration: "2012-01-01" }) },
+        { listing: car(PORTAL_A, "expired", { title: "VW Golf HU abgelaufen", firstRegistration: "2012-01-01" }) },
+        { listing: car(PORTAL_A, "unknown", { title: "VW Golf 1.4", firstRegistration: "2012-01-01" }) },
+        { listing: car(PORTAL_A, "young", { title: "VW Golf 1.5 eTSI", firstRegistration: thisMonth }) },
+      ]),
+    );
+    const ids = async (hu: string) =>
+      (await searchListings(pool, parseFilters({ hu }), null)).items.map((item) => item.title).sort();
+    expect(await ids("12")).toEqual(["VW Golf 1.4 TÜV neu", "VW Golf 1.5 eTSI", `VW Golf HU 12/${now.getUTCFullYear() + 1}`]);
+    expect(await ids("neu")).toEqual(expect.arrayContaining(["VW Golf 1.4 TÜV neu", "VW Golf 1.5 eTSI"]));
+    expect(await ids("neu")).not.toContain("VW Golf HU abgelaufen");
+
+    const all = await searchListings(pool, parseFilters({}), null);
+    expect(all.items.find((item) => item.title.endsWith("abgelaufen"))).toMatchObject({ huUntil: null, huBasis: "expired" });
+    expect(all.items.find((item) => item.title === "VW Golf 1.4")).toMatchObject({ huUntil: null, huBasis: null });
+
+    // "TÜV neu" counts from the first sighting: a later sighting does not push the date out.
+    await pool.query("update listings set hu_until = '2026-01-01' where external_id = 'fresh'");
+    await runIngest(pool, fakePortal(PORTAL_A, [{ listing: car(PORTAL_A, "fresh", { title: "VW Golf 1.4 TÜV neu", firstRegistration: "2012-01-01" }) }]));
+    const fresh = await pool.query("select to_char(hu_until, 'YYYY-MM-DD') as until, hu_basis from listings where external_id = 'fresh'");
+    expect(fresh.rows[0]).toEqual({ until: "2026-01-01", hu_basis: "relative" });
+  });
+
+  it("keeps cars that are given away at 0 € and finds them with a price limit of 0", async () => {
+    await runIngest(pool, fakePortal(PORTAL_A, [{ listing: car(PORTAL_A, "gift", { priceEur: 0 }) }, { listing: car(PORTAL_A, "sale") }]));
+    const free = await searchListings(pool, parseFilters({ priceMax: "0" }), null);
+    expect(free.items.map((item) => item.priceEur)).toEqual([0]);
+  });
+
   it("never groups two listings of the same portal", async () => {
     await runIngest(pool, fakePortal(PORTAL_A, [{ listing: car(PORTAL_A, "a1") }, { listing: car(PORTAL_A, "a2") }]));
     expect(await updateDuplicates(pool)).toEqual({ clusters: 0, listings: 0 });

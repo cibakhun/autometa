@@ -25,6 +25,13 @@ describe("parseFilters", () => {
     expect(f.sort).toBe("newest");
   });
 
+  it("accepts only the offered HU/TÜV choices", () => {
+    expect(parseFilters({ hu: "neu" }).hu).toBe("neu");
+    expect(parseFilters({ hu: "12" }).hu).toBe("12");
+    expect(parseFilters({ hu: "7" }).hu).toBeUndefined();
+    expect(filtersToQuery(parseFilters({ hu: "6" }))).toBe("?hu=6");
+  });
+
   it("defaults the radius to 50 km when a zip is given", () => {
     expect(parseFilters({ zip: "10115" }).radius).toBe(50);
   });

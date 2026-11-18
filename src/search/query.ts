@@ -1,9 +1,10 @@
 import type { Pool } from "pg";
 import { boundingBox, distanceSql } from "@/core/geo";
+import type { InspectionBasis } from "@/core/inspection";
 import { psToKw } from "@/core/normalize";
 import type { BodyType, Fuel, SellerType, Transmission } from "@/core/types";
 import { Params } from "@/lib/db";
-import { PAGE_SIZE, type SearchFilters, type Sort } from "./filters";
+import { huFilterMonths, PAGE_SIZE, type SearchFilters, type Sort } from "./filters";
 
 export interface Origin {
   zip: string;
@@ -37,6 +38,10 @@ export interface ListingSummary {
   otherOffers: Offer[];
   /** Link to the preview photo on the source's image server, if it showed one. */
   imageUrl: string | null;
+  /** Last month the HU/TÜV is valid (YYYY-MM-DD, first of the month), if known. */
+  huUntil: string | null;
+  /** Where huUntil comes from; "expired" when the listing says the HU ran out. */
+  huBasis: InspectionBasis | null;
 }
 
 /** One portal's listing of a vehicle. */
@@ -82,6 +87,7 @@ export function buildWhere(filters: SearchFilters, origin: Origin | null, params
   if (filters.body.length > 0) add((p) => `l.body_type = any(${p(filters.body)}::text[])`);
   if (filters.transmission) add((p) => `l.transmission = ${p(filters.transmission)}`);
   if (filters.seller) add((p) => `l.seller_type = ${p(filters.seller)}`);
+  if (filters.hu) add((p) => `l.hu_until >= (date_trunc('month', current_date) + make_interval(months => ${p(huFilterMonths(filters.hu!))}::int))::date`);
   if (filters.source.length > 0) add((p) => `l.source_id = any(${p(filters.source)}::text[])`);
   if (filters.q) add((p) => `l.title ilike ${p(`%${escapeLike(filters.q!)}%`)}`);
 
@@ -115,6 +121,7 @@ export async function searchListings(pool: Pool, filters: SearchFilters, origin:
     select l.id, l.title, l.make_slug, l.model_slug, l.price_eur, l.mileage_km,
            to_char(l.first_registration, 'YYYY-MM-DD') as first_registration,
            l.fuel, l.transmission, l.power_kw, l.body_type, l.seller_type, l.zip, l.city, l.cluster_id,
+           to_char(l.hu_until, 'YYYY-MM-DD') as hu_until, l.hu_basis,
            s.id as source_id, s.name as source_name,
            -- The cheapest listing of a duplicate group may come without a photo; another may have one.
            coalesce(l.image_url, (select d.image_url from listings d
@@ -169,6 +176,8 @@ export async function searchListings(pool: Pool, filters: SearchFilters, origin:
         distanceKm: row.distance_km,
         otherOffers: (offers.get(Number(row.cluster_id)) ?? []).filter((offer) => offer.id !== id),
         imageUrl: row.image_url,
+        huUntil: row.hu_until,
+        huBasis: row.hu_basis,
       };
     }),
   };
@@ -290,6 +299,7 @@ export interface ListingDetail extends ListingSummary {
 export async function getListing(pool: Pool, id: number): Promise<ListingDetail | null> {
   const { rows } = await pool.query(
     `select l.*, to_char(l.first_registration, 'YYYY-MM-DD') as first_registration_text, s.name as source_name,
+            to_char(l.hu_until, 'YYYY-MM-DD') as hu_until_text,
             coalesce(l.image_url, (select d.image_url from listings d
                                     where l.cluster_id is not null and d.cluster_id = l.cluster_id
                                       and d.status = 'active' and d.image_url is not null
@@ -322,6 +332,8 @@ export async function getListing(pool: Pool, id: number): Promise<ListingDetail 
     distanceKm: null,
     otherOffers: offers.filter((offer) => offer.id !== Number(row.id)),
     imageUrl: row.shown_image_url,
+    huUntil: row.hu_until_text,
+    huBasis: row.hu_basis,
     variant: row.variant,
     color: row.color,
     sellerName: row.seller_name,
