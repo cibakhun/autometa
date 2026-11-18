@@ -116,7 +116,8 @@ export function createQuokaAdapter(options: QuokaOptions): SourceAdapter {
         const categoryItems = parseQuokaPage(first.text, first.url);
         if (categoryItems.length === 0) throw await loader.formatError(first, "no listings found; did the page change?");
         const makes = parseMakeLinks(first.text).filter((list) => wanted.has(list.make));
-        if (makes.length === 0) throw await loader.formatError(first, "no make links found; did the page change?");
+        // Without make links the run still reads the whole category, only less deep.
+        if (makes.length === 0) await loader.formatWarning(first, "no make links found; did the page change?");
 
         // Makes first, so their listings keep the make of the list; the whole category last.
         for (const list of makes) {

@@ -144,6 +144,20 @@ describe("Quoka adapter", () => {
     expect(site.requested).not.toContain(listUrl(null, 4));
   });
 
+  it("reads the whole category when the make links are missing", async () => {
+    const site = fakeSite({
+      "https://www.quoka.de/robots.txt": "User-agent: *\nAllow: /\n",
+      [listUrl(null)]: page(ads(1, 2)),
+      [listUrl(null, 2)]: page(ads(3, 1)),
+    });
+    const messages: string[] = [];
+    const adapter = createQuokaAdapter({ fetcher: site.fetcher, pagesPerList: 2, log: (m) => messages.push(m) });
+    const raws = [];
+    for await (const raw of adapter.fetch()) raws.push(raw);
+    expect(raws.map((r) => r.externalId)).toEqual(["ad00000001", "ad00000002", "ad00000003"]);
+    expect(messages.some((m) => m.includes("no make links found"))).toBe(true);
+  });
+
   it("stops with a clear error when the category page has no ads", async () => {
     const site = fakeSite({
       "https://www.quoka.de/robots.txt": "User-agent: *\nAllow: /\n",

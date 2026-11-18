@@ -77,14 +77,23 @@ export class PageLoader {
 
   /** Keeps the page for diagnosis and returns the error to throw. */
   async formatError(page: FetchedPage, detail: string): Promise<PageFormatError> {
-    if (this.db) {
-      try {
-        await saveSample(this.db, { sourceId: this.sourceId, url: page.url, status: page.status, reason: "format-error", body: page.text });
-      } catch (error) {
-        this.log(`could not keep the page: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
+    await this.keepPage(page);
     return new PageFormatError(this.sourceId, page.url, detail);
+  }
+
+  /** For a part of the page the run can do without: logs it and keeps the page for diagnosis. */
+  async formatWarning(page: FetchedPage, detail: string): Promise<void> {
+    this.log(`unexpected page at ${page.url}: ${detail}`);
+    await this.keepPage(page);
+  }
+
+  private async keepPage(page: FetchedPage): Promise<void> {
+    if (!this.db) return;
+    try {
+      await saveSample(this.db, { sourceId: this.sourceId, url: page.url, status: page.status, reason: "format-error", body: page.text });
+    } catch (error) {
+      this.log(`could not keep the page: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 }
 

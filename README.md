@@ -2,7 +2,7 @@
 
 Eine Suche für Gebrauchtwagen aus vielen Fahrzeugbörsen: Suchkriterien einmal eingeben, Angebote aus verschiedenen Quellen in einer einheitlichen Liste vergleichen und per Klick zur Originalanzeige springen.
 
-**Stand:** Phase 2. Echte Angebote kommen von AutoScout24 und Kleinanzeigen (siehe „Quellen“). Ohne eingeschaltete Quellen zeigt die Seite generierte Demo-Daten und sagt das oben auch.
+**Stand:** Phase 2. Echte Angebote kommen von AutoScout24, Kleinanzeigen und Quoka (siehe „Quellen“). Ohne eingeschaltete Quellen zeigt die Seite generierte Demo-Daten und sagt das oben auch.
 
 ## Schnellstart
 
@@ -56,11 +56,12 @@ Wann ein Angebot aus der Suche verschwindet:
 | --- | --- | --- | --- |
 | AutoScout24 | Ergebnislisten `/lst/<marke>` (robots.txt erlaubt sie, Detailseiten nicht) | Je Lauf erst die neuesten Angebote je Marke, dann reihum Marke × Preisbereich. Hat ein Bereich mehr Treffer, als die Liste durchblättern lässt, wird er geteilt (`crawl_segments`). | zwei vollständigen Läufen seines Preisbereichs ohne das Angebot, spätestens 30 Tagen |
 | Kleinanzeigen | Kategorie „Autos“, je Marke und gesamt die ersten 5 Seiten (mehr erlaubt die robots.txt nicht, Filter auch nicht) | nur die neuesten Anzeigen; ob privat oder Händler, steht nicht in der Liste | 14 Tagen ohne Sichtung |
+| Quoka | Kategorie „Automarkt“: die Markenlisten, die die Kategorie verlinkt, und die Kategorie selbst, je die ersten 5 Seiten (`?pag=N`, robots.txt erlaubt Listen und Anzeigen) | nur die neuesten Anzeigen; Teile und Zubehör ohne Kilometer oder Baujahr fallen weg; ob privat oder Händler, steht nicht in der Liste | 14 Tagen ohne Sichtung |
 | mobile.de | nichts | Die robots.txt verbietet die Suche, und die Seite sperrt unseren Bot (403). | |
 
-Der Bot hält die robots.txt jeder Börse ein (Entscheidung vom 15.11.2026). Gespeichert werden nur Fakten, keine Fotos, Beschreibungen oder Namen privater Verkäufer. Hat eine Börse ihr Seitenformat geändert, bricht der Lauf mit einer klaren Meldung ab, statt leere Daten zu speichern.
+Der Bot hält die robots.txt jeder Börse ein (Entscheidung vom 15.11.2026). Gespeichert werden nur Fakten, keine Fotos, Beschreibungen oder Namen privater Verkäufer. Hat eine Börse ihr Seitenformat geändert, bricht der Lauf mit einer klaren Meldung ab, statt leere Daten zu speichern, und legt die Seite unter `/admin/quellen` ab. Quoka wird ohne feste CSS-Klassen gelesen (`src/ingest/http/cards.ts`): Jeder Link auf eine Anzeige markiert einen Eintrag, Preis, Kilometer, Erstzulassung, Kraftstoff und Ort werden an ihrer Form erkannt („12.990 €“, „98.000 km“, „03/2019“, „10115 Berlin“). Das übersteht die meisten Umbauten einer Börse.
 
-Wie weit AutoScout24 pro Lauf kommt, hängt vom Budget ab: Bei 5 Sekunden Abstand und 500 Abrufen dauert ein Lauf gut 40 Minuten. Mit `AUTOSCOUT24_MAKES` und `KLEINANZEIGEN_MAKES` lassen sich die Marken eingrenzen (Slugs wie `volkswagen,bmw`).
+Wie weit AutoScout24 pro Lauf kommt, hängt vom Budget ab: Bei 5 Sekunden Abstand und 500 Abrufen dauert ein Lauf gut 40 Minuten. Mit `AUTOSCOUT24_MAKES`, `KLEINANZEIGEN_MAKES` und `QUOKA_MAKES` lassen sich die Marken eingrenzen (Slugs wie `volkswagen,bmw`).
 
 ## Eine neue Quelle anbinden
 
@@ -91,7 +92,7 @@ AutoMeta läuft wie die anderen AgencyOS-Projekte als Coolify-App, die AgencyOS 
 - **Start:** `npm run start` führt die Migrationen aus, schreibt Marken, Modelle und PLZ und importiert die Demo-Angebote, solange die Datenbank noch keine Angebote hat. Danach startet Next.js und, wenn `SCRAPE_SOURCES` gesetzt ist, daneben der Import-Worker. Schlägt ein Schritt vor dem Start fehl, startet der neue Container nicht und die alte Version läuft weiter. Ein Terminal oder ein Pre-deployment command ist nicht nötig.
 - **Ausrollen:** den Pull Request in AgencyOS mit „Merge to Main“ zusammenführen und danach unter „Deployments“ ein Deployment starten. AgencyOS legt die App ohne GitHub-Webhook an, ein Push auf `main` allein rollt also nichts aus, solange in Coolify keiner eingerichtet ist.
 - **Domain:** die automatische sslip.io-Adresse ist von außen nicht erreichbar. Für eine öffentliche Adresse eine Subdomain in Cloudflare (proxied) auf den Server zeigen lassen und dieselbe Adresse bei der App als Domain eintragen.
-- **Echte Angebote:** `nixpacks.toml` setzt für das Deployment `SCRAPE_SOURCES=autoscout24,kleinanzeigen`, der Worker läuft also nach jedem Ausrollen ohne weiteren Schritt. Ein eigener Wert für `SCRAPE_SOURCES` in den Umgebungsvariablen der App in Coolify geht vor (zum Beispiel nur `autoscout24`). Der Worker läuft im selben Container, importiert sofort und dann alle `SCRAPE_INTERVAL_MINUTES` Minuten (Standard 60). Stürzt er ab, startet ihn der Container neu, die Website läuft davon unabhängig. Sobald eine echte Quelle Angebote geliefert hat, löscht der Import die Demo-Daten. Die Logs der App zeigen jeden Lauf (`[autoscout24] …`, `duplicates: …`).
+- **Echte Angebote:** `nixpacks.toml` setzt für das Deployment `SCRAPE_SOURCES=autoscout24,kleinanzeigen,quoka`, der Worker läuft also nach jedem Ausrollen ohne weiteren Schritt. Ein eigener Wert für `SCRAPE_SOURCES` in den Umgebungsvariablen der App in Coolify geht vor (zum Beispiel nur `autoscout24`). Der Worker läuft im selben Container, importiert sofort und dann alle `SCRAPE_INTERVAL_MINUTES` Minuten (Standard 60). Stürzt er ab, startet ihn der Container neu, die Website läuft davon unabhängig. Sobald eine echte Quelle Angebote geliefert hat, löscht der Import die Demo-Daten. Die Logs der App zeigen jeden Lauf (`[autoscout24] …`, `duplicates: …`).
 
 - **Quellen-Status:** Mit `ADMIN_TOKEN` (mindestens 16 Zeichen, in den Umgebungsvariablen der App) zeigt `/admin/quellen?token=<ADMIN_TOKEN>` je Quelle die aktiven Angebote, den letzten Lauf mit Fehlermeldung und die letzten Läufe. Ohne `ADMIN_TOKEN` antworten alle `/admin`-Adressen mit 404.
 - **Testabruf vom Server:** Auf derselben Seite lässt sich eine Seite der bekannten Börsen (AutoScout24, Kleinanzeigen, Quoka, Autohero, auto.de, pkw.de) über den Server abrufen, auf Wunsch mit den eigenen Skripten der Seite. Es gelten dieselben Regeln wie beim Import (robots.txt, Abstand, Abbruch bei Sperren). Die Antwort wird in `scrape_samples` gespeichert (die neuesten 80) und lässt sich als Text lesen, mit `&grep=` nur um die Treffer herum. So sieht man, was eine Börse unserem Bot wirklich schickt, bevor man einen Adapter baut oder repariert.
