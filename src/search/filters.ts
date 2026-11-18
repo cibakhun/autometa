@@ -14,6 +14,17 @@ export const SORT_LABELS: Record<Sort, string> = {
 };
 
 export const RADII_KM = [10, 25, 50, 100, 200] as const;
+
+/** HU/TÜV filter: still valid for at least this many months ("neu": a fresh HU, 21 of 24 left). */
+export const HU_FILTERS = ["neu", "18", "12", "6"] as const;
+export type HuFilter = (typeof HU_FILTERS)[number];
+export const HU_FILTER_LABELS: Record<HuFilter, string> = {
+  neu: "neu (noch mind. 21 Monate)",
+  "18": "noch mind. 18 Monate",
+  "12": "noch mind. 12 Monate",
+  "6": "noch mind. 6 Monate",
+};
+export const huFilterMonths = (value: HuFilter) => (value === "neu" ? 21 : Number(value));
 export const PAGE_SIZE = 24;
 export const MAX_PAGE = 400;
 
@@ -41,6 +52,7 @@ const schema = z.object({
   psMin: int(1, 2000),
   transmission: oneOf(TRANSMISSIONS),
   seller: oneOf(SELLER_TYPES),
+  hu: oneOf(HU_FILTERS),
   zip: z.preprocess(blankToUndefined, z.string().regex(/^\d{5}$/).optional()).catch(undefined),
   radius: int(1, 1000),
   q: z.preprocess(blankToUndefined, z.string().trim().max(80).optional()).catch(undefined),

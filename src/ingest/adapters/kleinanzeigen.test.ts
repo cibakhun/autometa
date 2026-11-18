@@ -136,8 +136,12 @@ describe("normalizeKleinanzeigen", () => {
 
   it("skips listings without a price", () => {
     expect(normalize({ price: "VB" })).toBeNull();
-    expect(normalize({ price: "Zu verschenken" })).toBeNull();
     expect(normalize({ price: "1 €" })).toBeNull();
+  });
+
+  it("keeps cars that are given away, at 0 €", () => {
+    expect(normalize({ title: "Opel Corsa C für Bastler", price: "Zu verschenken" })).toMatchObject({ priceEur: 0, makeSlug: "opel", modelSlug: "corsa" });
+    expect(normalize({ title: "Suche Auto zum Verschenken", price: "Zu verschenken" })).toBeNull();
   });
 });
 

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
-import { formatDistance, formatKm, formatPower, formatPrice, formatRegistration } from "@/lib/format";
+import { formatDistance, formatInspectionShort, formatKm, formatPower, formatPrice, formatRegistration } from "@/lib/format";
 import type { ListingSummary } from "@/search/query";
 import { ListingPhoto } from "./listing-photo";
 
@@ -11,6 +11,7 @@ export function ResultCard({ listing }: { listing: ListingSummary }) {
     formatPower(listing.powerKw),
     listing.fuel ? FUEL_LABELS[listing.fuel] : null,
     listing.transmission ? TRANSMISSION_LABELS[listing.transmission] : null,
+    formatInspectionShort(listing.huUntil, listing.huBasis),
   ].filter(Boolean);
   const place = [
     [listing.zip, listing.city].filter(Boolean).join(" "),

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { BODY_TYPE_LABELS, BODY_TYPES, FUEL_LABELS, FUELS, SELLER_TYPE_LABELS, SELLER_TYPES, TRANSMISSION_LABELS, TRANSMISSIONS } from "@/core/types";
 import type { SearchFilters } from "@/search/filters";
-import { RADII_KM, SORT_LABELS, SORTS } from "@/search/filters";
+import { HU_FILTER_LABELS, HU_FILTERS, RADII_KM, SORT_LABELS, SORTS } from "@/search/filters";
 import type { MakeFacet, SourceFacet } from "@/search/query";
 
 const KM_STEPS = [10_000, 25_000, 50_000, 75_000, 100_000, 150_000, 200_000];
@@ -175,6 +175,17 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
               {SELLER_TYPES.map((s) => <option key={s} value={s}>{SELLER_TYPE_LABELS[s]}</option>)}
             </select>
           </div>
+        </div>
+
+        <div>
+          <label htmlFor="hu" className={labelClass}>TÜV/HU</label>
+          <select id="hu" name="hu" defaultValue={filters.hu ?? ""} aria-describedby="hu-hint" className={fieldClass}>
+            <option value="">Beliebig</option>
+            {HU_FILTERS.map((h) => <option key={h} value={h}>{HU_FILTER_LABELS[h]}</option>)}
+          </select>
+          <p id="hu-hint" className="mt-1 text-xs text-muted">
+            Zählt nur Angebote, deren Titel die HU nennt („TÜV 05/2027“, „TÜV neu“), und Autos unter 3 Jahren.
+          </p>
         </div>
 
         {sources.length > 1 && (

@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import { detectInspection, type Inspection } from "@/core/inspection";
 import type { NormalizedListing } from "@/core/types";
 import type { RawListing, SourceAdapter } from "./adapter";
 
@@ -47,15 +48,28 @@ const LISTING_COLUMNS = [
   "lat",
   "lng",
   "image_url",
+  "hu_until",
+  "hu_basis",
   "segment",
 ] as const;
+
+/** Columns that are not simply overwritten by a new sighting. */
+const UPDATE_RULES: Partial<Record<(typeof LISTING_COLUMNS)[number], string>> = {
+  // A sighting without a photo keeps the one seen before.
+  image_url: "image_url = coalesce(excluded.image_url, listings.image_url)",
+  // "TÜV neu" counts from the first sighting, not from every later one.
+  hu_until: `hu_until = case when excluded.hu_basis = 'relative' and listings.hu_basis = 'relative'
+                             then least(excluded.hu_until, listings.hu_until) else excluded.hu_until end`,
+};
 
 interface PendingListing {
   listing: NormalizedListing;
   segment: string | null;
+  /** HU/TÜV validity derived from the title and first registration when the listing was seen. */
+  inspection: Inspection | null;
 }
 
-function listingValues({ listing: l, segment }: PendingListing): unknown[] {
+function listingValues({ listing: l, segment, inspection }: PendingListing): unknown[] {
   return [
     l.sourceId,
     l.externalId,
@@ -81,6 +95,8 @@ function listingValues({ listing: l, segment }: PendingListing): unknown[] {
     l.lat,
     l.lng,
     l.imageUrl ?? null,
+    inspection?.until ?? null,
+    inspection?.basis ?? null,
     segment,
   ];
 }
@@ -137,8 +153,7 @@ async function writeBatch(client: PoolClient, sourceId: string, raws: RawListing
     }
     if (pending.length > 0) {
       const updates = LISTING_COLUMNS.filter((c) => c !== "source_id" && c !== "external_id" && c !== "segment")
-        // A sighting without a photo keeps the one seen before.
-        .map((c) => (c === "image_url" ? `${c} = coalesce(excluded.${c}, listings.${c})` : `${c} = excluded.${c}`))
+        .map((c) => UPDATE_RULES[c] ?? `${c} = excluded.${c}`)
         .join(", ");
       await client.query(
         `insert into listings (${LISTING_COLUMNS.join(", ")})
@@ -229,7 +244,11 @@ async function ingestLocked(client: PoolClient, adapter: SourceAdapter): Promise
             listing.lat = point.lat;
             listing.lng = point.lng;
           }
-          pending.push({ listing: { ...listing, sourceId: source.id }, segment: raw.segment ?? null });
+          pending.push({
+            listing: { ...listing, sourceId: source.id },
+            segment: raw.segment ?? null,
+            inspection: detectInspection(listing.title, listing.firstRegistration),
+          });
         }
         if (raws.length >= BATCH_SIZE) await flush();
       }
