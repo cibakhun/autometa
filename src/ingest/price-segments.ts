@@ -145,14 +145,31 @@ export async function* crawlPriceSegments<T>(options: PriceSegmentCrawlOptions<T
     }
   }
 
+  /**
+   * Requests a segment will likely take, from the count it reported last time: one when page 1 will
+   * split it, two when the count is unknown (page 1, then page 2 or a split).
+   */
+  const requestsFor = ({ lastTotal }: Segment<PriceSegment>): number => {
+    if (lastTotal === null) return 2;
+    const pages = Math.ceil(lastTotal / pageSize);
+    return pages > maxPagesPerSegment ? 1 : Math.max(1, pages);
+  };
+
   await store.ensure(makes.map(rootSegment));
   const wanted = new Set(makes);
   const done = new Set<string>();
+  const postponed = new Set<string>();
   // Read the plan again after every segment: a split adds smaller segments to read next.
   for (;;) {
-    // Page 1 alone may split the segment; keep one request for it and one more for page 2.
-    if (requestsLeft() < 2) break;
-    const next = (await store.active()).find((s) => wanted.has(s.params.make) && !done.has(s.key));
+    if (requestsLeft() < 1) break;
+    const candidates = (await store.active()).filter((s) => wanted.has(s.params.make) && !done.has(s.key));
+    // A segment the remaining requests cannot read to the end is left untouched, so it keeps its
+    // place at the front and is read first, with the whole sweep share, in the next run.
+    const next = candidates.find((s) => requestsFor(s) <= requestsLeft());
+    for (const skipped of candidates.slice(0, next ? candidates.indexOf(next) : candidates.length)) {
+      if (!postponed.has(skipped.key)) log(`${skipped.key} needs about ${requestsFor(skipped)} requests; it is read first in the next run`);
+      postponed.add(skipped.key);
+    }
     if (!next) break;
     done.add(next.key);
     yield* sweep(next);

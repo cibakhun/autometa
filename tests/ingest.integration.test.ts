@@ -447,12 +447,13 @@ describe.skipIf(!url)("reading the mobile.de Search-API", () => {
   const range = (from: number, to: number | null) => ({ from, to });
   const search = (page: number, price?: { from: number; to: number | null }, make = "bmw") => searchUrl(make, page, price, PAGE);
 
-  function fakeApi(routes: Map<string, string>, status = 200) {
+  function fakeApi(routes: Map<string, string>, status = 200, maxRequests?: number) {
     const requests: { url: string; authorization: string }[] = [];
     const api = new MobileDeApi({
       user: "test-user",
       password: "test-password",
       minDelayMs: 0,
+      maxRequests,
       sleep: async () => undefined,
       fetchImpl: (async (input: string | URL, init?: RequestInit) => {
         requests.push({ url: String(input), authorization: (init?.headers as Record<string, string>).authorization });
@@ -462,8 +463,8 @@ describe.skipIf(!url)("reading the mobile.de Search-API", () => {
     return { api, requests };
   }
 
-  const adapterFor = (make: string, routes: Map<string, string>, status = 200) =>
-    createMobileDeAdapter({ api: fakeApi(routes, status).api, makes: [make], pageSize: PAGE });
+  const adapterFor = (make: string, routes: Map<string, string>, status = 200, maxRequests?: number) =>
+    createMobileDeAdapter({ api: fakeApi(routes, status, maxRequests).api, makes: [make], pageSize: PAGE });
 
   beforeAll(async () => {
     pool = await freshTestDatabase();
@@ -561,5 +562,30 @@ describe.skipIf(!url)("reading the mobile.de Search-API", () => {
       [before],
     );
     expect(untried.rows).toEqual([]);
+  });
+  it("leaves a range the remaining requests cannot finish for the start of the next run", async () => {
+    await pool.query("insert into sources (id, name, kind) values ('mobilede', 'mobile.de', 'api') on conflict do nothing");
+    // A small range that comes first and a five-page range behind it.
+    await pool.query(
+      `insert into crawl_segments (source_id, key, params, retired, last_total, last_started_at) values
+         ('mobilede', 'skoda:0-', '{"make":"skoda","priceFrom":0,"priceTo":null}', true, 2500, now() - interval '3 days'),
+         ('mobilede', 'skoda:0-1000', '{"make":"skoda","priceFrom":0,"priceTo":1000}', false, 2, now() - interval '2 days'),
+         ('mobilede', 'skoda:1000-2000', '{"make":"skoda","priceFrom":1000,"priceTo":2000}', false, 10, now() - interval '1 day')`,
+    );
+    const routes = new Map<string, string>([[search(1, range(0, 1000), "skoda"), answer(ads("s", [500, 600]), 2, 1)]]);
+    for (let page = 1; page <= 5; page += 1) {
+      routes.set(search(page, range(1000, 2000), "skoda"), answer(ads(`b${page}`, [1000 + page * 10, 1005 + page * 10]), 10, 5));
+    }
+
+    // 6 requests: 1 for the newest page, 5 for the sweep. After the small range 4 are left, too few
+    // for the five pages, so the large range is not started.
+    const first = adapterFor("skoda", routes, 200, 6);
+    await runIngest(pool, first);
+    expect(first.completedSegments!()).toEqual(["skoda:0-1000"]);
+
+    // The next run starts with it and reads it to the end.
+    const second = adapterFor("skoda", routes, 200, 6);
+    await runIngest(pool, second);
+    expect(second.completedSegments!()).toContain("skoda:1000-2000");
   });
 });

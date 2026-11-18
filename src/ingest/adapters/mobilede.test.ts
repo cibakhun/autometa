@@ -155,6 +155,9 @@ describe("parseMobileDeSearch", () => {
     const renamed = [ad(), ad()].map(({ mobileAdId, ...rest }) => ({ ...rest, adId: mobileAdId }));
     expect(() => parseMobileDeSearch(answer(renamed))).toThrow(/none of 2 ads/);
     expect(parseMobileDeSearch(answer([], 0, 0)).items).toEqual([]);
+    // A page of private ads without a structured model is skipped, not a format change.
+    const modelless = ad({ model: null, seller: { type: "FOR_SALE_BY_OWNER" } });
+    expect(parseMobileDeSearch(answer([modelless])).items).toEqual([]);
   });
 
   it("only takes prices in euros", () => {

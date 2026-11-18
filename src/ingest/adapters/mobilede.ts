@@ -171,11 +171,13 @@ export function parseMobileDeSearch(json: unknown, url = API_ORIGIN): ListPage<M
   if (total > 0 && pages < 1) throw new ApiFormatError(url, `${total} results on ${pages} pages`);
 
   const items: MobileDeItem[] = [];
+  let identifiable = 0;
   for (const entry of data.ads) {
     const ad = obj(entry);
     const id = str(ad.mobileAdId);
     const link = str(ad.detailPageUrl);
     const make = str(ad.make);
+    if (id && link && make) identifiable += 1;
     const seller = obj(ad.seller);
     const address = obj(seller.address);
     const sellerType = str(seller.type) ?? (seller.commercial === true ? "DEALER" : seller.commercial === false ? "FOR_SALE_BY_OWNER" : null);
@@ -207,10 +209,11 @@ export function parseMobileDeSearch(json: unknown, url = API_ORIGIN): ListPage<M
       country: str(address.country),
     });
   }
-  // Single odd ads are skipped, but a page none of whose ads can be read means the ad format changed.
-  // Counting it as read would let the run expire listings it never saw.
-  if (data.ads.length > 0 && items.length === 0) {
-    throw new ApiFormatError(url, `none of ${data.ads.length} ads has the expected fields (mobileAdId, detailPageUrl, make, model)`);
+  // Single odd ads are skipped, but a page none of whose ads has an id, a link and a make means the
+  // ad format changed. Counting it as read would let the run expire listings it never saw. (Ads
+  // skipped for a missing model are not a format change.)
+  if (data.ads.length > 0 && identifiable === 0) {
+    throw new ApiFormatError(url, `none of ${data.ads.length} ads has the expected fields (mobileAdId, detailPageUrl, make)`);
   }
   return { items, total, pages };
 }
