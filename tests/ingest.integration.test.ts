@@ -275,7 +275,9 @@ describe.skipIf(!url)("importing scraped portals", () => {
         { listing: car(PORTAL_A, "stated", { title: `VW Golf HU 12/${now.getUTCFullYear() + 1}`, firstRegistration: "2012-01-01" }) },
         { listing: car(PORTAL_A, "expired", { title: "VW Golf HU abgelaufen", firstRegistration: "2012-01-01" }) },
         { listing: car(PORTAL_A, "unknown", { title: "VW Golf 1.4", firstRegistration: "2012-01-01" }) },
-        { listing: car(PORTAL_A, "young", { title: "VW Golf 1.5 eTSI", firstRegistration: thisMonth }) },
+        { listing: car(PORTAL_A, "young", { title: "VW Golf 1.5 eTSI", firstRegistration: thisMonth, mileageKm: 10 }) },
+        // Junk in the car category with a recent first registration gets no HU from it.
+        { listing: car(PORTAL_A, "rims", { title: "4 VW Alufelgen mit Reifen", firstRegistration: thisMonth, priceEur: 350, mileageKm: 0 }) },
       ]),
     );
     const ids = async (hu: string) =>
@@ -287,6 +289,7 @@ describe.skipIf(!url)("importing scraped portals", () => {
     const all = await searchListings(pool, parseFilters({}), null);
     expect(all.items.find((item) => item.title.endsWith("abgelaufen"))).toMatchObject({ huUntil: null, huBasis: "expired" });
     expect(all.items.find((item) => item.title === "VW Golf 1.4")).toMatchObject({ huUntil: null, huBasis: null });
+    expect(all.items.find((item) => item.title.includes("Alufelgen"))).toMatchObject({ huUntil: null, huBasis: null });
 
     // "TÜV neu" counts from the first sighting: a later sighting does not push the date out.
     await pool.query("update listings set hu_until = '2026-01-01' where external_id = 'fresh'");
