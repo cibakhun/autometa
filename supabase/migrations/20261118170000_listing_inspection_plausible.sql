@@ -1,9 +1,10 @@
 -- The HU fallback from the first registration now trusts only plausible young cars
 -- (src/core/inspection.ts): registered no later than the month the listing was seen, at least
 -- 3,000 EUR and at most 10,000 km per month since the first registration. Clear the dates the
--- first backfill gave to rims, consoles, lease takeovers and mistyped registrations; the next
--- import run keeps them cleared. Like the detector, this judges each row by the month it was
--- last seen.
+-- first backfill gave to rims, consoles, lease takeovers and mistyped registrations. A later
+-- import leaves the date empty only while the listing still fails these checks (a registration
+-- typed as next May qualifies once next May comes). Like the detector, this judges each row by
+-- the month it was last seen.
 update listings
 set hu_until = null, hu_basis = null
 where hu_basis = 'registration'
