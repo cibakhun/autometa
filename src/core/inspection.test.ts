@@ -48,6 +48,12 @@ describe("detectInspection", () => {
     expect(of("Audi A4 2.0 Benzin", "2026-05-01", 24300, 207000)).toBeNull();
     // A taxi can drive 300,000 km in three years.
     expect(of("Mercedes E 200 Taxi", "2023-12-01", 18900, 300000)).toEqual({ until: "2026-12-01", basis: "registration" });
+    // The limits hold inclusively; a car registered this month counts as one month old.
+    expect(of("Skoda Fabia", "2026-11-01", 3000, 10000)).toEqual({ until: "2029-11-01", basis: "registration" });
+    expect(of("Skoda Fabia", "2026-11-01", 2999, 10000)).toBeNull();
+    expect(of("Skoda Fabia", "2026-11-01", 3000, 10001)).toBeNull();
+    // A registration after this month is a typo.
+    expect(of("Skoda Fabia", "2027-05-01", 15000, null)).toBeNull();
     // A stated date does not depend on price or mileage.
     expect(of("Golf 4 TÜV 05/2027", "2025-03-01", 450, 300000)).toEqual({ until: "2027-05-01", basis: "stated" });
   });

@@ -84,13 +84,15 @@ export function detectInspection(listing: InspectionInput, now = new Date()): In
     return { until: addMonths(now, Number(months[1])), basis: "relative" };
   }
 
-  if (firstRegistration && priceEur >= YOUNG_CAR_MIN_PRICE_EUR) {
+  const thisMonth = monthStart(thisYear, now.getUTCMonth() + 1);
+  // A registration after this month is a typo, not a young car.
+  if (firstRegistration && firstRegistration <= thisMonth && priceEur >= YOUNG_CAR_MIN_PRICE_EUR) {
     const registered = new Date(`${firstRegistration}T00:00:00Z`);
     if (!Number.isNaN(registered.getTime())) {
       const until = addMonths(registered, FIRST_INSPECTION_MONTHS);
       const ageMonths = (thisYear - registered.getUTCFullYear()) * 12 + now.getUTCMonth() - registered.getUTCMonth();
       const plausibleKm = mileageKm === null || mileageKm <= Math.max(ageMonths, 1) * MAX_KM_PER_MONTH;
-      if (plausibleKm && until >= monthStart(thisYear, now.getUTCMonth() + 1)) return { until, basis: "registration" };
+      if (plausibleKm && until >= thisMonth) return { until, basis: "registration" };
     }
   }
   return null;
