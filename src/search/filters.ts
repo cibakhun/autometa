@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { BODY_TYPES, FUELS, SELLER_TYPES, TRANSMISSIONS } from "@/core/types";
 
-export const SORTS = ["newest", "price_asc", "price_desc", "km_asc", "year_desc", "distance"] as const;
+export const SORTS = ["newest", "price_asc", "price_desc", "km_asc", "year_desc", "distance", "below_market"] as const;
 export type Sort = (typeof SORTS)[number];
 
 export const SORT_LABELS: Record<Sort, string> = {
@@ -11,6 +11,15 @@ export const SORT_LABELS: Record<Sort, string> = {
   km_asc: "Kilometer aufsteigend",
   year_desc: "Erstzulassung, neueste zuerst",
   distance: "Entfernung",
+  below_market: "Am weitesten unter Marktwert",
+};
+
+/** Condition as the listing's title tells it: damage mentioned ("defekt") or not ("intakt"). */
+export const CONDITIONS = ["defekt", "intakt"] as const;
+export type Condition = (typeof CONDITIONS)[number];
+export const CONDITION_LABELS: Record<Condition, string> = {
+  defekt: "mit Schadenshinweis (defekt, Bastler)",
+  intakt: "ohne Schadenshinweis",
 };
 
 export const RADII_KM = [10, 25, 50, 100, 200] as const;
@@ -53,6 +62,7 @@ const schema = z.object({
   transmission: oneOf(TRANSMISSIONS),
   seller: oneOf(SELLER_TYPES),
   hu: oneOf(HU_FILTERS),
+  zustand: oneOf(CONDITIONS),
   zip: z.preprocess(blankToUndefined, z.string().regex(/^\d{5}$/).optional()).catch(undefined),
   radius: int(1, 1000),
   q: z.preprocess(blankToUndefined, z.string().trim().max(80).optional()).catch(undefined),

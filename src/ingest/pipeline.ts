@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import { ADAPTERS } from "./adapters";
 import { updateDuplicates, type DuplicateResult } from "./duplicates";
+import { updateMarketValues, type MarketResult } from "./market";
 import { runIngest, type IngestResult } from "./run";
 
 export interface SourceOutcome {
@@ -12,6 +13,7 @@ export interface SourceOutcome {
 export interface PipelineResult {
   sources: SourceOutcome[];
   duplicates: DuplicateResult;
+  market: MarketResult;
   /** Demo listings removed because real listings arrived. */
   demoRemoved: number;
 }
@@ -54,7 +56,10 @@ export async function ingestSources(
   }
   const duplicates = await updateDuplicates(pool);
   log(`duplicates: ${duplicates.clusters} vehicles listed on several portals (${duplicates.listings} listings)`);
-  return { sources, duplicates, demoRemoved };
+  // After the duplicates, so a vehicle on several portals counts once among the comparables.
+  const market = await updateMarketValues(pool);
+  log(`market: ${market.valued} active listings have a market value (${market.changed} changed)`);
+  return { sources, duplicates, market, demoRemoved };
 }
 
 async function hasRealListings(pool: Pool): Promise<boolean> {

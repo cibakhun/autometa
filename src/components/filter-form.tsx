@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { BODY_TYPE_LABELS, BODY_TYPES, FUEL_LABELS, FUELS, SELLER_TYPE_LABELS, SELLER_TYPES, TRANSMISSION_LABELS, TRANSMISSIONS } from "@/core/types";
 import type { SearchFilters } from "@/search/filters";
-import { HU_FILTER_LABELS, HU_FILTERS, RADII_KM, SORT_LABELS, SORTS } from "@/search/filters";
+import { CONDITION_LABELS, CONDITIONS, HU_FILTER_LABELS, HU_FILTERS, RADII_KM, SORT_LABELS, SORTS } from "@/search/filters";
 import type { MakeFacet, SourceFacet } from "@/search/query";
 
 const KM_STEPS = [10_000, 25_000, 50_000, 75_000, 100_000, 150_000, 200_000];
@@ -175,6 +175,17 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
               {SELLER_TYPES.map((s) => <option key={s} value={s}>{SELLER_TYPE_LABELS[s]}</option>)}
             </select>
           </div>
+        </div>
+
+        <div>
+          <label htmlFor="zustand" className={labelClass}>Zustand laut Titel</label>
+          <select id="zustand" name="zustand" defaultValue={filters.zustand ?? ""} aria-describedby="zustand-hint" className={fieldClass}>
+            <option value="">Beliebig</option>
+            {CONDITIONS.map((c) => <option key={c} value={c}>{CONDITION_LABELS[c]}</option>)}
+          </select>
+          <p id="zustand-hint" className="mt-1 text-xs text-muted">
+            Erkennt Hinweise wie „Motorschaden“, „springt nicht an“ oder „Bastler“ im Anzeigentitel.
+          </p>
         </div>
 
         <div>

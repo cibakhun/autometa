@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import { detectDamage, type DamageKind } from "@/core/damage";
 import { detectInspection, type Inspection } from "@/core/inspection";
 import type { NormalizedListing } from "@/core/types";
 import type { RawListing, SourceAdapter } from "./adapter";
@@ -50,6 +51,7 @@ const LISTING_COLUMNS = [
   "image_url",
   "hu_until",
   "hu_basis",
+  "damage",
   "segment",
 ] as const;
 
@@ -67,9 +69,11 @@ interface PendingListing {
   segment: string | null;
   /** HU/TÜV validity derived from the title and first registration when the listing was seen. */
   inspection: Inspection | null;
+  /** Damage kinds the title mentions. */
+  damage: DamageKind[];
 }
 
-function listingValues({ listing: l, segment, inspection }: PendingListing): unknown[] {
+function listingValues({ listing: l, segment, inspection, damage }: PendingListing): unknown[] {
   return [
     l.sourceId,
     l.externalId,
@@ -97,6 +101,7 @@ function listingValues({ listing: l, segment, inspection }: PendingListing): unk
     l.imageUrl ?? null,
     inspection?.until ?? null,
     inspection?.basis ?? null,
+    damage,
     segment,
   ];
 }
@@ -248,6 +253,7 @@ async function ingestLocked(client: PoolClient, adapter: SourceAdapter): Promise
             listing: { ...listing, sourceId: source.id },
             segment: raw.segment ?? null,
             inspection: detectInspection(listing),
+            damage: detectDamage(listing.title),
           });
         }
         if (raws.length >= BATCH_SIZE) await flush();

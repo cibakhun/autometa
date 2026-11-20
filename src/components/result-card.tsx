@@ -1,6 +1,7 @@
 import Link from "next/link";
+import { DAMAGE_LABELS } from "@/core/damage";
 import { FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
-import { formatDistance, formatInspectionShort, formatKm, formatPower, formatPrice, formatRegistration } from "@/lib/format";
+import { formatDistance, formatInspectionShort, formatKm, formatMarketGap, formatPower, formatPrice, formatRegistration } from "@/lib/format";
 import type { ListingSummary } from "@/search/query";
 import { ListingPhoto } from "./listing-photo";
 
@@ -18,6 +19,8 @@ export function ResultCard({ listing }: { listing: ListingSummary }) {
     formatDistance(listing.distanceKm),
     listing.sellerType ? SELLER_TYPE_LABELS[listing.sellerType] : null,
   ].filter(Boolean);
+  const gap = formatMarketGap(listing.priceEur, listing.marketPriceEur);
+  const damaged = listing.damage.length > 0;
 
   return (
     <article className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-sm">
@@ -35,6 +38,21 @@ export function ResultCard({ listing }: { listing: ListingSummary }) {
         </div>
         <p className="mt-2 text-sm text-muted">{facts.join(" · ")}</p>
         {place.length > 0 && <p className="mt-1 text-sm text-muted">{place.join(" · ")}</p>}
+        {damaged && (
+          <ul className="mt-2 flex flex-wrap gap-1" aria-label="Schadenshinweise im Titel">
+            {listing.damage.map((kind) => (
+              <li key={kind} className="rounded-full border border-warn-line bg-warn-bg px-2 py-0.5 text-xs font-medium text-warn-text">
+                {DAMAGE_LABELS[kind]}
+              </li>
+            ))}
+          </ul>
+        )}
+        {gap && listing.marketPriceEur !== null && (
+          <p className="mt-2 text-sm">
+            <span className="text-muted">{damaged ? "Intakt" : "Marktwert"} ca. {formatPrice(listing.marketPriceEur)} · </span>
+            <span className={gap.below ? "font-medium text-good-text" : "text-muted"}>{gap.text}</span>
+          </p>
+        )}
         {listing.otherOffers.length > 0 && (
           <p className="mt-2 text-sm">
             <span className="text-muted">Auch bei </span>

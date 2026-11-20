@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
 import { boundingBox, distanceSql } from "@/core/geo";
+import type { DamageKind } from "@/core/damage";
 import type { InspectionBasis } from "@/core/inspection";
 import { psToKw } from "@/core/normalize";
 import type { BodyType, Fuel, SellerType, Transmission } from "@/core/types";
@@ -42,6 +43,12 @@ export interface ListingSummary {
   huUntil: string | null;
   /** Where huUntil comes from; "expired" when the listing says the HU ran out. */
   huBasis: InspectionBasis | null;
+  /** Damage the title mentions; empty when none. */
+  damage: DamageKind[];
+  /** Median price of comparable intact listings, null when there are too few. */
+  marketPriceEur: number | null;
+  /** How many comparable listings the market value is based on. */
+  marketComps: number | null;
 }
 
 /** One portal's listing of a vehicle. */
@@ -66,6 +73,8 @@ const ORDER_BY: Record<Sort, string> = {
   km_asc: "l.mileage_km asc nulls last, l.id asc",
   year_desc: "l.first_registration desc nulls last, l.id desc",
   distance: "distance_km asc nulls last, l.id asc",
+  // The biggest gap in euros: what a repaired car could be worth minus what it costs now.
+  below_market: "l.market_price_eur - l.price_eur desc nulls last, l.id desc",
 };
 
 const escapeLike = (value: string) => value.replace(/[\\%_]/g, (char) => `\\${char}`);
@@ -88,6 +97,8 @@ export function buildWhere(filters: SearchFilters, origin: Origin | null, params
   if (filters.transmission) add((p) => `l.transmission = ${p(filters.transmission)}`);
   if (filters.seller) add((p) => `l.seller_type = ${p(filters.seller)}`);
   if (filters.hu) add((p) => `l.hu_until >= (date_trunc('month', current_date) + make_interval(months => ${p(huFilterMonths(filters.hu!))}::int))::date`);
+  if (filters.zustand === "defekt") where.push("cardinality(l.damage) > 0");
+  if (filters.zustand === "intakt") where.push("l.damage = '{}'");
   if (filters.source.length > 0) add((p) => `l.source_id = any(${p(filters.source)}::text[])`);
   if (filters.q) add((p) => `l.title ilike ${p(`%${escapeLike(filters.q!)}%`)}`);
 
@@ -122,6 +133,7 @@ export async function searchListings(pool: Pool, filters: SearchFilters, origin:
            to_char(l.first_registration, 'YYYY-MM-DD') as first_registration,
            l.fuel, l.transmission, l.power_kw, l.body_type, l.seller_type, l.zip, l.city, l.cluster_id,
            to_char(l.hu_until, 'YYYY-MM-DD') as hu_until, l.hu_basis,
+           l.damage, l.market_price_eur, l.market_comps,
            s.id as source_id, s.name as source_name,
            -- The cheapest listing of a duplicate group may come without a photo; another may have one.
            coalesce(l.image_url, (select d.image_url from listings d
@@ -178,6 +190,9 @@ export async function searchListings(pool: Pool, filters: SearchFilters, origin:
         imageUrl: row.image_url,
         huUntil: row.hu_until,
         huBasis: row.hu_basis,
+        damage: row.damage ?? [],
+        marketPriceEur: row.market_price_eur,
+        marketComps: row.market_comps,
       };
     }),
   };
@@ -286,7 +301,20 @@ export async function getSourceStatus(pool: Pool): Promise<SourceStatus[]> {
   }));
 }
 
+/** One price a listing had and when we first saw it. */
+export interface PricePoint {
+  priceEur: number;
+  seenAt: string;
+}
+
 export interface ListingDetail extends ListingSummary {
+  /** Middle half of the comparable listings' prices. */
+  marketLowEur: number | null;
+  marketHighEur: number | null;
+  /** Median days comparable listings stayed online, when enough of them disappeared. */
+  marketDays: number | null;
+  /** Every price the listing had, oldest first. */
+  priceHistory: PricePoint[];
   variant: string | null;
   color: string | null;
   sellerName: string | null;
@@ -311,7 +339,14 @@ export async function getListing(pool: Pool, id: number): Promise<ListingDetail 
   const row = rows[0];
   if (!row) return null;
   const clusterId = row.cluster_id === null ? null : Number(row.cluster_id);
-  const offers = clusterId === null ? [] : ((await getOffers(pool, [clusterId])).get(clusterId) ?? []);
+  const [offerMap, prices] = await Promise.all([
+    clusterId === null ? Promise.resolve(new Map<number, Offer[]>()) : getOffers(pool, [clusterId]),
+    pool.query<{ price_eur: number; seen_at: Date }>(
+      "select price_eur, seen_at from listing_prices where listing_id = $1 order by seen_at",
+      [id],
+    ),
+  ]);
+  const offers = clusterId === null ? [] : (offerMap.get(clusterId) ?? []);
   return {
     id: Number(row.id),
     title: row.title,
@@ -334,6 +369,13 @@ export async function getListing(pool: Pool, id: number): Promise<ListingDetail 
     imageUrl: row.shown_image_url,
     huUntil: row.hu_until_text,
     huBasis: row.hu_basis,
+    damage: row.damage ?? [],
+    marketPriceEur: row.market_price_eur,
+    marketComps: row.market_comps,
+    marketLowEur: row.market_low_eur,
+    marketHighEur: row.market_high_eur,
+    marketDays: row.market_days,
+    priceHistory: prices.rows.map((p) => ({ priceEur: p.price_eur, seenAt: new Date(p.seen_at).toISOString() })),
     variant: row.variant,
     color: row.color,
     sellerName: row.seller_name,
