@@ -13,6 +13,7 @@
   --warn-bg: #fff7e0;
   --warn-line: #f2deaa;
   --warn-text: #6b4e00;
+  --good-text: #17663a;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -29,6 +30,7 @@
     --warn-bg: #2a2210;
     --warn-line: #4a3c17;
     --warn-text: #f0d48a;
+    --good-text: #7fd6a0;
   }
 }
 
@@ -45,6 +47,7 @@
   --color-warn-bg: var(--warn-bg);
   --color-warn-line: var(--warn-line);
   --color-warn-text: var(--warn-text);
+  --color-good-text: var(--good-text);
 }
 
 body {

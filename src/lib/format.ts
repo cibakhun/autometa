@@ -43,3 +43,16 @@ export function formatInspection(until: string | null, basis: InspectionBasis | 
   if (basis === "registration") return `bis ${monthYear(until)} (erste HU 3 Jahre nach Erstzulassung)`;
   return `bis ${monthYear(until)} (laut Anzeige)`;
 }
+
+/**
+ * How a price compares to the market value: "1.200 € unter Marktwert", "300 € über Marktwert",
+ * or "im Marktdurchschnitt" within 3 %. Null without a market value.
+ */
+export function formatMarketGap(priceEur: number, marketEur: number | null): { text: string; below: boolean } | null {
+  if (marketEur === null || marketEur <= 0) return null;
+  const gap = marketEur - priceEur;
+  if (Math.abs(gap) < marketEur * 0.03) return { text: "im Marktdurchschnitt", below: false };
+  return gap > 0
+    ? { text: `${euro.format(gap)} unter Marktwert`, below: true }
+    : { text: `${euro.format(-gap)} über Marktwert`, below: false };
+}
