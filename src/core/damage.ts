@@ -102,7 +102,9 @@ const RULES: Rule[] = [
 const GENERIC: RegExp = /\b(?:defekt|defekte|defekter|defektes|kaputt|schaden|mangel|mangeln)\b/g;
 
 /** Words right before a match that turn it around: "kein Unfall", "ohne Rost", "nichts defekt". */
-const NEGATIONS = new Set(["kein", "keine", "keinen", "keinerlei", "ohne", "nicht", "nichts", "frei"]);
+const NEGATIONS = new Set(["kein", "keine", "keinen", "keinerlei", "ohne", "nicht", "nichts"]);
+/** A word right after a match that turns it around: "rost frei", "unfall frei" (spelt apart). */
+const FREE = /^ frei\b/;
 /** Words that may stand between a negation and the match: "ohne jeden Rost", "kein sichtbarer Rost". */
 const FILLERS = new Set([
   "jeden", "jeglichen", "jegliche", "jeglicher", "irgendwelche", "irgendwelchen", "mehr", "echten",
@@ -134,7 +136,7 @@ function negated(title: Title, index: number): boolean {
 function mentioned(title: Title, pattern: RegExp, negatable: boolean): boolean {
   pattern.lastIndex = 0;
   for (const match of title.text.matchAll(pattern)) {
-    if (negatable && negated(title, match.index)) continue;
+    if (negatable && (negated(title, match.index) || FREE.test(title.text.slice(match.index + match[0].length)))) continue;
     if (FIXED.test(title.text.slice(match.index + match[0].length))) continue;
     return true;
   }

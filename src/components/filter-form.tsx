@@ -9,9 +9,11 @@ import { CONDITION_LABELS, CONDITIONS, HU_FILTER_LABELS, HU_FILTERS, RADII_KM, S
 import type { MakeFacet, SourceFacet } from "@/search/query";
 
 const KM_STEPS = [10_000, 25_000, 50_000, 75_000, 100_000, 150_000, 200_000];
-/** The steps plus a value from the URL that is not one of them (e.g. from "Vergleichbare Angebote"). */
-const kmOptions = (current: number | undefined) =>
-  current === undefined || KM_STEPS.includes(current) ? KM_STEPS : [...KM_STEPS, current].sort((a, b) => a - b);
+/** The options plus a value from the URL that is not one of them (e.g. from "Vergleichbare Angebote"). */
+const withCurrent = (options: number[], current: number | undefined, descending = false) =>
+  current === undefined || options.includes(current)
+    ? options
+    : [...options, current].sort((a, b) => (descending ? b - a : a - b));
 const PS_STEPS = [60, 75, 100, 125, 150, 200, 250, 300];
 const CURRENT_YEAR = 2026;
 const YEARS = Array.from({ length: 27 }, (_, i) => CURRENT_YEAR - i);
@@ -110,14 +112,14 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
             <label htmlFor="yearMin" className={labelClass}>Erstzulassung ab</label>
             <select id="yearMin" name="yearMin" defaultValue={filters.yearMin ?? ""} className={fieldClass}>
               <option value="">Beliebig</option>
-              {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
+              {withCurrent(YEARS, filters.yearMin, true).map((y) => <option key={y} value={y}>{y}</option>)}
             </select>
           </div>
           <div>
             <label htmlFor="yearMax" className={labelClass}>bis</label>
             <select id="yearMax" name="yearMax" defaultValue={filters.yearMax ?? ""} className={fieldClass}>
               <option value="">Beliebig</option>
-              {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
+              {withCurrent(YEARS, filters.yearMax, true).map((y) => <option key={y} value={y}>{y}</option>)}
             </select>
           </div>
         </div>
@@ -127,7 +129,7 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
             <label htmlFor="kmMax" className={labelClass}>Kilometer bis</label>
             <select id="kmMax" name="kmMax" defaultValue={filters.kmMax ?? ""} className={fieldClass}>
               <option value="">Beliebig</option>
-              {kmOptions(filters.kmMax).map((km) => <option key={km} value={km}>{nf.format(km)} km</option>)}
+              {withCurrent(KM_STEPS, filters.kmMax).map((km) => <option key={km} value={km}>{nf.format(km)} km</option>)}
             </select>
           </div>
           <div>

@@ -41,6 +41,8 @@ describe("detectDamage", () => {
     "Mercedes A 180 Automatik",
     "Hyundai i30 nichts defekt",
     "Kia Ceed ohne jeden Rost",
+    "Jaguar XJ8 108000km rost frei.",
+    "Golf 5 Unfall frei, TÜV neu",
     "Opel Zafira kein sichtbarer Rost, TÜV 2027",
   ])("finds nothing in %j", (title) => {
     expect(detectDamage(title)).toEqual([]);
