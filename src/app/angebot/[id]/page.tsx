@@ -116,6 +116,7 @@ function comparablesQuery(listing: ListingDetail): string | null {
     yearMin: String(year - MARKET_RULES.yearSpan),
     yearMax: String(year + MARKET_RULES.yearSpan),
     kmMax: String(Math.ceil(kmMax / 1000) * 1000),
+    priceMin: String(MARKET_RULES.minCompPriceEur),
     zustand: "intakt",
     sort: "price_asc",
   });

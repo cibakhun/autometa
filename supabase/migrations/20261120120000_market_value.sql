@@ -14,7 +14,7 @@ alter table listings add column market_comps integer;
 alter table listings add column market_days integer;
 
 -- Every price a listing had, with when we first saw it. Filled by a trigger, so every way a
--- listing is written keeps the history.
+-- listing is written keeps the history (clock_timestamp: two changes in one transaction stay apart).
 create table listing_prices (
   listing_id bigint not null references listings (id) on delete cascade,
   price_eur  integer not null,
@@ -26,7 +26,7 @@ create function record_listing_price() returns trigger language plpgsql as $$
 begin
   if tg_op = 'INSERT' or new.price_eur is distinct from old.price_eur then
     insert into listing_prices (listing_id, price_eur, seen_at)
-    values (new.id, new.price_eur, case when tg_op = 'INSERT' then new.first_seen_at else now() end)
+    values (new.id, new.price_eur, case when tg_op = 'INSERT' then new.first_seen_at else clock_timestamp() end)
     on conflict (listing_id, seen_at) do update set price_eur = excluded.price_eur;
   end if;
   return null;

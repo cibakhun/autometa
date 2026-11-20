@@ -22,6 +22,10 @@ describe("detectDamage", () => {
     ["Golf 4 Teileträger", ["project"]],
     ["Peugeot 206 Klima defekt", ["defect"]],
     ["Mazda 3 mit Mängeln", ["defect"]],
+    // A negation reaches only into its own phrase and the next word (or one filler word).
+    ["Opel Astra ohne Rost, Motorschaden", ["engine"]],
+    ["Opel Astra ohne TÜV Motorschaden", ["engine"]],
+    ["Golf kein Rost - Getriebe defekt", ["gearbox"]],
   ])("finds damage in %j", (title, kinds) => {
     expect(detectDamage(title)).toEqual(kinds);
   });
@@ -36,6 +40,8 @@ describe("detectDamage", () => {
     "Steuerkette neu gemacht, Kupplung neu",
     "Mercedes A 180 Automatik",
     "Hyundai i30 nichts defekt",
+    "Kia Ceed ohne jeden Rost",
+    "Opel Zafira kein sichtbarer Rost, TÜV 2027",
   ])("finds nothing in %j", (title) => {
     expect(detectDamage(title)).toEqual([]);
   });

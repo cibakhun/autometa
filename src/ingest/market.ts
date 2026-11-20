@@ -4,7 +4,7 @@ import { detectDamage } from "@/core/damage";
 /**
  * What a listing is worth comes from comparable intact listings of the same vehicle type:
  * same make and model, first registered at most a year apart, similar mileage, same fuel and
- * gearbox, similar power. Listings whose title mentions damage or an expired HU are not
+ * gearbox, similar power. Listings whose title mentions damage or whose HU had expired are not
  * comparable, nor are prices below MIN_COMP_PRICE_EUR (giveaways, placeholders, parts).
  * Listings that disappeared in the last GONE_WINDOW_DAYS count with their last price.
  */
@@ -37,6 +37,8 @@ export async function updateMarketValues(pool: Pool): Promise<MarketResult> {
   let changed = 0;
   try {
     await client.query("begin");
+    // One refresh at a time (start-up and import rounds), so an older one cannot overwrite newer values.
+    await client.query("select pg_advisory_xact_lock(hashtext('autometa-market'))");
     // The comparable listings go into a temporary table with fresh statistics: estimated from
     // the filters alone, Postgres expects a handful of rows and joins them in nested loops.
     await client.query(
@@ -60,6 +62,8 @@ export async function updateMarketValues(pool: Pool): Promise<MarketResult> {
           and l.price_eur >= $1
           and l.damage = '{}'
           and l.hu_basis is distinct from 'expired'
+          -- hu_until is the first day of the last valid month: expired when we last saw the listing.
+          and (l.hu_until is null or l.hu_until >= date_trunc('month', l.last_seen_at)::date)
           and (l.status = 'active' or l.last_seen_at > now() - make_interval(days => $2))
         -- One price per vehicle listed on several portals: an active listing, the cheapest.
         order by coalesce(l.cluster_id, l.id), (l.status = 'active') desc, l.price_eur, l.id`,

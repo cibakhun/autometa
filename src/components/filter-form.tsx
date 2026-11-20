@@ -9,6 +9,9 @@ import { CONDITION_LABELS, CONDITIONS, HU_FILTER_LABELS, HU_FILTERS, RADII_KM, S
 import type { MakeFacet, SourceFacet } from "@/search/query";
 
 const KM_STEPS = [10_000, 25_000, 50_000, 75_000, 100_000, 150_000, 200_000];
+/** The steps plus a value from the URL that is not one of them (e.g. from "Vergleichbare Angebote"). */
+const kmOptions = (current: number | undefined) =>
+  current === undefined || KM_STEPS.includes(current) ? KM_STEPS : [...KM_STEPS, current].sort((a, b) => a - b);
 const PS_STEPS = [60, 75, 100, 125, 150, 200, 250, 300];
 const CURRENT_YEAR = 2026;
 const YEARS = Array.from({ length: 27 }, (_, i) => CURRENT_YEAR - i);
@@ -124,7 +127,7 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
             <label htmlFor="kmMax" className={labelClass}>Kilometer bis</label>
             <select id="kmMax" name="kmMax" defaultValue={filters.kmMax ?? ""} className={fieldClass}>
               <option value="">Beliebig</option>
-              {KM_STEPS.map((km) => <option key={km} value={km}>{nf.format(km)} km</option>)}
+              {kmOptions(filters.kmMax).map((km) => <option key={km} value={km}>{nf.format(km)} km</option>)}
             </select>
           </div>
           <div>

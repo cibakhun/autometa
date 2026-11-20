@@ -103,27 +103,59 @@ const GENERIC: RegExp = /\b(?:defekt|defekte|defekter|defektes|kaputt|schaden|ma
 
 /** Words right before a match that turn it around: "kein Unfall", "ohne Rost", "nichts defekt". */
 const NEGATIONS = new Set(["kein", "keine", "keinen", "keinerlei", "ohne", "nicht", "nichts", "frei"]);
+/** Words that may stand between a negation and the match: "ohne jeden Rost", "kein sichtbarer Rost". */
+const FILLERS = new Set([
+  "jeden", "jeglichen", "jegliche", "jeglicher", "irgendwelche", "irgendwelchen", "mehr", "echten",
+  "sichtbare", "sichtbaren", "sichtbarer", "nennenswerte", "nennenswerten", "nennenswerter",
+  "bekannte", "bekannten", "bekannter",
+]);
+/** Punctuation that ends a phrase, so "ohne Rost, Motorschaden" does not negate the engine damage. */
+const PHRASE_BREAK = /[,;:!?|/()[\]+]|\.(?=\s|$)|\s[-–—]+\s/;
 /** Words right after a match that say it is fixed: "Unfallschaden repariert", "Motorschaden behoben". */
 const FIXED = /^(?: (?:wurde|wurden|ist|sind|fachgerecht|professionell|komplett|alles))* (?:repariert|behoben|instandgesetzt|beseitigt|erneuert|getauscht|gewechselt|gemacht)\b/;
 
-function mentioned(text: string, pattern: RegExp, negatable: boolean): boolean {
+interface Title {
+  /** The normalized title. */
+  text: string;
+  /** Where each phrase starts in `text`. */
+  phraseStarts: number[];
+}
+
+/** Negated: the word right before is a negation, or the one before that with a filler between. */
+function negated(title: Title, index: number): boolean {
+  const start = title.phraseStarts.findLast((phraseStart) => phraseStart <= index) ?? 0;
+  const words = title.text.slice(start, index).split(" ").filter(Boolean);
+  const last = words.at(-1);
+  const beforeLast = words.at(-2);
+  if (last === undefined) return false;
+  return NEGATIONS.has(last) || (beforeLast !== undefined && FILLERS.has(last) && NEGATIONS.has(beforeLast));
+}
+
+function mentioned(title: Title, pattern: RegExp, negatable: boolean): boolean {
   pattern.lastIndex = 0;
-  for (const match of text.matchAll(pattern)) {
-    const before = text.slice(0, match.index).trim().split(" ").slice(-2);
-    if (negatable && before.some((word) => NEGATIONS.has(word))) continue;
-    if (FIXED.test(text.slice(match.index + match[0].length))) continue;
+  for (const match of title.text.matchAll(pattern)) {
+    if (negatable && negated(title, match.index)) continue;
+    if (FIXED.test(title.text.slice(match.index + match[0].length))) continue;
     return true;
   }
   return false;
 }
 
 /** The damage kinds a title mentions, in DAMAGE_KINDS order; empty when it mentions none. */
-export function detectDamage(title: string): DamageKind[] {
-  const text = normalizeText(title);
+export function detectDamage(raw: string): DamageKind[] {
+  // Same text as normalizeText(raw), but it remembers where each phrase starts.
+  const phrases = raw.split(PHRASE_BREAK).map(normalizeText).filter(Boolean);
+  const phraseStarts: number[] = [];
+  let offset = 0;
+  for (const phrase of phrases) {
+    phraseStarts.push(offset);
+    offset += phrase.length + 1;
+  }
+  const title: Title = { text: phrases.join(" "), phraseStarts };
   const found = new Set<DamageKind>();
   for (const rule of RULES) {
-    if (!found.has(rule.kind) && mentioned(text, rule.pattern, rule.negatable ?? true)) found.add(rule.kind);
+    if (!found.has(rule.kind) && mentioned(title, rule.pattern, rule.negatable ?? true)) found.add(rule.kind);
   }
-  if (found.size === 0 && mentioned(text, GENERIC, true)) found.add("defect");
+  if (found.size === 0 && mentioned(title, GENERIC, true)) found.add("defect");
   return DAMAGE_KINDS.filter((kind) => found.has(kind));
 }

@@ -22,6 +22,7 @@ interface Car {
   damage?: string[] | null;
   status?: "active" | "gone";
   huBasis?: string | null;
+  huUntil?: string | null;
   cluster?: number | null;
 }
 
@@ -35,9 +36,9 @@ describe.skipIf(!url)("market values against Postgres", () => {
     const { rows } = await pool.query<{ id: string }>(
       `insert into listings (source_id, external_id, url, title, make_slug, model_slug, make_raw, model_raw, price_eur,
                              mileage_km, first_registration, fuel, transmission, power_kw, seller_type, damage, status,
-                             hu_basis, cluster_id)
+                             hu_basis, hu_until, cluster_id)
        values ('market-test', $1, 'https://example.org/' || $1, $2, 'volkswagen', 'golf', 'VW', 'Golf', $3,
-               $4, make_date($5::int, 6, 1), $6, 'manual', 90, 'private', $7, $8, $9, $10)
+               $4, make_date($5::int, 6, 1), $6, 'manual', 90, 'private', $7, $8, $9, $10, $11)
        returning id`,
       [
         `car-${next}`,
@@ -49,6 +50,7 @@ describe.skipIf(!url)("market values against Postgres", () => {
         car.damage === undefined ? [] : car.damage,
         car.status ?? "active",
         car.huBasis ?? null,
+        car.huUntil ?? null,
         car.cluster ?? null,
       ],
     );
@@ -90,9 +92,11 @@ describe.skipIf(!url)("market values against Postgres", () => {
 
   it("leaves out damaged, HU-expired, cheap and different cars, and counts a vehicle on two portals once", async () => {
     for (const price of [5000, 6000, 7000, 8000]) await addCar({ price });
-    // Not comparable: damage, expired HU, a giveaway, other fuel, far more km, other year, no km.
+    // Not comparable: damage, expired HU (said so or by date), a giveaway, other fuel, far more km,
+    // other year, no km.
     await addCar({ price: 4000, damage: ["gearbox"] });
     await addCar({ price: 4000, huBasis: "expired" });
+    await addCar({ price: 4000, huBasis: "stated", huUntil: "2020-01-01" });
     await addCar({ price: 0 });
     await addCar({ price: 4000, fuel: "diesel" });
     await addCar({ price: 4000, km: 200_000 });
@@ -141,8 +145,19 @@ describe.skipIf(!url)("market values against Postgres", () => {
     // Writing the same price again adds nothing.
     await pool.query("update listings set price_eur = 3500, title = 'VW Golf VB' where id = $1", [id]);
 
+    // Two changes in one transaction are two entries.
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      await client.query("update listings set price_eur = 3200 where id = $1", [id]);
+      await client.query("update listings set price_eur = 3000 where id = $1", [id]);
+      await client.query("commit");
+    } finally {
+      client.release();
+    }
+
     const listing = await getListing(pool, id);
-    expect(listing?.priceHistory.map((point) => point.priceEur)).toEqual([4000, 3500]);
+    expect(listing?.priceHistory.map((point) => point.priceEur)).toEqual([4000, 3500, 3200, 3000]);
   });
 
   it("fills in damage hints of listings stored before detection", async () => {
