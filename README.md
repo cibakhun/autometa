@@ -23,8 +23,8 @@ npm run dev                     # http://localhost:3000
 | `npm run dev` | Entwicklungsserver |
 | `npm run db:migrate` | SQL-Migrationen aus `supabase/migrations` anwenden |
 | `npm run db:seed` | Marken- und Modellliste sowie bekannte Postleitzahlen schreiben |
-| `npm run db:prepare` | `db:seed` und, solange die Datenbank keine Angebote hat, die Demo-Daten importieren (läuft bei jedem Start) |
-| `npm run ingest -- autoscout24 kleinanzeigen` | Quellen einmal importieren, danach Dubletten neu gruppieren (`demo` für Demo-Daten) |
+| `npm run db:prepare` | `db:seed`, solange die Datenbank keine Angebote hat die Demo-Daten importieren, Schadenshinweise alter Angebote nachtragen und Marktwerte berechnen (läuft bei jedem Start) |
+| `npm run ingest -- autoscout24 kleinanzeigen` | Quellen einmal importieren, danach Dubletten neu gruppieren und Marktwerte berechnen (`demo` für Demo-Daten) |
 | `npm run worker` | Hintergrund-Job: importiert die Quellen aus `SCRAPE_SOURCES` alle `SCRAPE_INTERVAL_MINUTES` Minuten |
 | `npm test` | Tests; mit `TEST_DATABASE_URL` auch gegen eine echte Datenbank |
 | `npm run lint` / `npm run typecheck` / `npm run build` | Prüfungen wie in der CI |
@@ -44,6 +44,8 @@ data/                  Postleitzahlen mit Koordinaten (GeoNames, CC BY 4.0)
 ```
 
 So fließen die Daten: Adapter ruft ab → Rohdaten landen in `raw_listings` → Normalisierung auf das einheitliche Format → `listings`. Jede Quelle wird in einem eigenen Lauf importiert (`ingest_runs`); zwei Läufe derselben Quelle können sich nicht überschneiden. Nach jedem Import gruppiert `updateDuplicates` dasselbe Fahrzeug auf mehreren Börsen (gleiche Marke, Modell und Erstzulassung, km ±2 %, Preis ±8 %, höchstens 25 km entfernt, keine widersprüchliche Leistung, Kraftstoff oder Getriebe). Die Suche zeigt es einmal, zum günstigsten Preis, mit „Auch bei …“ für die anderen Börsen.
+
+Danach berechnet `updateMarketValues` (`src/ingest/market.ts`) für jedes aktive Angebot einen Marktwert: den Median der Preise vergleichbarer intakter Angebote (gleiche Marke und gleiches Modell, Erstzulassung ±1 Jahr, km ±25 % oder mindestens ±15.000 km, gleicher Kraftstoff und gleiches Getriebe, Leistung ±20 %), dazu die mittlere Hälfte als übliche Spanne. Vergleichbar sind aktive und in den letzten 90 Tagen verschwundene Angebote ab 500 € ohne Schadenshinweis und ohne abgelaufene HU, jedes Fahrzeug nur einmal. Unter 5 vergleichbaren Angeboten gibt es keinen Wert. Es sind Angebotspreise, keine Verkaufspreise. Schadenshinweise liest `detectDamage` (`src/core/damage.ts`) aus dem Titel („Motorschaden“, „Getriebe defekt“, „springt nicht an“, „Unfallwagen“, „für Bastler“ …), verneinte und reparierte Schäden („kein Rost“, „Motorschaden behoben“) zählen nicht. Die Suche filtert danach („Zustand laut Titel“) und sortiert nach dem Abstand zum Marktwert. Jede Preisänderung eines Angebots landet per Trigger in `listing_prices` (Preisverlauf auf der Detailseite).
 
 Wann ein Angebot aus der Suche verschwindet:
 
