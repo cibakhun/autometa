@@ -32,8 +32,9 @@ export async function updateRepairEstimates(pool: Pool): Promise<number> {
       body_type: BodyType | null;
       fuel: Fuel | null;
       hu_basis: InspectionBasis | null;
+      hu_until: string | null;
     }>(
-      `select id, damage, make_slug, power_kw, body_type, fuel, hu_basis
+      `select id, damage, make_slug, power_kw, body_type, fuel, hu_basis, to_char(hu_until, 'YYYY-MM-DD') as hu_until
          from listings
         where status = 'active' and cardinality(damage) > 0 and id > $1
         order by id limit $2`,
@@ -47,6 +48,7 @@ export async function updateRepairEstimates(pool: Pool): Promise<number> {
         bodyType: row.body_type,
         fuel: row.fuel,
         huBasis: row.hu_basis,
+        huUntil: row.hu_until,
       });
       return {
         id: Number(row.id),
@@ -58,6 +60,14 @@ export async function updateRepairEstimates(pool: Pool): Promise<number> {
         diff: estimate.difficulty,
         conf: estimate.confidence,
         tow: estimate.needsTow,
+        // What the estimate was computed from, so a row an import changed meanwhile is left for the next run.
+        damage: row.damage,
+        make: row.make_slug,
+        kw: row.power_kw,
+        body: row.body_type,
+        fuel: row.fuel,
+        hub: row.hu_basis,
+        huu: row.hu_until,
       };
     });
     const result = await pool.query(
@@ -66,8 +76,12 @@ export async function updateRepairEstimates(pool: Pool): Promise<number> {
               repair_hours_min = v.hmin, repair_hours_max = v.hmax, repair_difficulty = v.diff,
               repair_confidence = v.conf, repair_needs_tow = v.tow
          from jsonb_to_recordset($1::jsonb)
-              as v(id bigint, cls text, pmin int, pmax int, hmin real, hmax real, diff smallint, conf text, tow boolean)
+              as v(id bigint, cls text, pmin int, pmax int, hmin real, hmax real, diff smallint, conf text, tow boolean,
+                   damage jsonb, make text, kw int, body text, fuel text, hub text, huu date)
         where l.id = v.id
+          and to_jsonb(l.damage) = v.damage
+          and (l.make_slug, l.power_kw, l.body_type, l.fuel, l.hu_basis, l.hu_until)
+              is not distinct from (v.make, v.kw, v.body, v.fuel, v.hub, v.huu)
           and (l.vehicle_class, l.repair_parts_min_eur, l.repair_parts_max_eur, l.repair_hours_min, l.repair_hours_max,
                l.repair_difficulty, l.repair_confidence, l.repair_needs_tow)
               is distinct from (v.cls, v.pmin, v.pmax, v.hmin, v.hmax, v.diff, v.conf, v.tow)`,

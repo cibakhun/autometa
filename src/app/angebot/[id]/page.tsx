@@ -205,7 +205,7 @@ function Flip({ listing, settings }: { listing: ListingDetail; settings: FlipSet
       priceEur={listing.priceEur}
       marketEur={listing.marketPriceEur}
       damage={listing.damage}
-      facts={{ makeSlug: listing.makeSlug, powerKw: listing.powerKw, bodyType: listing.bodyType, fuel: listing.fuel, huBasis: listing.huBasis }}
+      facts={{ makeSlug: listing.makeSlug, powerKw: listing.powerKw, bodyType: listing.bodyType, fuel: listing.fuel, huBasis: listing.huBasis, huUntil: listing.huUntil }}
       settings={settings}
     />
   );

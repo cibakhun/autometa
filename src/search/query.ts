@@ -147,7 +147,8 @@ export function buildWhere(filters: SearchFilters, origin: Origin | null, params
   if (filters.schwierigkeit !== undefined) add((p) => `l.repair_difficulty <= ${p(filters.schwierigkeit)}`);
   if (filters.margeMin !== undefined) {
     const { margin } = flipSql(settings, params);
-    add((p) => `${margin} >= ${p(filters.margeMin)}`);
+    // Rounded to 10 euros like the margin shown (Math.round), so a shown 1.880 € passes "ab 1.880 €".
+    add((p) => `floor(${margin} / 10 + 0.5) * 10 >= ${p(filters.margeMin)}`);
   }
   if (filters.source.length > 0) add((p) => `l.source_id = any(${p(filters.source)}::text[])`);
   if (filters.q) add((p) => `l.title ilike ${p(`%${escapeLike(filters.q!)}%`)}`);
