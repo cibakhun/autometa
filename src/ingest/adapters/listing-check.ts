@@ -1,0 +1,116 @@
+import type { CheckOutcome, CheckResult, ListingRef } from "../adapter";
+import {
+  BlockedError,
+  BudgetExceededError,
+  DisallowedError,
+  HttpStatusError,
+  type FetchedPage,
+  type PoliteFetcher,
+} from "../http/fetcher";
+
+/**
+ * Checks stored listings on their own page, one request each, through the same PoliteFetcher as
+ * the lists (robots.txt, pacing, stop at blocks). Used for portals whose robots.txt lets us read
+ * only the newest result pages, so a listing that dropped out of them is never seen in a list again.
+ *
+ * Only the outcome leaves this module: pages hold the seller's description and, for private
+ * sellers, their name, so they are neither stored nor logged.
+ */
+
+export interface ListingCheckOptions {
+  fetcher: PoliteFetcher;
+  log: (message: string) => void;
+  /** What a page that loaded (after any redirects) says about the listing. */
+  verdict: (ref: ListingRef, page: FetchedPage) => CheckOutcome;
+  /**
+   * What it means that the listing's address redirects to a page robots.txt forbids, e.g. the
+   * portal's "ad not found" page. Without it such a redirect is unclear.
+   */
+  disallowedRedirect?: (ref: ListingRef, target: string) => CheckOutcome;
+}
+
+/** Network or server errors in a row that end the checks: the site is probably down. */
+const MAX_FAILURES_IN_A_ROW = 3;
+/** Unclear pages in a row that end the checks: the page format probably changed. */
+export const MAX_UNCLEAR_IN_A_ROW = 20;
+/**
+ * Outcomes are handed on in groups. A group in which nearly every listing is gone is not believed:
+ * even among old listings most are still online, so such a group means the portal answers
+ * differently than expected (a block page, a redirect for bots), and the checks stop without it.
+ */
+export const CHECK_GROUP = 25;
+export const MAX_GONE_IN_GROUP = 22;
+
+type Attempt = CheckOutcome | "stop";
+
+export async function* checkListingPages(due: ListingRef[], options: ListingCheckOptions): AsyncGenerator<CheckResult> {
+  const { fetcher, log } = options;
+  const counts: Record<CheckOutcome, number> = { active: 0, gone: 0, unclear: 0 };
+  let failures = 0;
+  let unclearInARow = 0;
+  let group: CheckResult[] = [];
+
+  const attempt = async (ref: ListingRef): Promise<Attempt> => {
+    try {
+      const page = await fetcher.getText(ref.url);
+      failures = 0;
+      return options.verdict(ref, page);
+    } catch (error) {
+      if (error instanceof BudgetExceededError) return "stop";
+      if (error instanceof BlockedError) throw error;
+      if (error instanceof HttpStatusError && error.status < 500) {
+        failures = 0;
+        // Taken down; anything else (400, 405 …) says nothing about the listing.
+        return error.status === 404 || error.status === 410 ? "gone" : "unclear";
+      }
+      if (error instanceof DisallowedError) {
+        if (error.url === ref.url) {
+          log(`checks stopped: robots.txt forbids the listing pages (${error.message})`);
+          return "stop";
+        }
+        failures = 0;
+        return options.disallowedRedirect?.(ref, error.url) ?? "unclear";
+      }
+      failures += 1;
+      log(`check failed: ${ref.url}: ${error instanceof Error ? error.message : String(error)}`);
+      return failures >= MAX_FAILURES_IN_A_ROW ? "stop" : "unclear";
+    }
+  };
+
+  /** False when the group is not plausible and the checks must stop. */
+  const plausible = (results: CheckResult[]) => {
+    const gone = results.filter((r) => r.outcome === "gone").length;
+    if (results.length >= CHECK_GROUP && gone > MAX_GONE_IN_GROUP) {
+      log(`checks stopped: ${gone} of ${results.length} listings in a row look taken down; the portal probably answers differently now`);
+      return false;
+    }
+    return true;
+  };
+
+  try {
+    for (const ref of due) {
+      if (fetcher.requestsLeft < 1) break;
+      const outcome = await attempt(ref);
+      if (outcome === "stop") break;
+      counts[outcome] += 1;
+      group.push({ externalId: ref.externalId, outcome });
+      if (outcome === "unclear") {
+        unclearInARow += 1;
+        if (unclearInARow >= MAX_UNCLEAR_IN_A_ROW) {
+          log(`checks stopped: ${unclearInARow} unclear pages in a row; did the listing page change?`);
+          break;
+        }
+      } else {
+        unclearInARow = 0;
+      }
+      if (group.length >= CHECK_GROUP) {
+        if (!plausible(group)) return;
+        yield* group;
+        group = [];
+      }
+    }
+    if (group.length > 0 && plausible(group)) yield* group;
+  } finally {
+    log(`checked ${counts.active + counts.gone + counts.unclear} listing pages: ${counts.active} online, ${counts.gone} taken down, ${counts.unclear} unclear`);
+  }
+}

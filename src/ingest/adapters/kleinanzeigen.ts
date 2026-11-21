@@ -13,9 +13,10 @@ import {
 } from "@/core/normalize";
 import { MAKES } from "@/core/taxonomy";
 import type { NormalizedListing } from "@/core/types";
-import type { RawListing, SourceAdapter, SourceInfo } from "../adapter";
-import { BlockedError, BudgetExceededError, DisallowedError, HttpStatusError, type PoliteFetcher } from "../http/fetcher";
+import type { CheckOutcome, ListingRef, RawListing, SourceAdapter, SourceInfo } from "../adapter";
+import { BlockedError, BudgetExceededError, DisallowedError, HttpStatusError, type FetchedPage, type PoliteFetcher } from "../http/fetcher";
 import { decodeEntities, textOf } from "../http/html";
+import { checkListingPages } from "./listing-check";
 
 /**
  * Kleinanzeigen (www.kleinanzeigen.de), car category "Autos" (c216). Its robots.txt allows the
@@ -23,8 +24,9 @@ import { decodeEntities, textOf } from "../http/html";
  * mileage or first registration. So each run reads the newest listings: each make, then the
  * search for "verschenken" (cars given away are rare and drop out of the newest pages before a run
  * sees them), then the whole category, up to five pages each. Listings drop out of the newest
- * pages after a while and are not re-checked, so they leave the search staleAfterDays after they
- * were last seen.
+ * pages after a while, so for the rest of the run each listing not seen for a day is checked on
+ * its own page (/s-anzeige/, which robots.txt allows), the longest unchecked first. One that is
+ * neither seen nor confirmed for staleAfterDays leaves the search.
  *
  * The result list does not say whether a seller is a dealer or a private person, so the seller
  * type stays unknown. Description texts and seller names are never stored.
@@ -156,6 +158,29 @@ export function parseKleinanzeigenPage(html: string, listMake: string | null = n
   return items;
 }
 
+/** The ad id in a Kleinanzeigen ad address (/s-anzeige/<title>/<id>-<category>-<place>), or null for any other page. */
+export function adIdOf(url: string): string | null {
+  const { hostname, pathname } = new URL(url);
+  if (!hostname.endsWith("kleinanzeigen.de")) return null;
+  return pathname.match(/^\/s-anzeige\/[^/]+\/(\d+)-/)?.[1] ?? null;
+}
+
+/** What an ad page shows once the seller deleted the ad or it expired. */
+const TAKEN_DOWN =
+  /Die gewünschte Anzeige ist nicht mehr verfügbar|Diese Anzeige ist nicht mehr verfügbar|Anzeige (?:ist |wurde )?gelöscht|>\s*Gelöscht\s*(?:<\/[a-z]+>\s*)?(?:•|&bull;|&#8226;)/i;
+
+/**
+ * What an ad's own page says. Led to a page that is no ad (search, start page): taken down. The
+ * ad itself: taken down when it says so, online when the page carries its id, else unclear.
+ */
+export function kleinanzeigenVerdict(ref: ListingRef, page: FetchedPage): CheckOutcome {
+  const id = adIdOf(page.url);
+  if (id === null) return "gone";
+  if (id !== ref.externalId) return "unclear";
+  if (TAKEN_DOWN.test(page.text)) return "gone";
+  return page.text.includes(ref.externalId) ? "active" : "unclear";
+}
+
 export function normalizeKleinanzeigen(raw: RawListing): NormalizedListing | null {
   const item = raw.payload as unknown as KleinanzeigenItem;
   // Cars given away ("Zu verschenken") are kept at 0 €; other prices under 100 € are placeholders.
@@ -242,8 +267,9 @@ export function createKleinanzeigenAdapter(options: KleinanzeigenOptions): Sourc
   return {
     source: KLEINANZEIGEN,
     fullSnapshot: false,
-    staleAfterDays: options.staleAfterDays ?? 14,
+    staleAfterDays: options.staleAfterDays ?? 2,
     normalize: normalizeKleinanzeigen,
+    checkListings: (due) => checkListingPages(due, { fetcher, log, verdict: kleinanzeigenVerdict }),
     async *fetch() {
       failuresInARow = 0;
       const seen = new Set<string>();

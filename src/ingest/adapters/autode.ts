@@ -202,7 +202,7 @@ export function createAutoDeAdapter(options: AutoDeOptions): SourceAdapter {
     source: AUTODE,
     fullSnapshot: false,
     // About 2,000 offer pages at 300 per hourly run: every page comes round within a day.
-    staleAfterDays: options.staleAfterDays ?? 3,
+    staleAfterDays: options.staleAfterDays ?? 2,
     normalize: normalizeAutoDe,
     async *fetch(context?: FetchContext): AsyncGenerator<RawListing> {
       const loader = new PageLoader(AUTODE.id, options.fetcher, log, context?.db);

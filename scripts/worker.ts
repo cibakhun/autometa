@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import { getPool } from "@/lib/db";
 import { ADAPTERS } from "@/ingest/adapters";
 import { refreshDefectProfiles } from "@/ingest/defects/refresh";
-import { readBoolean, readList, readNumber } from "@/ingest/http/config";
+import { intervalMinutes, readBoolean, readList, runMinutes } from "@/ingest/http/config";
 import { ingestSources } from "@/ingest/pipeline";
 import { updateRepairEstimates } from "@/ingest/repairs";
 
@@ -11,6 +11,10 @@ import { updateRepairEstimates } from "@/ingest/repairs";
  * Background import: runs the sources in SCRAPE_SOURCES (e.g. "autoscout24,kleinanzeigen") right
  * away and then every SCRAPE_INTERVAL_MINUTES, counted from the start of the previous round.
  * A round that runs longer than the interval is followed by the next one at once, never overlapped.
+ * Each source fetches for at most SCRAPE_RUN_MINUTES per round; the rest of the round is for
+ * duplicates, market values and repair estimates. Sources with much to check (AutoScout24's whole
+ * inventory, Kleinanzeigen's and Quoka's older listings) use that time fully, so every listing is
+ * read or checked about once a day.
  *
  * Next to it, unless RDW_PROFILES is false, the defect profiles per model are built from RDW open
  * data (src/ingest/defects): a run of at most RDW_MAX_REQUESTS queries, then the next one an hour
@@ -29,7 +33,9 @@ async function main() {
     log("SCRAPE_SOURCES is empty, nothing to import.");
     return;
   }
-  const intervalMs = readNumber("SCRAPE_INTERVAL_MINUTES", 60, 10) * 60_000;
+  const intervalMs = intervalMinutes() * 60_000;
+  // Fails here, before the first round, when the run time does not fit the interval.
+  const fetchMinutes = runMinutes();
   // Each source holds one connection for its whole run; the defect refresh and the repair
   // estimates need one each besides, plus one to spare. Otherwise they wait for a source to end.
   process.env.DATABASE_POOL_MAX ??= String(sources.length + 3);
@@ -42,7 +48,7 @@ async function main() {
   process.once("SIGTERM", stop);
   process.once("SIGINT", stop);
 
-  log(`importing ${sources.join(", ")} every ${intervalMs / 60_000} minutes`);
+  log(`importing ${sources.join(", ")} every ${intervalMs / 60_000} minutes, fetching up to ${fetchMinutes} minutes each`);
   const defects = readBoolean("RDW_PROFILES", true) ? defectLoop(pool, () => stopping) : Promise.resolve();
   while (!stopping) {
     const started = Date.now();

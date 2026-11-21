@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  type AutoScout24Item,
   listUrl,
   normalizeAutoScout24,
+  paceDelayMs,
   PageFormatError,
   parseAutoScout24Page,
+  planPages,
   segmentKey,
   splitSegment,
-  type AutoScout24Item,
 } from "./autoscout24";
 
 /** A result list entry shaped like the one in AutoScout24's embedded page data (synthetic values). */
@@ -210,5 +212,28 @@ describe("splitSegment", () => {
   it("names segments by make and range", () => {
     expect(segmentKey({ make: "bmw", priceFrom: 5000, priceTo: 6000 })).toBe("bmw:5000-6000");
     expect(segmentKey({ make: "bmw", priceFrom: 0, priceTo: null })).toBe("bmw:0-");
+  });
+});
+
+describe("pacing the sweep to read everything once a day", () => {
+  const pace = { cycleHours: 24, runMinutes: 50, intervalMinutes: 60, minDelayMs: 2000, maxDelayMs: 5000 };
+
+  it("counts the pages a full read of the plan takes", () => {
+    expect(planPages([{ lastTotal: null }, { lastTotal: 0 }, { lastTotal: 1 }, { lastTotal: 21 }, { lastTotal: 400 }, { lastTotal: 5000 }], 20)).toBe(
+      1 + 1 + 1 + 2 + 20 + 20,
+    );
+  });
+
+  it("goes as fast as the inventory needs, within its bounds", () => {
+    // About 200,000 listings: no need to hurry.
+    expect(paceDelayMs(10_000, 45, pace, 500)).toBe(4700);
+    // About 440,000 listings: close to the floor.
+    expect(paceDelayMs(22_000, 45, pace, 500)).toBe(2000);
+    // Far more than a day allows at the floor: stays at the floor.
+    expect(paceDelayMs(100_000, 45, pace, 500)).toBe(2000);
+    // A small plan: never slower than the relaxed pause.
+    expect(paceDelayMs(1_000, 45, pace, 500)).toBe(5000);
+    // Slow answers leave less pause.
+    expect(paceDelayMs(10_000, 45, pace, 1500)).toBeLessThan(paceDelayMs(10_000, 45, pace, 500));
   });
 });

@@ -1,15 +1,16 @@
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { NormalizedListing } from "@/core/types";
-import type { RawListing, SourceAdapter, SourceInfo } from "@/ingest/adapter";
-import { createAutoScout24Adapter, listUrl } from "@/ingest/adapters/autoscout24";
+import type { CheckOutcome, ListingRef, RawListing, SourceAdapter, SourceInfo } from "@/ingest/adapter";
+import { createAutoScout24Adapter, listUrl, paceDelayMs, planPages } from "@/ingest/adapters/autoscout24";
 import { createDemoAdapter } from "@/ingest/adapters/demo";
 import { updateDuplicates } from "@/ingest/duplicates";
-import { PoliteFetcher } from "@/ingest/http/fetcher";
+import { BlockedError, PoliteFetcher } from "@/ingest/http/fetcher";
 import { migrate } from "@/ingest/migrate";
 import { removeDemoData } from "@/ingest/pipeline";
 import { IngestBusyError, runIngest } from "@/ingest/run";
 import { seedReferenceData } from "@/ingest/seed";
+import { getSourceHealth, updateSourceStats } from "@/ingest/status";
 import { parseFilters } from "@/search/filters";
 import { getListing, getMakeFacets, getSourceFacets, getSourceStatus, searchListings } from "@/search/query";
 import { emptyTestDatabase } from "./test-database";
@@ -70,13 +71,30 @@ interface Sighting {
 function fakePortal(
   source: SourceInfo,
   sightings: Sighting[],
-  options: { completedSegments?: string[]; staleAfterDays?: number; beforeEnd?: () => Promise<void> } = {},
+  options: {
+    completedSegments?: string[];
+    staleAfterDays?: number;
+    beforeEnd?: () => Promise<void>;
+    /** What each listing's own page says, for a portal whose listings are checked one by one. */
+    checks?: { outcomes: Record<string, CheckOutcome>; due: ListingRef[]; blockAt?: string };
+  } = {},
 ): SourceAdapter {
+  const checks = options.checks;
   return {
     source,
     fullSnapshot: false,
     staleAfterDays: options.staleAfterDays,
     completedSegments: () => options.completedSegments ?? [],
+    ...(checks && {
+      async *checkListings(due: ListingRef[]) {
+        for (const ref of due) {
+          if (ref.externalId === checks.blockAt) throw new BlockedError(ref.url, "rate limited (429)");
+          checks.due.push(ref);
+          const outcome = checks.outcomes[ref.externalId];
+          if (outcome) yield { externalId: ref.externalId, outcome };
+        }
+      },
+    }),
     normalize: (raw: RawListing) => ({ ...(raw.payload as unknown as NormalizedListing) }),
     async *fetch() {
       for (const { listing, segment } of sightings) {
@@ -178,6 +196,99 @@ describe.skipIf(!url)("importing scraped portals", () => {
     expect(result.gone).toBe(1);
     expect(await statusOf(PORTAL_A, "1")).toMatchObject({ status: "gone" });
     expect(await statusOf(PORTAL_A, "2")).toMatchObject({ status: "active" });
+  });
+
+  it("checks listings not seen for a day on their own page, the longest unchecked first", async () => {
+    await runIngest(pool, fakePortal(PORTAL_A, ["1", "2", "3", "4", "5"].map((id) => ({ listing: car(PORTAL_A, id) }))));
+    for (const [id, hours] of [["1", 30], ["2", 40], ["3", 25], ["4", 10], ["5", 50]] as const) {
+      await pool.query("update listings set last_seen_at = now() - make_interval(hours => $2), missed_runs = 1 where external_id = $1", [id, hours]);
+    }
+    const checks = { outcomes: { "1": "active", "2": "gone", "3": "unclear", "5": "active" } as Record<string, CheckOutcome>, due: [] as ListingRef[] };
+    const result = await runIngest(pool, fakePortal(PORTAL_A, [], { checks }));
+
+    // Listing 4 was seen 10 hours ago and is not due yet.
+    expect(checks.due.map((ref) => ref.externalId)).toEqual(["5", "2", "1", "3"]);
+    expect(checks.due[0].url).toBe("https://a.example/angebot/5");
+    expect(result).toMatchObject({ checked: 4, gone: 1 });
+    const { rows } = await pool.query<{ external_id: string; status: string; gone_reason: string | null; gone_at: Date | null; hours: number; missed_runs: number }>(
+      `select external_id, status, gone_reason, gone_at, missed_runs,
+              round(extract(epoch from now() - last_seen_at) / 3600)::int as hours
+         from listings order by external_id`,
+    );
+    const byId = new Map(rows.map((row) => [row.external_id, row]));
+    expect(byId.get("1")).toMatchObject({ status: "active", hours: 0, missed_runs: 0, gone_reason: null });
+    expect(byId.get("2")).toMatchObject({ status: "gone", gone_reason: "checked", hours: 40 });
+    expect(byId.get("2")!.gone_at).not.toBeNull();
+    // Unclear changes nothing.
+    expect(byId.get("3")).toMatchObject({ status: "active", hours: 25, missed_runs: 1 });
+    expect(byId.get("4")).toMatchObject({ status: "active", hours: 10 });
+    expect(byId.get("5")).toMatchObject({ status: "active", hours: 0 });
+    const run = await pool.query("select checked, gone from ingest_runs where id = $1", [result.runId]);
+    expect(run.rows[0]).toEqual({ checked: 4, gone: 1 });
+  });
+
+  it("keeps the checks and the clean-up when the portal blocks a listing page", async () => {
+    await runIngest(pool, fakePortal(PORTAL_A, ["1", "2", "3"].map((id) => ({ listing: car(PORTAL_A, id) }))));
+    await pool.query("update listings set last_seen_at = now() - make_interval(hours => 30 + id::int % 3)");
+    await pool.query("update listings set last_seen_at = now() - interval '3 days' where external_id = '3'");
+    const checks = { outcomes: { "3": "active" } as Record<string, CheckOutcome>, due: [] as ListingRef[], blockAt: "1" };
+    // Due: 3 (oldest), then 1 and 2; the portal blocks at 1.
+    const result = await runIngest(pool, fakePortal(PORTAL_A, [], { checks, staleAfterDays: 2 }));
+    expect(result).toMatchObject({ checked: 1, gone: 0 });
+    const run = await pool.query("select error, finished_at is not null as finished from ingest_runs where id = $1", [result.runId]);
+    expect(run.rows[0].finished).toBe(true);
+    expect(run.rows[0].error).toMatch(/^Einzelprüfung abgebrochen: Blocked by a\.example: rate limited \(429\)/);
+    // Listing 3 was confirmed before the block, so the clean-up afterwards keeps it.
+    const { rows } = await pool.query("select external_id, status from listings order by external_id");
+    expect(rows).toEqual([
+      { external_id: "1", status: "active" },
+      { external_id: "2", status: "active" },
+      { external_id: "3", status: "active" },
+    ]);
+  });
+
+  it("records why a listing left and forgets it when the listing comes back", async () => {
+    const reasonOf = async (id: string) =>
+      (await pool.query("select status, gone_reason, gone_at is not null as dated from listings where external_id = $1", [id])).rows[0];
+    await runIngest(
+      pool,
+      fakePortal(PORTAL_A, [
+        { listing: car(PORTAL_A, "sold"), segment: "vw:0-1000" },
+        { listing: car(PORTAL_A, "old") },
+      ]),
+    );
+    await pool.query("update listings set last_seen_at = now() - interval '3 days' where external_id = 'old'");
+    const missing = () => fakePortal(PORTAL_A, [], { completedSegments: ["vw:0-1000"], staleAfterDays: 2 });
+    await runIngest(pool, missing());
+    expect(await reasonOf("old")).toEqual({ status: "gone", gone_reason: "stale", dated: true });
+    await runIngest(pool, missing());
+    expect(await reasonOf("sold")).toEqual({ status: "gone", gone_reason: "missed", dated: true });
+
+    await runIngest(pool, fakePortal(PORTAL_A, [{ listing: car(PORTAL_A, "old") }]));
+    expect(await reasonOf("old")).toEqual({ status: "active", gone_reason: null, dated: false });
+
+    const health = (await getSourceHealth(pool)).find((source) => source.id === PORTAL_A.id)!;
+    expect(health.goneLastDay).toEqual({ missed: 1, checked: 0, stale: 0 });
+  });
+
+  it("counts per source how many listings were seen or confirmed in the last 24 hours", async () => {
+    await runIngest(pool, fakePortal(PORTAL_A, ["1", "2", "3"].map((id) => ({ listing: car(PORTAL_A, id) }))));
+    await runIngest(pool, fakePortal(PORTAL_B, [{ listing: car(PORTAL_B, "1", { modelSlug: "polo" }) }]));
+    await pool.query("update listings set last_seen_at = now() - interval '30 hours' where source_id = $1 and external_id = '3'", [PORTAL_A.id]);
+
+    const stats = await updateSourceStats(pool);
+    expect(stats).toEqual([
+      { sourceId: PORTAL_A.id, active: 3, checked24h: 2 },
+      { sourceId: PORTAL_B.id, active: 1, checked24h: 1 },
+    ]);
+    const status = await getSourceStatus(pool);
+    expect(status.find((source) => source.id === PORTAL_A.id)?.checkedShare).toBeCloseTo(2 / 3);
+    const health = (await getSourceHealth(pool)).find((source) => source.id === PORTAL_A.id)!;
+    expect(health).toMatchObject({ activeListings: 3, checked24h: 2, plan: null });
+    expect(new Date(health.oldestCheckAt!).getTime()).toBeLessThan(Date.now() - 29 * 3_600_000);
+
+    const { items } = await searchListings(pool, parseFilters({ source: PORTAL_A.id }), null);
+    expect(items.every((item) => typeof item.checkedAt === "string")).toBe(true);
   });
 
   it("refuses a second import of the same source while one is running", async () => {
@@ -458,6 +569,38 @@ describe.skipIf(!url)("crawling AutoScout24 result lists", () => {
     const result = await runIngest(pool, adapter);
     expect(fetcher.requestsMade).toBe(3);
     expect(result.upserted).toBeGreaterThan(0);
+  });
+
+  it("paces itself to read the whole plan once per cycle", async () => {
+    await pool.query("delete from crawl_segments where source_id = 'autoscout24' and key like 'fiat:%'");
+    await pool.query(
+      `insert into crawl_segments (source_id, key, params, retired) values ('autoscout24', 'fiat:0-', '{"make":"fiat","priceFrom":0,"priceTo":null}', true)`,
+    );
+    for (let i = 0; i < 30; i += 1) {
+      const params = { make: "fiat", priceFrom: i * 100, priceTo: i * 100 + 100 };
+      await pool.query(
+        "insert into crawl_segments (source_id, key, params, last_total) values ('autoscout24', $1, $2, 400)",
+        [`fiat:${params.priceFrom}-${params.priceTo}`, JSON.stringify(params)],
+      );
+    }
+    const pace = { cycleHours: 1, runMinutes: 50, intervalMinutes: 60, minDelayMs: 1000, maxDelayMs: 9000 };
+    const lines: string[] = [];
+    // A virtual clock: the pauses the pace sets are waited out at once.
+    let clock = 0;
+    const fetchImpl = (async (input: string | URL) =>
+      String(input).endsWith("/robots.txt") ? new Response("User-agent: *\nAllow: /\n") : new Response(page([], 0, 1))) as typeof fetch;
+    const fetcher = new PoliteFetcher({ fetchImpl, now: () => clock, sleep: async (ms) => void (clock += ms), random: () => 0 });
+    const adapter = createAutoScout24Adapter({ fetcher, makes: ["fiat"], pace, log: (line) => lines.push(line) });
+    await runIngest(pool, adapter);
+
+    // Before reading: 30 segments of 400 listings, 20 pages each.
+    const first = paceDelayMs(600, 1, pace, 500);
+    expect(first).toBeGreaterThan(pace.minDelayMs);
+    expect(first).toBeLessThan(pace.maxDelayMs);
+    expect(lines[0]).toBe(`pace: ${(first / 1000).toFixed(1)} s between requests for about 600 pages per 1 h`);
+    // All of them turned out empty: one page each, no need to hurry.
+    expect(planPages(Array.from({ length: 30 }, () => ({ lastTotal: 0 })), 20)).toBe(30);
+    expect(fetcher.delayMs).toBe(pace.maxDelayMs);
   });
 
   it("needs only the import's own database connection", async () => {

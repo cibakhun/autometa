@@ -4,6 +4,7 @@ import { updateDuplicates, type DuplicateResult } from "./duplicates";
 import { updateMarketValues, type MarketResult } from "./market";
 import { updateRepairEstimates } from "./repairs";
 import { runIngest, type IngestResult } from "./run";
+import { updateSourceStats, type SourceStats } from "./status";
 
 export interface SourceOutcome {
   source: string;
@@ -19,6 +20,8 @@ export interface PipelineResult {
   repairsChanged: number;
   /** Demo listings removed because real listings arrived. */
   demoRemoved: number;
+  /** Per source: active listings and how many were seen or confirmed in the last 24 hours. */
+  stats: SourceStats[];
 }
 
 /**
@@ -41,7 +44,7 @@ export async function ingestSources(
       try {
         const result = await runIngest(pool, ADAPTERS[source]({ pool }));
         log(
-          `${source}: fetched ${result.fetched}, stored ${result.upserted}, skipped ${result.skipped}, gone ${result.gone} (${Math.round((Date.now() - started) / 1000)} s)`,
+          `${source}: fetched ${result.fetched}, stored ${result.upserted}, skipped ${result.skipped}, checked ${result.checked}, gone ${result.gone} (${Math.round((Date.now() - started) / 1000)} s)`,
         );
         return { source, result };
       } catch (error) {
@@ -64,7 +67,16 @@ export async function ingestSources(
   log(`market: ${market.valued} active listings have a market value (${market.changed} changed)`);
   const repairsChanged = await updateRepairEstimates(pool);
   log(`repairs: ${repairsChanged} repair estimates changed`);
-  return { sources, duplicates, market, repairsChanged, demoRemoved };
+  const stats = await updateSourceStats(pool);
+  log(
+    `checked in 24 h: ${
+      stats
+        .filter((s) => s.active > 0)
+        .map((s) => `${s.sourceId} ${s.checked24h} of ${s.active} (${Math.floor((s.checked24h / s.active) * 100)} %)`)
+        .join(", ") || "no active listings"
+    }`,
+  );
+  return { sources, duplicates, market, repairsChanged, demoRemoved, stats };
 }
 
 async function hasRealListings(pool: Pool): Promise<boolean> {

@@ -33,14 +33,27 @@ function withToken(path: string, token: string, params: Record<string, string> =
   return `${path}?${search.toString()}`;
 }
 
+const num = (n: number) => n.toLocaleString("de-DE");
+const share = (part: number, whole: number) => (whole > 0 ? `${Math.floor((part / whole) * 100)} %` : "–");
+
 function runCells(run: RunInfo | null): string {
-  if (!run) return `<td colspan="5" class="muted">noch kein Lauf</td>`;
+  if (!run) return `<td colspan="6" class="muted">noch kein Lauf</td>`;
   const state = run.error
     ? `<span class="bad">Fehler: ${e(run.error.slice(0, 300))}</span>`
     : run.finishedAt
       ? `<span class="ok">fertig</span>`
       : "läuft";
-  return `<td>${time(run.startedAt)}</td><td class="n">${run.fetched}</td><td class="n">${run.upserted}</td><td class="n">${run.gone}</td><td>${state}</td>`;
+  return `<td>${time(run.startedAt)}</td><td class="n">${run.fetched}</td><td class="n">${run.upserted}</td><td class="n">${run.checked}</td><td class="n">${run.gone}</td><td>${state}</td>`;
+}
+
+/** How fresh a source's listings are and how its crawl plan is doing. */
+function checkCells(s: SourceHealth): string {
+  const gone = s.goneLastDay;
+  const plan = s.plan
+    ? `${num(s.plan.readLastDay)} von ${num(s.plan.segments)} Bereichen in 24 h ganz gelesen (${num(s.plan.listed)} Angebote laut Börse)` +
+      (s.plan.neverRead > 0 ? `, ${num(s.plan.neverRead)} noch nie ganz` : `, ältester ${time(s.plan.oldestReadAt)}`)
+    : "–";
+  return `<td class="n">${num(s.checked24h)} (${share(s.checked24h, s.activeListings)})</td><td>${time(s.oldestCheckAt)}</td><td class="n">${num(gone.missed)} / ${num(gone.checked)} / ${num(gone.stale)}</td><td>${plan}</td>`;
 }
 
 export function renderStatusPage(input: {
@@ -53,9 +66,10 @@ export function renderStatusPage(input: {
   const sources = input.sources
     .map(
       (s) =>
-        `<tr><td><b>${e(s.name)}</b><br><span class="muted">${e(s.id)} · ${e(s.kind)}</span></td><td class="n">${s.activeListings}</td><td class="n">${s.goneListings}</td><td>${time(s.lastSuccessAt)}</td>${runCells(s.lastRun)}</tr>`,
+        `<tr><td><b>${e(s.name)}</b><br><span class="muted">${e(s.id)} · ${e(s.kind)}</span></td><td class="n">${num(s.activeListings)}</td><td class="n">${num(s.goneListings)}</td><td>${time(s.lastSuccessAt)}</td>${runCells(s.lastRun)}</tr>`,
     )
     .join("");
+  const checks = input.sources.map((s) => `<tr><td><b>${e(s.name)}</b></td>${checkCells(s)}</tr>`).join("");
   const runs = input.runs
     .map((r) => `<tr><td>${e(r.sourceId)}</td>${runCells(r)}<td>${time(r.finishedAt)}</td></tr>`)
     .join("");
@@ -70,7 +84,11 @@ export function renderStatusPage(input: {
     "Quellen-Status",
     `<h1>Quellen-Status</h1>
 <p class="muted">Zeiten in deutscher Zeit. Diese Seite ist nur mit dem Admin-Token erreichbar.</p>
-<div class="scroll"><table><thead><tr><th>Quelle</th><th>aktiv</th><th>weg</th><th>letzter Import mit Daten</th><th>letzter Lauf</th><th>gelesen</th><th>gespeichert</th><th>weg</th><th>Zustand</th></tr></thead><tbody>${sources || `<tr><td colspan="9" class="muted">keine Quellen</td></tr>`}</tbody></table></div>
+<div class="scroll"><table><thead><tr><th>Quelle</th><th>aktiv</th><th>weg</th><th>letzter Import mit Daten</th><th>letzter Lauf</th><th>gelesen</th><th>gespeichert</th><th>einzeln geprüft</th><th>weg</th><th>Zustand</th></tr></thead><tbody>${sources || `<tr><td colspan="10" class="muted">keine Quellen</td></tr>`}</tbody></table></div>
+
+<h2 id="pruefung">Tägliche Prüfung</h2>
+<p class="muted">Geprüft heißt: in der Liste der Börse gesehen oder auf der Anzeige selbst bestätigt. Raus in 24 h: in vollständig gelesenen Bereichen zweimal gefehlt (verkauft) / laut eigener Seite gelöscht / zu lange nicht bestätigt.</p>
+<div class="scroll"><table><thead><tr><th>Quelle</th><th>in 24 h geprüft</th><th>älteste Prüfung</th><th>raus in 24 h</th><th>Durchlauf der Bereiche</th></tr></thead><tbody>${checks || `<tr><td colspan="5" class="muted">keine Quellen</td></tr>`}</tbody></table></div>
 
 <h2 id="probe">Testabruf vom Server</h2>
 <p class="muted">Holt eine Seite über denselben höflichen Abruf wie der Import (robots.txt, Abstand, Abbruch bei Sperren) und speichert sie unten. Erlaubt: ${e(PROBE_DOMAINS.join(", "))}.</p>
@@ -81,7 +99,7 @@ export function renderStatusPage(input: {
 <div class="scroll"><table><thead><tr><th>#</th><th>Zeit</th><th>Anlass</th><th>HTTP</th><th>Zeichen</th><th>URL</th></tr></thead><tbody>${samples || `<tr><td colspan="6" class="muted">noch keine</td></tr>`}</tbody></table></div>
 
 <h2>Letzte Läufe</h2>
-<div class="scroll"><table><thead><tr><th>Quelle</th><th>Start</th><th>gelesen</th><th>gespeichert</th><th>weg</th><th>Zustand</th><th>Ende</th></tr></thead><tbody>${runs || `<tr><td colspan="7" class="muted">noch keine</td></tr>`}</tbody></table></div>`,
+<div class="scroll"><table><thead><tr><th>Quelle</th><th>Start</th><th>gelesen</th><th>gespeichert</th><th>einzeln geprüft</th><th>weg</th><th>Zustand</th><th>Ende</th></tr></thead><tbody>${runs || `<tr><td colspan="8" class="muted">noch keine</td></tr>`}</tbody></table></div>`,
   );
 }
 

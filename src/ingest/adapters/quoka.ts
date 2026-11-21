@@ -1,9 +1,10 @@
 import { resolveMake } from "@/core/normalize";
 import { MAKES } from "@/core/taxonomy";
 import type { NormalizedListing } from "@/core/types";
-import type { FetchContext, RawListing, SourceAdapter, SourceInfo } from "../adapter";
+import type { CheckOutcome, FetchContext, ListingRef, RawListing, SourceAdapter, SourceInfo } from "../adapter";
 import { cardFacts, readCards } from "../http/cards";
 import { BudgetExceededError, type FetchedPage, type PoliteFetcher } from "../http/fetcher";
+import { checkListingPages } from "./listing-check";
 import { normalizeCard, PageLoader, readList, toRaw, type CardItem } from "./list-crawler";
 
 /**
@@ -11,8 +12,9 @@ import { normalizeCard, PageLoader, readList, toRaw, type CardItem } from "./lis
  * pages (?pag=N) and the ads. Each run reads the newest pages of every make's list and of the
  * whole category; the make lists are taken from the links on the category page, so a new or
  * renamed make path needs no code change. Some responses lack that menu; then our make slugs
- * serve as paths. Listings that drop out of the newest pages are not
- * re-checked and leave the search staleAfterDays after they were last seen.
+ * serve as paths. Listings that drop out of the newest pages are checked on their own page for the
+ * rest of the run (robots.txt allows the ads), the longest unchecked first; one that is neither
+ * seen nor confirmed for staleAfterDays leaves the search.
  *
  * The list mixes in parts and accessories; only entries with a price and a mileage or year count.
  * Whether a seller is a dealer is not on the list, so the seller type stays unknown. No seller
@@ -79,6 +81,25 @@ export function parseMakeLinks(html: string): MakeList[] {
   return [...lists.values()];
 }
 
+/** What an ad page shows once the ad expired or was deleted. */
+const TAKEN_DOWN = /Anzeige (?:ist )?nicht mehr (?:verfügbar|aktiv|online)|Anzeige wurde (?:bereits )?(?:deaktiviert|gelöscht|entfernt)/i;
+
+/**
+ * What an ad's own page says. Led to a page that is no ad (the category, the start page): taken
+ * down. The ad itself: taken down when it says so, else online.
+ */
+export function quokaVerdict(ref: ListingRef, page: FetchedPage): CheckOutcome {
+  const id = detailId(new URL(page.url));
+  if (id === null) return "gone";
+  if (id !== ref.externalId) return "unclear";
+  return TAKEN_DOWN.test(page.text) ? "gone" : "active";
+}
+
+/** Quoka sends ads that are gone to its "not found" or archive pages, which robots.txt forbids. */
+export function quokaDisallowedRedirect(_ref: ListingRef, target: string): CheckOutcome {
+  return /^\/Detailansicht-(?:AdNotFound|Archiv)\//i.test(new URL(target).pathname) ? "gone" : "unclear";
+}
+
 export function normalizeQuoka(raw: RawListing): NormalizedListing | null {
   return normalizeCard(raw.payload as unknown as QuokaItem, {
     sourceId: QUOKA.id,
@@ -107,8 +128,10 @@ export function createQuokaAdapter(options: QuokaOptions): SourceAdapter {
   return {
     source: QUOKA,
     fullSnapshot: false,
-    staleAfterDays: options.staleAfterDays ?? 14,
+    staleAfterDays: options.staleAfterDays ?? 2,
     normalize: normalizeQuoka,
+    checkListings: (due) =>
+      checkListingPages(due, { fetcher: options.fetcher, log, verdict: quokaVerdict, disallowedRedirect: quokaDisallowedRedirect }),
     async *fetch(context?: FetchContext): AsyncGenerator<RawListing> {
       const loader = new PageLoader(QUOKA.id, options.fetcher, log, context?.db);
       const seen = new Set<string>();

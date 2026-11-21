@@ -15,6 +15,20 @@ export const formatNumber = (value: number) => integer.format(value);
 /** A gain or loss: "+1.310 €", "−450 €", "0 €". */
 export const formatSignedPrice = (eur: number) => (eur > 0 ? "+" : eur < 0 ? "−" : "") + euro.format(Math.abs(eur));
 
+const dayAndTime = new Intl.DateTimeFormat("de-DE", {
+  day: "2-digit",
+  month: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZone: "Europe/Berlin",
+});
+
+/** "21.11., 14:05" in German time. */
+export const formatDayTime = (iso: string) => dayAndTime.format(new Date(iso));
+
+/** Share of listings as a whole percent, rounded down so "100 %" means all of them: "97 %". */
+export const formatShare = (share: number) => `${Math.floor(share * 100)}\u00a0%`;
+
 export const formatKm = (km: number | null) => (km === null ? "km unbekannt" : `${integer.format(km)} km`);
 
 /** "2019-04-01" -> "04/2019" */

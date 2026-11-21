@@ -5,6 +5,7 @@ import { backfillDamage, updateMarketValues, type MarketResult } from "./market"
 import { updateRepairEstimates } from "./repairs";
 import { IngestBusyError, runIngest, type IngestResult } from "./run";
 import { seedReferenceData } from "./seed";
+import { updateSourceStats } from "./status";
 
 export interface PrepareResult {
   reference: Awaited<ReturnType<typeof seedReferenceData>>;
@@ -43,5 +44,7 @@ export async function prepareData(
   const damageChecked = await backfillDamage(pool);
   const market = await updateMarketValues(pool);
   const repairsChanged = await updateRepairEstimates(pool);
+  // The notice above the search shows the check rate from the first page view on.
+  await updateSourceStats(pool);
   return { reference, demo, damageChecked, market, repairsChanged };
 }

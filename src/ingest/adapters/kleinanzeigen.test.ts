@@ -223,7 +223,7 @@ describe("createKleinanzeigenAdapter", () => {
     expect((raws[0].payload as unknown as KleinanzeigenItem).listMake).toBe("bmw");
     expect((raws[5].payload as unknown as KleinanzeigenItem).listMake).toBeNull();
     expect(site.requested).not.toContain(pageUrl("bmw", 4));
-    expect(adapter.staleAfterDays).toBe(14);
+    expect(adapter.staleAfterDays).toBe(2);
     expect(adapter.fullSnapshot).toBe(false);
   });
 

@@ -1,8 +1,12 @@
 import { connection } from "next/server";
 import { getPool } from "@/lib/db";
+import { formatDayTime, formatShare } from "@/lib/format";
 import { getSourceStatus, type SourceStatus } from "@/search/query";
 
-/** The line under the header: demo warning, or which portals the listings come from and how fresh they are. */
+/**
+ * The line under the header: demo warning, or which portals the listings come from, how fresh they
+ * are and what share of each portal's listings was seen or confirmed in the last 24 hours.
+ */
 export async function DataNotice() {
   await connection();
   let sources: SourceStatus[];
@@ -31,23 +35,21 @@ export async function DataNotice() {
           <span key={source.id}>
             {i > 0 && (i === sources.length - 1 ? " und " : ", ")}
             <span className="font-medium text-foreground">{source.name}</span>
-            {source.lastImportAt && <> (Stand {formatStand(source.lastImportAt)})</>}
+            {(source.lastImportAt || source.checkedShare !== null) && (
+              <>
+                {" ("}
+                {[
+                  source.lastImportAt && `Stand ${formatDayTime(source.lastImportAt)}`,
+                  source.checkedShare !== null && `${formatShare(source.checkedShare)} in 24 h geprüft`,
+                ]
+                  .filter(Boolean)
+                  .join(", ")}
+                {")"}
+              </>
+            )}
           </span>
         ))}
       </p>
     </div>
   );
-}
-
-const STAND = new Intl.DateTimeFormat("de-DE", {
-  day: "2-digit",
-  month: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  timeZone: "Europe/Berlin",
-});
-
-/** "15.11., 18:04" in German time. */
-export function formatStand(iso: string): string {
-  return STAND.format(new Date(iso));
 }

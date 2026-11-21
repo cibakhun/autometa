@@ -2,11 +2,17 @@ import type { Pool, PoolClient } from "pg";
 import { detectDamage, type DamageKind } from "@/core/damage";
 import { detectInspection, type Inspection } from "@/core/inspection";
 import type { NormalizedListing } from "@/core/types";
-import type { RawListing, SourceAdapter } from "./adapter";
+import type { CheckResult, RawListing, SourceAdapter } from "./adapter";
+import { BlockedError } from "./http/fetcher";
 
 const BATCH_SIZE = 500;
 /** A listing missing from this many full reads (of the source or of its segment) in a row counts as sold. */
 export const MISSED_RUNS_UNTIL_GONE = 2;
+/** Listings not seen for this many hours are due for a check on their own page, where the adapter can. */
+export const CHECK_AFTER_HOURS = 20;
+/** More than one run can check; the longest unchecked come first. */
+const MAX_DUE = 5000;
+const CHECK_BATCH = 50;
 
 export interface IngestResult {
   runId: number;
@@ -14,6 +20,8 @@ export interface IngestResult {
   upserted: number;
   skipped: number;
   gone: number;
+  /** Listings checked on their own page. */
+  checked: number;
 }
 
 /** Another import of the same source is still running. */
@@ -172,7 +180,7 @@ async function writeBatch(client: PoolClient, sourceId: string, raws: RawListing
                          when excluded.price_eur is not distinct from listings.price_eur
                           and excluded.make_slug is not distinct from listings.make_slug then listings.segment
                        end,
-                       status = 'active', missed_runs = 0, last_seen_at = now()`,
+                       status = 'active', gone_reason = null, gone_at = null, missed_runs = 0, last_seen_at = now()`,
         pending.flatMap(listingValues),
       );
     }
@@ -226,7 +234,7 @@ async function ingestLocked(client: PoolClient, adapter: SourceAdapter): Promise
   const postal = await client.query<{ zip: string; lat: number; lng: number }>("select zip, lat, lng from postal_codes");
   const coords = new Map(postal.rows.map((row) => [row.zip, { lat: row.lat, lng: row.lng }]));
 
-  const result: IngestResult = { runId, fetched: 0, upserted: 0, skipped: 0, gone: 0 };
+  const result: IngestResult = { runId, fetched: 0, upserted: 0, skipped: 0, gone: 0, checked: 0 };
   let raws: RawListing[] = [];
   let pending: PendingListing[] = [];
   const flush = async () => {
@@ -263,6 +271,18 @@ async function ingestLocked(client: PoolClient, adapter: SourceAdapter): Promise
       if (raws.length > 0) await flush();
     }
 
+    let checkError: string | null = null;
+    if (adapter.checkListings) {
+      try {
+        await checkDueListings(client, adapter, result);
+      } catch (error) {
+        if (!(error instanceof BlockedError)) throw error;
+        // The portal refused a listing page. No further request goes out in this run, but what
+        // the lists showed still counts, and so do the listings not confirmed for too long.
+        checkError = `Einzelprüfung abgebrochen: ${error.message}`;
+      }
+    }
+
     if (adapter.fullSnapshot) {
       result.gone += await markMissed(client, source.id, startedAt, null);
     }
@@ -272,7 +292,7 @@ async function ingestLocked(client: PoolClient, adapter: SourceAdapter): Promise
     }
     if (adapter.staleAfterDays !== undefined) {
       const stale = await client.query(
-        `update listings set status = 'gone'
+        `update listings set status = 'gone', gone_reason = 'stale', gone_at = now()
           where source_id = $1 and status = 'active' and last_seen_at < now() - make_interval(days => $2)`,
         [source.id, adapter.staleAfterDays],
       );
@@ -280,16 +300,16 @@ async function ingestLocked(client: PoolClient, adapter: SourceAdapter): Promise
     }
 
     await client.query(
-      `update ingest_runs set finished_at = now(), fetched = $2, upserted = $3, skipped = $4, gone = $5 where id = $1`,
-      [runId, result.fetched, result.upserted, result.skipped, result.gone],
+      `update ingest_runs set finished_at = now(), fetched = $2, upserted = $3, skipped = $4, gone = $5, checked = $6, error = $7 where id = $1`,
+      [runId, result.fetched, result.upserted, result.skipped, result.gone, result.checked, checkError],
     );
     return result;
   } catch (error) {
     // Never let a failed bookkeeping write hide the original error.
     try {
       await client.query(
-        "update ingest_runs set finished_at = now(), fetched = $2, upserted = $3, skipped = $4, error = $5 where id = $1",
-        [runId, result.fetched, result.upserted, result.skipped, error instanceof Error ? error.message : String(error)],
+        "update ingest_runs set finished_at = now(), fetched = $2, upserted = $3, skipped = $4, gone = $5, checked = $6, error = $7 where id = $1",
+        [runId, result.fetched, result.upserted, result.skipped, result.gone, result.checked, error instanceof Error ? error.message : String(error)],
       );
     } catch (logError) {
       console.error("Could not record the failed ingest run:", logError);
@@ -306,11 +326,64 @@ async function markMissed(client: PoolClient, sourceId: string, startedAt: Date,
   const missed = await client.query<{ status: string }>(
     `update listings
         set missed_runs = missed_runs + 1,
-            status = case when missed_runs + 1 >= $3 then 'gone' else status end
+            status = case when missed_runs + 1 >= $3 then 'gone' else status end,
+            gone_reason = case when missed_runs + 1 >= $3 then 'missed' else gone_reason end,
+            gone_at = case when missed_runs + 1 >= $3 then now() else gone_at end
       where source_id = $1 and status = 'active' and last_seen_at < $2
         and ($4::text[] is null or segment = any($4::text[]))
       returning status`,
     [sourceId, startedAt, MISSED_RUNS_UNTIL_GONE, segments],
   );
   return missed.rows.filter((row) => row.status === "gone").length;
+}
+
+/**
+ * Hands the adapter the listings not seen for CHECK_AFTER_HOURS, the longest unchecked first, and
+ * applies what their pages say: online counts as seen now, taken down leaves the search at once,
+ * unclear changes nothing. Written in small batches, so a run that ends early keeps its checks.
+ */
+async function checkDueListings(client: PoolClient, adapter: SourceAdapter, totals: IngestResult) {
+  const { source } = adapter;
+  const due = await client.query<{ external_id: string; url: string }>(
+    `select external_id, url from listings
+      where source_id = $1 and status = 'active' and last_seen_at < now() - make_interval(hours => $2)
+      order by last_seen_at, id
+      limit $3`,
+    [source.id, CHECK_AFTER_HOURS, MAX_DUE],
+  );
+  if (due.rows.length === 0) return;
+
+  let batch: CheckResult[] = [];
+  const write = async () => {
+    totals.checked += batch.length;
+    const clear = batch.filter((r) => r.outcome !== "unclear");
+    batch = [];
+    if (clear.length === 0) return;
+    const updated = await client.query<{ outcome: string }>(
+      `update listings l
+          set status = case when v.outcome = 'gone' then 'gone' else l.status end,
+              gone_reason = case when v.outcome = 'gone' then 'checked' else l.gone_reason end,
+              gone_at = case when v.outcome = 'gone' then now() else l.gone_at end,
+              last_seen_at = case when v.outcome = 'active' then now() else l.last_seen_at end,
+              missed_runs = case when v.outcome = 'active' then 0 else l.missed_runs end
+         from unnest($2::text[], $3::text[]) as v (external_id, outcome)
+        where l.source_id = $1 and l.external_id = v.external_id and l.status = 'active'
+        returning v.outcome`,
+      [source.id, clear.map((r) => r.externalId), clear.map((r) => r.outcome)],
+    );
+    totals.gone += updated.rows.filter((row) => row.outcome === "gone").length;
+  };
+
+  try {
+    for await (const check of adapter.checkListings!(
+      due.rows.map((row) => ({ externalId: row.external_id, url: row.url })),
+      { db: client },
+    )) {
+      batch.push(check);
+      if (batch.length >= CHECK_BATCH) await write();
+    }
+  } finally {
+    // Keep the checks made before an error, too.
+    if (batch.length > 0) await write();
+  }
 }

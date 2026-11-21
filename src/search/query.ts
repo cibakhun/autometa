@@ -55,6 +55,8 @@ export interface ListingSummary {
   repair: RepairSummary | null;
   /** Margin when bought, repaired and sold again; null without a market value or repair estimate. */
   flip: FlipResult | null;
+  /** When the listing was last seen in a list or confirmed on its own page (ISO timestamp). */
+  checkedAt: string;
 }
 
 export interface RepairSummary {
@@ -214,7 +216,7 @@ export async function searchListings(
            l.damage, l.market_price_eur, l.market_comps,
            l.vehicle_class, l.repair_parts_min_eur, l.repair_parts_max_eur, l.repair_hours_min, l.repair_hours_max,
            l.repair_difficulty, l.repair_confidence, l.repair_needs_tow,
-           l.repair_risk_hidden_eur, l.repair_risk_unclear_eur,
+           l.repair_risk_hidden_eur, l.repair_risk_unclear_eur, l.last_seen_at,
            s.id as source_id, s.name as source_name,
            -- The cheapest listing of a duplicate group may come without a photo; another may have one.
            coalesce(l.image_url, (select d.image_url from listings d
@@ -277,6 +279,7 @@ export async function searchListings(
         marketComps: row.market_comps,
         repair,
         flip: flipFromRow(row.price_eur, row.market_price_eur, repair, settings),
+        checkedAt: new Date(row.last_seen_at).toISOString(),
       };
     }),
   };
@@ -366,12 +369,17 @@ export interface SourceStatus {
   kind: string;
   /** End of the last import that stored listings, ISO timestamp, or null. */
   lastImportAt: string | null;
+  /**
+   * Share of the active listings seen in a list or confirmed on their own page in the last 24 hours
+   * (0 to 1), as counted after the last import round; null before the first count.
+   */
+  checkedShare: number | null;
 }
 
 /** Active sources and when each last delivered listings, for the notice above the search. */
 export async function getSourceStatus(pool: Pool): Promise<SourceStatus[]> {
   const { rows } = await pool.query(
-    `select s.id, s.name, s.kind,
+    `select s.id, s.name, s.kind, s.active_listings, s.checked_24h,
             (select max(r.finished_at) from ingest_runs r where r.source_id = s.id and r.upserted > 0) as last_import_at
        from sources s
       where s.active and exists (select 1 from listings l where l.source_id = s.id and l.status = 'active')
@@ -382,6 +390,7 @@ export async function getSourceStatus(pool: Pool): Promise<SourceStatus[]> {
     name: row.name,
     kind: row.kind,
     lastImportAt: row.last_import_at ? new Date(row.last_import_at).toISOString() : null,
+    checkedShare: row.active_listings > 0 && row.checked_24h !== null ? row.checked_24h / row.active_listings : null,
   }));
 }
 
@@ -404,6 +413,11 @@ export interface ListingDetail extends ListingSummary {
   sellerName: string | null;
   /** 'gone' once the listing disappeared from its portal. */
   status: "active" | "gone";
+  /**
+   * Why a gone listing left: missed in complete reads of its list, taken down according to its
+   * own page, or not confirmed for too long. Null while active or when it left before this was kept.
+   */
+  goneReason: "missed" | "checked" | "stale" | null;
   firstSeenAt: string;
   lastSeenAt: string;
 }
@@ -467,8 +481,10 @@ export async function getListing(pool: Pool, id: number, settings = DEFAULT_FLIP
     color: row.color,
     sellerName: row.seller_name,
     status: row.status,
+    goneReason: row.status === "gone" ? (row.gone_reason ?? null) : null,
     firstSeenAt: new Date(row.first_seen_at).toISOString(),
     lastSeenAt: new Date(row.last_seen_at).toISOString(),
+    checkedAt: new Date(row.last_seen_at).toISOString(),
   };
 }
 
