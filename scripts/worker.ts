@@ -30,6 +30,9 @@ async function main() {
     return;
   }
   const intervalMs = readNumber("SCRAPE_INTERVAL_MINUTES", 60, 10) * 60_000;
+  // Each source holds one connection for its whole run; the defect refresh and the repair
+  // estimates need one each besides, plus one to spare. Otherwise they wait for a source to end.
+  process.env.DATABASE_POOL_MAX ??= String(sources.length + 3);
   const pool = getPool();
   let stopping = false;
   const stop = () => {

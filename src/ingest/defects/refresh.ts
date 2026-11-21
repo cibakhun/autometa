@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { classifyDefect } from "@/core/defect-codes";
 import {
   ageBucket,
@@ -83,6 +83,9 @@ interface Cell {
   damaged: number;
 }
 
+/** A pooled connection, or the pool itself. */
+type Db = Pool | PoolClient;
+
 const LOCK = "hashtext('autometa-defect-profiles')";
 /** Requests one profile takes at most: count, two slices, two defect queries. */
 const REQUESTS_PER_PROFILE = 5;
@@ -100,7 +103,8 @@ export async function refreshDefectProfiles(pool: Pool, options: RefreshOptions 
       return { profiles: 0, requests: 0, pending: 0, skipped: true, error: null };
     }
     try {
-      return await run(pool, rdw, now, log, random, options.shouldStop ?? (() => false));
+      // Everything on the lock's connection: the worker's imports hold the other ones for hours.
+      return await run(lockClient, rdw, now, log, random, options.shouldStop ?? (() => false));
     } finally {
       await lockClient.query(`select pg_advisory_unlock(${LOCK})`);
     }
@@ -110,7 +114,7 @@ export async function refreshDefectProfiles(pool: Pool, options: RefreshOptions 
 }
 
 async function run(
-  pool: Pool,
+  pool: Db,
   rdw: RdwClient,
   now: Date,
   log: (message: string) => void,
@@ -160,7 +164,7 @@ async function run(
 
 /** The defect list with each code's component group; fetched again when old, re-classified every run. */
 async function defectCodes(
-  pool: Pool,
+  pool: Db,
   rdw: RdwClient,
   now: Date,
   log: (message: string) => void,
@@ -202,7 +206,7 @@ async function defectCodes(
 }
 
 /** Model and age groups with enough listings whose profile is missing or older than maxAgeDays, most useful first. */
-async function dueCells(pool: Pool, now: Date): Promise<Cell[]> {
+async function dueCells(pool: Db, now: Date): Promise<Cell[]> {
   const { rows } = await pool.query<{ make_slug: string; model_slug: string; year: number; listings: number; damaged: number }>(
     `select make_slug, model_slug, extract(year from first_registration)::int as year,
             count(*)::int as listings, count(*) filter (where cardinality(damage) > 0)::int as damaged
@@ -313,7 +317,7 @@ async function sampleProfile(
   return profile;
 }
 
-async function saveProfile(pool: Pool, cell: Cell, profile: DefectProfile, names: string[], now: Date): Promise<void> {
+async function saveProfile(pool: Db, cell: Cell, profile: DefectProfile, names: string[], now: Date): Promise<void> {
   await pool.query(
     `insert into model_defect_profiles (make_slug, model_slug, age_bucket, sample, any_defect, components, window_months, rdw_names, refreshed_at)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
