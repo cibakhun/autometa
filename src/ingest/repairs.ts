@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import type { DamageKind } from "@/core/damage";
 import { ageBucket, coveredComponents, hiddenDefectRisk } from "@/core/defects";
 import type { InspectionBasis } from "@/core/inspection";
@@ -28,8 +28,9 @@ export interface RiskInput {
 export function riskParts(input: RiskInput, estimate: RepairEstimate, profiles: ProfileIndex, now = new Date()) {
   const bucket = ageBucket(input.firstRegistration, now);
   const profile = bucket === null ? null : (profiles.model(input.makeSlug, input.modelSlug, bucket) ?? profiles.average(bucket));
-  const hidden = hiddenDefectRisk(profile, estimate.vehicleClass, coveredComponents(estimate.jobs.map((j) => j.job.id)));
-  const unclear = unclearDamageRisk(input.damage, { fuel: input.fuel, vehicleClass: estimate.vehicleClass }, input.priceEur, input.marketEur);
+  const jobIds = estimate.jobs.map((j) => j.job.id);
+  const hidden = hiddenDefectRisk(profile, estimate.vehicleClass, coveredComponents(jobIds));
+  const unclear = unclearDamageRisk(input.damage, { fuel: input.fuel, vehicleClass: estimate.vehicleClass }, input.priceEur, input.marketEur, jobIds);
   return {
     hiddenEur: hidden?.eur ?? null,
     unclearEur: input.marketEur === null ? null : (unclear?.eur ?? 0),
@@ -45,8 +46,27 @@ export function riskParts(input: RiskInput, estimate: RepairEstimate, profiles: 
  * Returns how many listings changed.
  */
 export async function updateRepairEstimates(pool: Pool, now = new Date()): Promise<number> {
-  const profiles = await loadProfileIndex(pool);
-  const cleared = await pool.query(
+  // One writer at a time: the import round, the defect refresh and the start-up step can overlap,
+  // and a run that loaded older defect profiles must not write after one that loaded newer ones.
+  // A waiting run loads the profiles once it holds the lock. All on the lock's own connection.
+  const client = await pool.connect();
+  try {
+    await client.query(`select pg_advisory_lock(${LOCK})`);
+    try {
+      return await writeEstimates(client, now);
+    } finally {
+      await client.query(`select pg_advisory_unlock(${LOCK})`);
+    }
+  } finally {
+    client.release();
+  }
+}
+
+const LOCK = "hashtext('autometa-repair-estimates')";
+
+async function writeEstimates(db: PoolClient, now: Date): Promise<number> {
+  const profiles = await loadProfileIndex(db);
+  const cleared = await db.query(
     `update listings
         set vehicle_class = null, repair_parts_min_eur = null, repair_parts_max_eur = null,
             repair_hours_min = null, repair_hours_max = null, repair_difficulty = null,
@@ -57,7 +77,7 @@ export async function updateRepairEstimates(pool: Pool, now = new Date()): Promi
   let changed = cleared.rowCount ?? 0;
   let lastId = 0;
   for (;;) {
-    const { rows } = await pool.query<{
+    const { rows } = await db.query<{
       id: string;
       damage: DamageKind[];
       make_slug: string | null;
@@ -128,7 +148,7 @@ export async function updateRepairEstimates(pool: Pool, now = new Date()): Promi
         huu: row.hu_until,
       };
     });
-    const result = await pool.query(
+    const result = await db.query(
       `update listings l
           set vehicle_class = v.cls, repair_parts_min_eur = v.pmin, repair_parts_max_eur = v.pmax,
               repair_hours_min = v.hmin, repair_hours_max = v.hmax, repair_difficulty = v.diff,

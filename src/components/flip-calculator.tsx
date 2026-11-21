@@ -111,9 +111,12 @@ export function FlipCalculator({ priceEur, marketEur, damage, facts, settings, p
   const hoursSum = jobs.reduce((sum, row) => sum + num(row.hours), 0);
   const difficulty = jobs.length > 0 ? (Math.max(...jobs.map((row) => row.difficulty)) as Difficulty) : null;
   const pickupEur = num(pickup);
-  // Jobs in the list cover their component groups; a market value typed in changes how unclear damage looks.
-  const hidden = hiddenDefectRisk(profile, estimate.vehicleClass, coveredComponents(jobs.map((row) => row.id)));
-  const unclear = market.trim() === "" ? null : unclearDamageRisk(damage, { fuel: facts.fuel, vehicleClass: estimate.vehicleClass }, num(purchase), num(market));
+  // Jobs in the list cover their component groups and a worse case picked by hand; a market value
+  // typed in changes how unclear damage looks.
+  const jobIds = jobs.map((row) => row.id);
+  const hidden = hiddenDefectRisk(profile, estimate.vehicleClass, coveredComponents(jobIds));
+  const unclear =
+    market.trim() === "" ? null : unclearDamageRisk(damage, { fuel: facts.fuel, vehicleClass: estimate.vehicleClass }, num(purchase), num(market), jobIds);
   const riskComputed = (hidden?.eur ?? 0) + (unclear?.eur ?? 0);
   const risk = riskTyped ?? String(riskComputed);
   const riskHint = [

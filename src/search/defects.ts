@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { ageBucket, MIN_SAMPLE, poolProfiles, type DefectProfile } from "@/core/defects";
 
 /** Stored profiles of every model and age group, plus the average car per age group. */
@@ -47,7 +47,7 @@ interface ProfileRow {
 const toProfile = (row: ProfileRow): DefectProfile => ({ sample: row.sample, anyDefect: row.any_defect, components: row.components });
 
 /** Every stored profile with enough sampled cars. */
-export async function loadProfileIndex(pool: Pool): Promise<ProfileIndex> {
+export async function loadProfileIndex(pool: Pool | PoolClient): Promise<ProfileIndex> {
   const { rows } = await pool.query<ProfileRow>(
     `select make_slug, model_slug, age_bucket, sample, any_defect, components
        from model_defect_profiles where sample >= $1`,

@@ -158,9 +158,10 @@ describe.skipIf(!url)("defect profiles and risk buffer against Postgres", () => 
     expect(await updateRepairEstimates(pool, now)).toBeGreaterThan(0);
     const facts = { makeSlug: "volkswagen", powerKw: 85, bodyType: null, fuel: "petrol" as const };
     const estimate = estimateRepairs(["accident"], facts, now);
+    const jobIds = estimate.jobs.map((j) => j.job.id);
     const profile = { sample: 300, anyDefect: 0, components: { brakes: count(4), rust: count(10) } };
-    const hidden = hiddenDefectRisk(profile, estimate.vehicleClass, coveredComponents(estimate.jobs.map((j) => j.job.id)))!.eur;
-    const unclear = unclearDamageRisk(["accident"], { fuel: "petrol", vehicleClass: estimate.vehicleClass }, 1500, 6000)!.eur;
+    const hidden = hiddenDefectRisk(profile, estimate.vehicleClass, coveredComponents(jobIds))!.eur;
+    const unclear = unclearDamageRisk(["accident"], { fuel: "petrol", vehicleClass: estimate.vehicleClass }, 1500, 6000, jobIds)!.eur;
     const stored = await pool.query("select repair_risk_hidden_eur, repair_risk_unclear_eur from listings where id = $1", [accident]);
     expect(stored.rows[0]).toEqual({ repair_risk_hidden_eur: hidden, repair_risk_unclear_eur: unclear });
     expect(hidden).toBeGreaterThan(0);
@@ -179,6 +180,22 @@ describe.skipIf(!url)("defect profiles and risk buffer against Postgres", () => 
     expect(again.queries).toHaveLength(0);
 
     expect(await getDefectDataStatus(pool)).toMatchObject({ profiles: 1, cars: 300, lastError: null });
+  });
+
+  it("says so when another refresh holds the lock, and repair estimates wait for each other", async () => {
+    const other = await pool.connect();
+    try {
+      await other.query("select pg_advisory_lock(hashtext('autometa-defect-profiles'))");
+      const blocked = fakeRdw();
+      expect(await refreshDefectProfiles(pool, { client: blocked.client, now, log: () => undefined })).toMatchObject({ skipped: true, profiles: 0 });
+      expect(blocked.queries).toHaveLength(0);
+    } finally {
+      await other.query("select pg_advisory_unlock(hashtext('autometa-defect-profiles'))");
+      other.release();
+    }
+    // Two writers at once take turns; the second finds nothing left to change.
+    const counts = await Promise.all([updateRepairEstimates(pool, now), updateRepairEstimates(pool, now)]);
+    expect(counts.sort()).toEqual([0, 0]);
   });
 
   it("records a refused query as the run's error and keeps what it wrote before", async () => {

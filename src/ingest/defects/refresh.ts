@@ -47,6 +47,8 @@ export interface RefreshResult {
   requests: number;
   /** Profiles that are due but did not fit into this run. */
   pending: number;
+  /** True when another refresh held the lock and this one did nothing. */
+  skipped: boolean;
   error: string | null;
 }
 
@@ -95,7 +97,7 @@ export async function refreshDefectProfiles(pool: Pool, options: RefreshOptions 
     const { rows } = await lockClient.query<{ locked: boolean }>(`select pg_try_advisory_lock(${LOCK}) as locked`);
     if (!rows[0].locked) {
       log("another refresh is running, skipped");
-      return { profiles: 0, requests: 0, pending: 0, error: null };
+      return { profiles: 0, requests: 0, pending: 0, skipped: true, error: null };
     }
     try {
       return await run(pool, rdw, now, log, random, options.shouldStop ?? (() => false));
@@ -153,7 +155,7 @@ async function run(
     );
   }
   log(`${profiles} profiles written, ${pending} still due, ${rdw.requestsMade} requests`);
-  return { profiles, requests: rdw.requestsMade, pending, error };
+  return { profiles, requests: rdw.requestsMade, pending, skipped: false, error };
 }
 
 /** The defect list with each code's component group; fetched again when old, re-classified every run. */

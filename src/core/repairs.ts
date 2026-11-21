@@ -334,32 +334,38 @@ const partsMid = (id: string, cls: VehicleClass) => {
 
 /**
  * The extra parts cost to expect because a damage's extent is unclear: for each damage kind with
- * a worse case, that case's cost beyond the estimated jobs it replaces, times how likely the
- * price makes it. The biggest of these counts (one car has one worst case). Null when nothing
- * applies or there is no market value to compare the price with.
+ * a worse case, that case's cost beyond the jobs it replaces, times how likely the price makes it.
+ * The biggest of these counts (one car has one worst case). jobIds are the jobs already counted:
+ * the whole estimate, or what is picked in the calculator. A worse case among them, or replaced
+ * by one of them, costs nothing extra. Null when nothing applies or there is no market value to
+ * compare the price with.
  */
 export function unclearDamageRisk(
   damage: readonly DamageKind[],
   facts: { fuel: Fuel | null; vehicleClass: VehicleClass },
   priceEur: number,
   marketEur: number | null,
+  jobIds: readonly string[],
 ): UnclearRisk | null {
   if (marketEur === null || marketEur <= 0) return null;
   const belowMarket = Math.max(0, Math.min(1, 1 - priceEur / marketEur));
   const probability = Math.max(0, Math.min(1, (belowMarket - SEVERE_FROM) / (SEVERE_CERTAIN - SEVERE_FROM)));
   if (probability === 0) return null;
+  const counted = new Set(jobIds.flatMap((id) => [id, ...(findJob(id)?.replaces ?? [])]));
   let worst: UnclearRisk | null = null;
   for (const kind of damage) {
     const severe = SEVERE_CASES[kind];
     if (!severe) continue;
     const severeJobs = severe.jobs.map((id) => (facts.fuel === "electric" && id === "engine_used" ? "high_voltage" : id));
-    const ownJobs = facts.fuel === "electric" ? (ELECTRIC_JOBS[kind] ?? DAMAGE_JOBS[kind].jobs) : DAMAGE_JOBS[kind].jobs;
+    // Another hint already brought the worse case into the estimate (engine and not running).
+    const missing = severeJobs.filter((id) => !counted.has(id));
+    if (missing.length === 0) continue;
     // An electric car's high-voltage fault stands in for the replacement engine, with what that replaces.
     const replaced = new Set([...severe.jobs, ...severeJobs].flatMap((id) => [id, ...(findJob(id)?.replaces ?? [])]));
     const extraEur = Math.max(
       0,
-      severeJobs.reduce((sum, id) => sum + partsMid(id, facts.vehicleClass), 0) -
-        ownJobs.filter((id) => replaced.has(id)).reduce((sum, id) => sum + partsMid(id, facts.vehicleClass), 0),
+      missing.reduce((sum, id) => sum + partsMid(id, facts.vehicleClass), 0) -
+        [...new Set(jobIds)].filter((id) => replaced.has(id)).reduce((sum, id) => sum + partsMid(id, facts.vehicleClass), 0),
     );
     const eur = round10(probability * extraEur);
     if (eur > 0 && (!worst || eur > worst.eur)) {

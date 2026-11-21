@@ -79,7 +79,8 @@ async function defectLoop(pool: Pool, stopping: () => boolean) {
       const result = await refreshDefectProfiles(pool, { shouldStop: stopping, log: (message) => log(`defects: ${message}`) });
       // New profiles change the risk buffers; the next import round would do it too, but later.
       if (result.profiles > 0 && !stopping()) log(`defects: ${await updateRepairEstimates(pool)} repair estimates changed`);
-      wait = result.error ? 6 * HOUR : result.pending > 0 ? HOUR : 24 * HOUR;
+      // Skipped: another refresh (npm run defects) holds the lock and may stop with profiles still due.
+      wait = result.error ? 6 * HOUR : result.pending > 0 || result.skipped ? HOUR : 24 * HOUR;
     } catch (error) {
       log(`defects: run failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
       wait = 6 * HOUR;

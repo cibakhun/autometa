@@ -97,6 +97,9 @@ describe("estimateRepairs", () => {
 
 describe("unclearDamageRisk", () => {
   const compact = { fuel: "petrol" as const, vehicleClass: "compact" as const };
+  /** The risk with the jobs of the full estimate for that damage, as the import computes it. */
+  const risk = (damage: Parameters<typeof ids>[0], facts: { fuel: "petrol" | "electric"; vehicleClass: "compact" }, price: number, market: number | null) =>
+    unclearDamageRisk(damage, facts, price, market, ids(damage, { ...golf, fuel: facts.fuel }));
   const mid = (id: string) => {
     const [from, to] = scaledParts(findJob(id)!, "compact");
     return (from + to) / 2;
@@ -108,33 +111,40 @@ describe("unclearDamageRisk", () => {
   });
 
   it("expects the heavy accident when the price is far below market", () => {
-    const risk = unclearDamageRisk(["accident"], compact, 1500, 6000)!;
+    const found = risk(["accident"], compact, 1500, 6000)!;
     // 75 % below market: certainly the worse case. Heavy accident instead of panels; paint stays.
-    expect(risk).toMatchObject({ kind: "accident", probability: 1, belowMarket: 0.75 });
-    expect(risk.eur).toBe(Math.round((mid("accident_heavy") - mid("body_panels")) / 10) * 10);
+    expect(found).toMatchObject({ kind: "accident", probability: 1, belowMarket: 0.75 });
+    expect(found.eur).toBe(Math.round((mid("accident_heavy") - mid("body_panels")) / 10) * 10);
   });
 
   it("scales with how far below market the price is, and is null close to it", () => {
-    const half = unclearDamageRisk(["accident"], compact, 3000, 6000)!;
+    const half = risk(["accident"], compact, 3000, 6000)!;
     expect(half.probability).toBeCloseTo(0.5);
     expect(half.eur).toBe(Math.round((0.5 * (mid("accident_heavy") - mid("body_panels"))) / 10) * 10);
-    expect(unclearDamageRisk(["accident"], compact, 4500, 6000)).toBeNull();
-    expect(unclearDamageRisk(["accident"], compact, 1000, null)).toBeNull();
+    expect(risk(["accident"], compact, 4500, 6000)).toBeNull();
+    expect(risk(["accident"], compact, 1000, null)).toBeNull();
   });
 
   it("has no worse case for damage the estimate already assumes at its worst", () => {
-    expect(unclearDamageRisk(["engine"], compact, 500, 6000)).toBeNull();
-    expect(unclearDamageRisk(["clutch"], compact, 500, 6000)).toBeNull();
+    expect(risk(["engine"], compact, 500, 6000)).toBeNull();
+    expect(risk(["clutch"], compact, 500, 6000)).toBeNull();
+    // "Motorschaden, springt nicht an": the replacement engine is in the estimate already.
+    expect(risk(["engine", "not_running"], compact, 600, 6000)).toBeNull();
+  });
+
+  it("counts nothing extra for a worse case picked by hand", () => {
+    expect(unclearDamageRisk(["accident"], compact, 1500, 6000, ["accident_heavy", "paint"])).toBeNull();
+    expect(unclearDamageRisk(["accident"], compact, 1500, 6000, ["body_panels", "accident_heavy", "paint"])).toBeNull();
   });
 
   it("takes the most expensive worse case of several hints", () => {
-    const risk = unclearDamageRisk(["electrics", "not_running"], compact, 600, 6000)!;
-    expect(risk.kind).toBe("not_running");
-    expect(risk.eur).toBe(Math.round((mid("engine_used") - mid("no_start")) / 10) * 10);
+    const found = risk(["electrics", "not_running"], compact, 600, 6000)!;
+    expect(found.kind).toBe("not_running");
+    expect(found.eur).toBe(Math.round((mid("engine_used") - mid("no_start")) / 10) * 10);
   });
 
   it("expects a high-voltage fault, not an engine, on an electric car", () => {
-    const risk = unclearDamageRisk(["not_running"], { fuel: "electric", vehicleClass: "compact" }, 600, 6000)!;
-    expect(risk.eur).toBe(Math.round((mid("high_voltage") - mid("no_start")) / 10) * 10);
+    const found = risk(["not_running"], { fuel: "electric", vehicleClass: "compact" }, 600, 6000)!;
+    expect(found.eur).toBe(Math.round((mid("high_voltage") - mid("no_start")) / 10) * 10);
   });
 });
