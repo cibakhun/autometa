@@ -2,6 +2,7 @@
 
 import { useId, useState } from "react";
 import type { DamageKind } from "@/core/damage";
+import { coveredComponents, hiddenDefectRisk, type DefectProfile } from "@/core/defects";
 import { calculateFlip, type FlipSettings } from "@/core/flip";
 import type { InspectionBasis } from "@/core/inspection";
 import {
@@ -12,6 +13,7 @@ import {
   JOB_GROUPS,
   REPAIR_JOBS,
   scaledParts,
+  unclearDamageRisk,
   VEHICLE_CLASS_LABELS,
   type Difficulty,
   type VehicleFacts,
@@ -24,6 +26,9 @@ export interface FlipCalculatorProps {
   damage: DamageKind[];
   facts: VehicleFacts & { huBasis: InspectionBasis | null; huUntil: string | null };
   settings: FlipSettings;
+  /** Defect profile for the hidden-defect risk: the model's own, or the average car of its age. */
+  profile: DefectProfile | null;
+  profileBasis: "model" | "average" | null;
 }
 
 interface JobRow {
@@ -50,9 +55,10 @@ const labelClass = "mb-1 block text-xs font-medium text-muted";
 
 /**
  * The flip calculation of one listing with every value editable: purchase price, market value,
- * discount, side costs and the repair jobs (prefilled from the catalog, middle of each range).
+ * discount, side costs, the repair jobs (prefilled from the catalog, middle of each range) and the
+ * risk buffer (computed from the jobs, prices and defect profile until typed over).
  */
-export function FlipCalculator({ priceEur, marketEur, damage, facts, settings }: FlipCalculatorProps) {
+export function FlipCalculator({ priceEur, marketEur, damage, facts, settings, profile, profileBasis }: FlipCalculatorProps) {
   const estimate = estimateRepairs(damage, facts);
   const initialJobs = (): JobRow[] =>
     estimate.jobs.map((j, i) => ({
@@ -73,6 +79,8 @@ export function FlipCalculator({ priceEur, marketEur, damage, facts, settings }:
   const [pickup, setPickup] = useState(String(estimate.needsTow ? settings.towEur : settings.transportEur));
   const [jobs, setJobs] = useState<JobRow[]>(initialJobs);
   const [nextKey, setNextKey] = useState(estimate.jobs.length);
+  /** The risk buffer as typed; null while it follows the computed value. */
+  const [riskTyped, setRiskTyped] = useState<string | null>(null);
 
   const updateJob = (key: number, patch: Partial<JobRow>) =>
     setJobs((rows) => rows.map((row) => (row.key === key ? { ...row, ...patch } : row)));
@@ -96,17 +104,47 @@ export function FlipCalculator({ priceEur, marketEur, damage, facts, settings }:
     setRegistration(String(settings.registrationEur));
     setPickup(String(estimate.needsTow ? settings.towEur : settings.transportEur));
     setJobs(initialJobs());
+    setRiskTyped(null);
   };
 
   const partsSum = jobs.reduce((sum, row) => sum + num(row.parts), 0);
   const hoursSum = jobs.reduce((sum, row) => sum + num(row.hours), 0);
   const difficulty = jobs.length > 0 ? (Math.max(...jobs.map((row) => row.difficulty)) as Difficulty) : null;
   const pickupEur = num(pickup);
+  // Jobs in the list cover their component groups and a worse case picked by hand; a market value
+  // typed in changes how unclear damage looks.
+  const hidden = hiddenDefectRisk(profile, estimate.vehicleClass, coveredComponents(jobs.map((row) => row.id)));
+  const unclear =
+    market.trim() === ""
+      ? null
+      : unclearDamageRisk(
+          damage,
+          { fuel: facts.fuel, vehicleClass: estimate.vehicleClass },
+          num(purchase),
+          num(market),
+          jobs.map((row) => ({ id: row.id, partsEur: num(row.parts) })),
+        );
+  const riskComputed = (hidden?.eur ?? 0) + (unclear?.eur ?? 0);
+  const risk = riskTyped ?? String(riskComputed);
+  const riskHint = [
+    hidden && `versteckte Mängel ${formatEuro(hidden.eur)} (${profileBasis === "model" ? "Modell-Akte" : "Durchschnitt gleich alter Autos"})`,
+    unclear &&
+      `unklarer Schaden ${formatEuro(unclear.eur)} (Preis ${Math.round(unclear.belowMarket * 100)} % unter Marktwert, schlimmerer Fall zu ${Math.round(unclear.probability * 100)} % angenommen: ${unclear.label})`,
+  ]
+    .filter(Boolean)
+    .join("; ");
   const result =
     market.trim() === ""
       ? null
       : calculateFlip(
-          { purchaseEur: num(purchase), marketEur: num(market), partsEur: [partsSum, partsSum], hours: [hoursSum, hoursSum], needsTow: false },
+          {
+            purchaseEur: num(purchase),
+            marketEur: num(market),
+            partsEur: [partsSum, partsSum],
+            hours: [hoursSum, hoursSum],
+            needsTow: false,
+            riskEur: num(risk),
+          },
           {
             ...settings,
             discountPct: num(discount),
@@ -146,6 +184,17 @@ export function FlipCalculator({ priceEur, marketEur, damage, facts, settings }:
         {field("hu", "HU/TÜV (€)", hu, setHu)}
         {field("registration", "Zulassung (€)", registration, setRegistration)}
         {field("pickup", estimate.needsTow ? "Abholen mit Anhänger (€)" : "Abholen, fahrbereit (€)", pickup, setPickup)}
+        <div className="col-span-2 sm:col-span-3">
+          {field(
+            "risk",
+            "Risikopuffer (€)",
+            risk,
+            setRiskTyped,
+            riskTyped !== null
+              ? "Selbst eingetragen; Zurücksetzen rechnet ihn wieder aus"
+              : riskHint || "Keine Mängeldaten zu diesem Auto und kein Hinweis auf einen schlimmeren Schaden",
+          )}
+        </div>
       </div>
 
       <div>
@@ -271,7 +320,8 @@ export function FlipCalculator({ priceEur, marketEur, damage, facts, settings }:
             </div>
             <p className="col-span-2 text-xs text-muted sm:col-span-4">
               Verkauf ca. {formatEuro(result.salePriceEur)} − Kauf {formatEuro(num(purchase))} − Teile {formatEuro(Math.round(partsSum))} −
-              Nebenkosten {formatEuro(result.sideCostsEur)}, bei {formatNumber(hoursSum)} Stunden Arbeit.
+              Risikopuffer {formatEuro(Math.round(result.riskEur))} − Nebenkosten {formatEuro(result.sideCostsEur)}, bei{" "}
+              {formatNumber(hoursSum)} Stunden Arbeit.
               {result.marginEur < settings.minMarginEur && ` Unter deiner Mindestmarge von ${formatEuro(settings.minMarginEur)}.`}
             </p>
           </dl>

@@ -5,12 +5,14 @@ import type { Difficulty } from "./repairs";
  * Flip calculation: what a damaged car might earn after repairing it yourself.
  *
  *   sale price  = market value of intact comparables × (1 − negotiation discount)
- *   margin      = sale price − purchase price − parts − side costs
+ *   margin      = sale price − purchase price − parts − risk buffer − side costs
  *   per hour    = margin / working hours
  *
  * Side costs are flat amounts: HU, registration and either driving the car home or towing it.
  * Everything uses the middle of the parts and hours ranges; the margin range comes from the
- * parts range. Hidden damage is not priced in yet (planned: defect profiles per model).
+ * parts range. The risk buffer is the expected cost of what the title does not tell: defects
+ * the next inspection usually finds on this model (src/core/defects.ts) and a worse damage than
+ * named when the price is far below market (unclearDamageRisk in src/core/repairs.ts).
  */
 
 export interface FlipSettings {
@@ -68,11 +70,14 @@ export interface FlipInput {
   partsEur: [number, number];
   hours: [number, number];
   needsTow: boolean;
+  /** Expected cost of hidden or worse damage, in euros; 0 when unknown. */
+  riskEur?: number;
 }
 
 export interface FlipResult {
   salePriceEur: number;
   sideCostsEur: number;
+  riskEur: number;
   marginEur: number;
   /** Margin with the most and the least expensive parts. */
   marginRangeEur: [number, number];
@@ -86,13 +91,14 @@ const round10 = (value: number) => Math.round(value / 10) * 10;
 export function calculateFlip(input: FlipInput, settings: FlipSettings): FlipResult {
   const salePrice = input.marketEur * (1 - settings.discountPct / 100);
   const side = sideCosts(settings, input.needsTow);
-  const base = salePrice - input.purchaseEur - side;
+  const base = salePrice - input.purchaseEur - side - (input.riskEur ?? 0);
   const parts = (input.partsEur[0] + input.partsEur[1]) / 2;
   const hours = (input.hours[0] + input.hours[1]) / 2;
   const margin = base - parts;
   return {
     salePriceEur: round10(salePrice),
     sideCostsEur: side,
+    riskEur: input.riskEur ?? 0,
     marginEur: round10(margin),
     marginRangeEur: [round10(base - input.partsEur[1]), round10(base - input.partsEur[0])],
     hours,

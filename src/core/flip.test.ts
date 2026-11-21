@@ -10,6 +10,7 @@ describe("calculateFlip", () => {
     expect(result).toEqual({
       salePriceEur: 4650,
       sideCostsEur: 300,
+      riskEur: 0,
       marginEur: 1950,
       marginRangeEur: [1850, 2050],
       hours: 8,
@@ -21,6 +22,14 @@ describe("calculateFlip", () => {
     const result = calculateFlip({ purchaseEur: 2000, marketEur: 5000, partsEur: [400, 400], hours: [8, 8], needsTow: true }, settings);
     expect(result.sideCostsEur).toBe(450);
     expect(result.marginEur).toBe(1800);
+  });
+
+  it("subtracts the risk buffer from the margin and its range", () => {
+    const result = calculateFlip(
+      { purchaseEur: 2000, marketEur: 5000, partsEur: [300, 500], hours: [6, 10], needsTow: false, riskEur: 450 },
+      settings,
+    );
+    expect(result).toMatchObject({ riskEur: 450, marginEur: 1500, marginRangeEur: [1400, 1600], perHourEur: 188 });
   });
 
   it("has no hourly rate without hours and can lose money", () => {

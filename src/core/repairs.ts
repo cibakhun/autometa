@@ -94,6 +94,7 @@ export const REPAIR_JOBS: RepairJob[] = [
   job("tie_rod", "Fahrwerk", "Spurstangenkopf oder Koppelstange", [0.5, 1.5], 1, [20, 60]),
   job("wheel_bearing", "Fahrwerk", "Radlager", [1.5, 3], 3, [50, 150], { tools: "Radlager-Abzieher oder Presse" }),
   job("alignment", "Fahrwerk", "Achsvermessung (Fremdleistung)", [0.5, 1], 1, [60, 120]),
+  job("tyres", "Fahrwerk", "Vier Reifen, montiert und gewuchtet", [0.5, 1], 1, [180, 400]),
 
   job("battery", "Elektrik", "Batterie", [0.3, 1], 1, [80, 200]),
   job("starter", "Elektrik", "Anlasser", [1, 3], 2, [80, 250]),
@@ -114,6 +115,10 @@ export const REPAIR_JOBS: RepairJob[] = [
   job("lambda", "Abgas", "Lambdasonde", [0.5, 1.5], 1, [40, 120]),
 
   job("body_panels", "Karosserie", "Unfallschaden: Anbauteile tauschen (Stoßfänger, Kotflügel, Scheinwerfer)", [6, 16], 3, [300, 1200]),
+  job("accident_heavy", "Karosserie", "Schwerer Unfallschaden: Airbags, Träger, Rahmen richten (Fremdleistung)", [15, 35], 5, [1500, 4000], {
+    tools: "Richtbank und Vermessung (Fremdleistung), Airbag-Steuergerät codieren",
+    replaces: ["body_panels"],
+  }),
   job("paint", "Karosserie", "Teile lackieren lassen (Fremdleistung)", [0.5, 1], 1, [300, 900]),
   job("rust_welding", "Karosserie", "Rost schweißen (Schweller, Radlauf)", [4, 12], 4, [50, 250], { tools: "Schweißgerät" }),
   job("hail", "Karosserie", "Hagelschaden ausbeulen lassen (Fremdleistung)", [1, 2], 1, [800, 2500]),
@@ -280,4 +285,103 @@ export function estimateRepairs(
     confidence,
     needsTow,
   };
+}
+
+/**
+ * Damage whose extent a title does not tell, and the much worse case it can turn out to be: an
+ * "Unfallwagen" may need new panels or a straightened frame, a car that "springt nicht an" a new
+ * battery or a new engine. Kinds that already assume the worse case (Motorschaden counts as a
+ * replacement engine) or that name the part (Kupplung) have none.
+ */
+export const SEVERE_CASES: Partial<Record<DamageKind, { jobs: string[]; label: string }>> = {
+  accident: { jobs: ["accident_heavy"], label: "schwerer Unfallschaden (Airbags, Träger, Rahmen)" },
+  timing: { jobs: ["engine_used"], label: "Ventile beschädigt, Motor tauschen" },
+  not_running: { jobs: ["engine_used"], label: "Motor defekt" },
+  defect: { jobs: ["engine_used"], label: "Motor- oder Getriebeschaden" },
+  project: { jobs: ["engine_used"], label: "Motor- oder Getriebeschaden zusätzlich" },
+  electrics: { jobs: ["control_unit"], label: "Steuergerät tauschen und codieren" },
+  water: { jobs: ["control_unit"], label: "Steuergeräte durch Wasser zerstört" },
+};
+
+/**
+ * How far below the market value the asking price must be before it points to the worse case:
+ * not at all up to SEVERE_FROM below market, certainly from SEVERE_CERTAIN, in a straight line
+ * between. The seller knows the damage better than the title says, and prices it in.
+ */
+export const SEVERE_FROM = 0.3;
+export const SEVERE_CERTAIN = 0.7;
+
+export interface UnclearRisk {
+  kind: DamageKind;
+  label: string;
+  /** Share of the market value the price lies below it (0 to 1). */
+  belowMarket: number;
+  /** Probability of the worse case derived from belowMarket (0 to 1). */
+  probability: number;
+  /** What the worse case costs in parts on top of the estimate. */
+  extraEur: number;
+  /** probability × extra, rounded to 10 euros. */
+  eur: number;
+}
+
+/** A job already in the estimate or calculator, with the parts cost counted for it. */
+export interface CountedJob {
+  id: string;
+  partsEur: number;
+}
+
+/** The jobs of an estimate with the middle of their parts range. */
+export const countedJobs = (estimate: RepairEstimate): CountedJob[] =>
+  estimate.jobs.map((j) => ({ id: j.job.id, partsEur: (j.partsEur[0] + j.partsEur[1]) / 2 }));
+
+/** Middle of a job's parts range for a vehicle class. */
+const partsMid = (id: string, cls: VehicleClass) => {
+  const found = findJob(id);
+  if (!found) return 0;
+  const [from, to] = scaledParts(found, cls);
+  return (from + to) / 2;
+};
+
+/**
+ * The extra parts cost to expect because a damage's extent is unclear: for each damage kind with
+ * a worse case, that case's cost beyond the jobs it replaces, times how likely the price makes it.
+ * The biggest of these counts (one car has one worst case). counted are the jobs already counted
+ * with their parts cost: the whole estimate, or the rows in the calculator as typed. A worse case
+ * among them, or replaced by one of them, costs nothing extra; the jobs it replaces are credited
+ * at their counted cost. Null when nothing applies or there is no market value to compare the
+ * price with.
+ */
+export function unclearDamageRisk(
+  damage: readonly DamageKind[],
+  facts: { fuel: Fuel | null; vehicleClass: VehicleClass },
+  priceEur: number,
+  marketEur: number | null,
+  counted: readonly CountedJob[],
+): UnclearRisk | null {
+  if (marketEur === null || marketEur <= 0) return null;
+  const belowMarket = Math.max(0, Math.min(1, 1 - priceEur / marketEur));
+  const probability = Math.max(0, Math.min(1, (belowMarket - SEVERE_FROM) / (SEVERE_CERTAIN - SEVERE_FROM)));
+  if (probability === 0) return null;
+  const covered = new Set(counted.flatMap(({ id }) => [id, ...(findJob(id)?.replaces ?? [])]));
+  let worst: UnclearRisk | null = null;
+  for (const kind of damage) {
+    const severe = SEVERE_CASES[kind];
+    if (!severe) continue;
+    const severeJobs = severe.jobs.map((id) => (facts.fuel === "electric" && id === "engine_used" ? "high_voltage" : id));
+    // Another hint already brought the worse case into the estimate (engine and not running).
+    const missing = severeJobs.filter((id) => !covered.has(id));
+    if (missing.length === 0) continue;
+    // An electric car's high-voltage fault stands in for the replacement engine, with what that replaces.
+    const replaced = new Set([...severe.jobs, ...severeJobs].flatMap((id) => [id, ...(findJob(id)?.replaces ?? [])]));
+    const extraEur = Math.max(
+      0,
+      missing.reduce((sum, id) => sum + partsMid(id, facts.vehicleClass), 0) -
+        counted.filter(({ id }) => replaced.has(id)).reduce((sum, job) => sum + job.partsEur, 0),
+    );
+    const eur = round10(probability * extraEur);
+    if (eur > 0 && (!worst || eur > worst.eur)) {
+      worst = { kind, label: severe.label, belowMarket, probability, extraEur: round10(extraEur), eur };
+    }
+  }
+  return worst;
 }

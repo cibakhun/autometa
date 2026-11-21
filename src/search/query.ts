@@ -64,7 +64,14 @@ export interface RepairSummary {
   difficulty: Difficulty;
   confidence: Confidence;
   needsTow: boolean;
+  /** Risk buffer: defects the next inspection usually finds on such a car; null when unknown. */
+  riskHiddenEur: number | null;
+  /** Risk buffer: a worse damage than named, when the price is far below market; null without a market value. */
+  riskUnclearEur: number | null;
 }
+
+/** Both parts of the risk buffer, 0 when unknown. */
+export const riskTotal = (repair: RepairSummary) => (repair.riskHiddenEur ?? 0) + (repair.riskUnclearEur ?? 0);
 
 /** The repair estimate columns of a listings row, or null when not computed yet. */
 function repairFromRow(row: Record<string, unknown>): RepairSummary | null {
@@ -76,15 +83,20 @@ function repairFromRow(row: Record<string, unknown>): RepairSummary | null {
     difficulty: Number(row.repair_difficulty) as Difficulty,
     confidence: row.repair_confidence as Confidence,
     needsTow: Boolean(row.repair_needs_tow),
+    riskHiddenEur: row.repair_risk_hidden_eur === null || row.repair_risk_hidden_eur === undefined ? null : Number(row.repair_risk_hidden_eur),
+    riskUnclearEur: row.repair_risk_unclear_eur === null || row.repair_risk_unclear_eur === undefined ? null : Number(row.repair_risk_unclear_eur),
   };
 }
 
 function flipFromRow(priceEur: number, marketEur: number | null, repair: RepairSummary | null, settings: FlipSettings): FlipResult | null {
   if (marketEur === null || repair === null) return null;
-  return calculateFlip({ purchaseEur: priceEur, marketEur, partsEur: repair.partsEur, hours: repair.hours, needsTow: repair.needsTow }, settings);
+  return calculateFlip(
+    { purchaseEur: priceEur, marketEur, partsEur: repair.partsEur, hours: repair.hours, needsTow: repair.needsTow, riskEur: riskTotal(repair) },
+    settings,
+  );
 }
 
-/** The flip margin and margin per hour in SQL, the same formula as calculateFlip. */
+/** The flip margin and margin per hour in SQL, the same formula as calculateFlip (risk buffer included). */
 function flipSql(settings: FlipSettings, params: Params) {
   const keep = params.add(1 - settings.discountPct / 100);
   const fixed = params.add(settings.huEur + settings.registrationEur);
@@ -92,6 +104,7 @@ function flipSql(settings: FlipSettings, params: Params) {
   const transport = params.add(settings.transportEur);
   const margin = `(l.market_price_eur * ${keep}::float8 - l.price_eur
       - (l.repair_parts_min_eur + l.repair_parts_max_eur) / 2.0 - ${fixed}::int
+      - coalesce(l.repair_risk_hidden_eur, 0) - coalesce(l.repair_risk_unclear_eur, 0)
       - case when l.repair_needs_tow then ${tow}::int else ${transport}::int end)`;
   return { margin, perHour: `(${margin} / nullif((l.repair_hours_min + l.repair_hours_max) / 2.0, 0))` };
 }
@@ -201,6 +214,7 @@ export async function searchListings(
            l.damage, l.market_price_eur, l.market_comps,
            l.vehicle_class, l.repair_parts_min_eur, l.repair_parts_max_eur, l.repair_hours_min, l.repair_hours_max,
            l.repair_difficulty, l.repair_confidence, l.repair_needs_tow,
+           l.repair_risk_hidden_eur, l.repair_risk_unclear_eur,
            s.id as source_id, s.name as source_name,
            -- The cheapest listing of a duplicate group may come without a photo; another may have one.
            coalesce(l.image_url, (select d.image_url from listings d
