@@ -4,10 +4,16 @@ import { kwToPs } from "@/core/normalize";
 const euro = new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 const integer = new Intl.NumberFormat("de-DE");
 
+/** An amount of money that is not a listing price, so 0 € stays "0 €". */
+export const formatEuro = (eur: number) => euro.format(eur);
+
 /** 0 € means the car is given away (Kleinanzeigen "Zu verschenken"). */
 export const formatPrice = (eur: number) => (eur === 0 ? "Zu verschenken" : euro.format(eur));
 
 export const formatNumber = (value: number) => integer.format(value);
+
+/** A gain or loss: "+1.310 €", "−450 €", "0 €". */
+export const formatSignedPrice = (eur: number) => (eur > 0 ? "+" : eur < 0 ? "−" : "") + euro.format(Math.abs(eur));
 
 export const formatKm = (km: number | null) => (km === null ? "km unbekannt" : `${integer.format(km)} km`);
 

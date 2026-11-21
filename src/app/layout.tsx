@@ -14,11 +14,23 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="de" className="h-full antialiased">
       <body className="flex min-h-full flex-col">
         <header className="border-b border-line bg-surface">
-          <div className="mx-auto flex max-w-7xl items-baseline gap-3 px-4 py-4">
+          <div className="mx-auto flex max-w-7xl flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-4">
             <Link href="/" className="text-xl font-bold tracking-tight">
               Auto<span className="text-accent">Meta</span>
             </Link>
-            <span className="hidden text-sm text-muted sm:inline">Alle Gebrauchtwagen-Börsen, eine Suche</span>
+            <span className="hidden text-sm text-muted lg:inline">Alle Gebrauchtwagen-Börsen, eine Suche</span>
+            <nav aria-label="Flippen" className="ml-auto flex flex-wrap gap-x-4 gap-y-1 text-sm">
+              {/* A route handler that redirects to the search with the visitor's settings, so a plain link. */}
+              <a href="/flip" className="font-medium text-accent hover:underline">
+                Flip-Liste
+              </a>
+              <Link href="/reparaturen" className="hover:text-accent">
+                Reparaturkatalog
+              </Link>
+              <Link href="/einstellungen" className="hover:text-accent">
+                Einstellungen
+              </Link>
+            </nav>
           </div>
         </header>
         <Suspense fallback={null}>

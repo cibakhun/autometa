@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import type { AdapterFactory } from "./adapter";
 import { ADAPTERS } from "./adapters";
 import { backfillDamage, updateMarketValues, type MarketResult } from "./market";
+import { updateRepairEstimates } from "./repairs";
 import { IngestBusyError, runIngest, type IngestResult } from "./run";
 import { seedReferenceData } from "./seed";
 
@@ -12,6 +13,8 @@ export interface PrepareResult {
   /** Listings stored before damage detection existed, now checked. */
   damageChecked: number;
   market: MarketResult;
+  /** Listings whose repair estimate changed. */
+  repairsChanged: number;
 }
 
 /**
@@ -19,7 +22,8 @@ export interface PrepareResult {
  * makes, models and postal codes follow the code. The demo listings are imported only while the
  * database has no listings at all, so a fresh deployment shows a working search without anyone
  * opening a terminal, and later starts leave the listings alone. Listings stored before a
- * detector existed get their damage kinds, and market values follow the deployed rules.
+ * detector existed get their damage kinds, and market values and repair estimates follow the
+ * deployed rules.
  */
 export async function prepareData(
   pool: Pool,
@@ -38,5 +42,6 @@ export async function prepareData(
   }
   const damageChecked = await backfillDamage(pool);
   const market = await updateMarketValues(pool);
-  return { reference, demo, damageChecked, market };
+  const repairsChanged = await updateRepairEstimates(pool);
+  return { reference, demo, damageChecked, market, repairsChanged };
 }

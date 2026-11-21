@@ -2,11 +2,25 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { DAMAGE_LABELS } from "@/core/damage";
+import type { FlipSettings } from "@/core/flip";
+import { CONFIDENCE_LABELS, DIFFICULTY_LABELS, VEHICLE_CLASS_LABELS } from "@/core/repairs";
 import { BODY_TYPE_LABELS, FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
+import { FlipCalculator } from "@/components/flip-calculator";
 import { ListingPhoto } from "@/components/listing-photo";
 import { MARKET_RULES } from "@/ingest/market";
 import { getPool } from "@/lib/db";
-import { formatInspection, formatKm, formatMarketGap, formatNumber, formatPower, formatPrice, formatRegistration } from "@/lib/format";
+import { getFlipSettings } from "@/lib/flip-settings";
+import {
+  formatEuro,
+  formatInspection,
+  formatKm,
+  formatMarketGap,
+  formatNumber,
+  formatPower,
+  formatPrice,
+  formatRegistration,
+  formatSignedPrice,
+} from "@/lib/format";
 import { getListing, type ListingDetail } from "@/search/query";
 
 export default function ListingPage({ params }: PageProps<"/angebot/[id]">) {
@@ -20,7 +34,8 @@ export default function ListingPage({ params }: PageProps<"/angebot/[id]">) {
 async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["params"] }) {
   const { id } = await params;
   if (!/^\d{1,18}$/.test(id)) notFound();
-  const listing = await getListing(getPool(), Number(id));
+  const settings = await getFlipSettings();
+  const listing = await getListing(getPool(), Number(id), settings);
   if (!listing) notFound();
 
   const rows: [string, string | null][] = [
@@ -69,6 +84,7 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
             ))}
         </dl>
         <ConditionAndMarket listing={listing} />
+        <Flip listing={listing} settings={settings} />
         <PriceHistory listing={listing} />
         <div className="mt-6 flex flex-wrap items-center gap-3">
           <a
@@ -177,6 +193,65 @@ function ConditionAndMarket({ listing }: { listing: ListingDetail }) {
           </p>
         )}
       </div>
+    </section>
+  );
+}
+
+/** The flip estimate from the catalog and the calculator to adjust it; folded away for intact cars. */
+function Flip({ listing, settings }: { listing: ListingDetail; settings: FlipSettings }) {
+  const damaged = listing.damage.length > 0;
+  const calculator = (
+    <FlipCalculator
+      priceEur={listing.priceEur}
+      marketEur={listing.marketPriceEur}
+      damage={listing.damage}
+      facts={{ makeSlug: listing.makeSlug, powerKw: listing.powerKw, bodyType: listing.bodyType, fuel: listing.fuel, huBasis: listing.huBasis }}
+      settings={settings}
+    />
+  );
+  const note = (
+    <p className="mt-3 text-xs text-muted">
+      Teile und Stunden sind Schätzungen aus dem <Link href="/reparaturen" className="text-accent hover:underline">Reparaturkatalog</Link>{" "}
+      für einen Hobbyschrauber; versteckte Mängel sind nicht eingerechnet. Abschlag und Nebenkosten kommen aus deinen{" "}
+      <Link href="/einstellungen" className="text-accent hover:underline">Einstellungen</Link>.
+    </p>
+  );
+
+  if (!damaged) {
+    return (
+      <details className="mt-6 border-t border-line pt-4 text-sm">
+        <summary className="cursor-pointer font-semibold">Flip-Rechner</summary>
+        {calculator}
+        {note}
+      </details>
+    );
+  }
+
+  const { flip, repair } = listing;
+  return (
+    <section className="mt-6 border-t border-line pt-4 text-sm">
+      <h2 className="font-semibold">Flip-Bewertung</h2>
+      {flip && repair ? (
+        <p className="mt-1">
+          Geschätzt{" "}
+          <span className={`font-semibold ${flip.marginEur >= settings.minMarginEur ? "text-good-text" : flip.marginEur < 0 ? "text-warn-text" : ""}`}>
+            {formatSignedPrice(flip.marginEur)}
+          </span>{" "}
+          Marge (je nach Teilen {formatSignedPrice(flip.marginRangeEur[0])} bis {formatSignedPrice(flip.marginRangeEur[1])}), rund{" "}
+          {formatNumber(flip.hours)} Stunden
+          {flip.perHourEur !== null && flip.marginEur > 0 && <>, also ca. {formatEuro(flip.perHourEur)} pro Stunde</>}. Schwierigkeit{" "}
+          {repair.difficulty} von 5 ({DIFFICULTY_LABELS[repair.difficulty]}), Sicherheit {CONFIDENCE_LABELS[repair.confidence]},{" "}
+          {VEHICLE_CLASS_LABELS[repair.vehicleClass]}.
+        </p>
+      ) : (
+        <p className="mt-1 text-muted">
+          {listing.marketPriceEur === null
+            ? "Ohne Marktwert keine Marge; im Rechner kannst du selbst einen eintragen."
+            : "Die Reparaturschätzung für dieses Angebot wird beim nächsten Datenabgleich berechnet."}
+        </p>
+      )}
+      {calculator}
+      {note}
     </section>
   );
 }

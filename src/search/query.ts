@@ -1,7 +1,9 @@
 import type { Pool } from "pg";
 import { boundingBox, distanceSql } from "@/core/geo";
 import type { DamageKind } from "@/core/damage";
+import { calculateFlip, DEFAULT_FLIP_SETTINGS, type FlipResult, type FlipSettings } from "@/core/flip";
 import type { InspectionBasis } from "@/core/inspection";
+import type { Confidence, Difficulty, VehicleClass } from "@/core/repairs";
 import { psToKw } from "@/core/normalize";
 import type { BodyType, Fuel, SellerType, Transmission } from "@/core/types";
 import { Params } from "@/lib/db";
@@ -49,6 +51,49 @@ export interface ListingSummary {
   marketPriceEur: number | null;
   /** How many comparable listings the market value is based on. */
   marketComps: number | null;
+  /** What repairing it probably takes (src/core/repairs.ts), null until computed. */
+  repair: RepairSummary | null;
+  /** Margin when bought, repaired and sold again; null without a market value or repair estimate. */
+  flip: FlipResult | null;
+}
+
+export interface RepairSummary {
+  vehicleClass: VehicleClass;
+  partsEur: [number, number];
+  hours: [number, number];
+  difficulty: Difficulty;
+  confidence: Confidence;
+  needsTow: boolean;
+}
+
+/** The repair estimate columns of a listings row, or null when not computed yet. */
+function repairFromRow(row: Record<string, unknown>): RepairSummary | null {
+  if (row.repair_difficulty === null || row.repair_difficulty === undefined) return null;
+  return {
+    vehicleClass: row.vehicle_class as VehicleClass,
+    partsEur: [Number(row.repair_parts_min_eur), Number(row.repair_parts_max_eur)],
+    hours: [Number(row.repair_hours_min), Number(row.repair_hours_max)],
+    difficulty: Number(row.repair_difficulty) as Difficulty,
+    confidence: row.repair_confidence as Confidence,
+    needsTow: Boolean(row.repair_needs_tow),
+  };
+}
+
+function flipFromRow(priceEur: number, marketEur: number | null, repair: RepairSummary | null, settings: FlipSettings): FlipResult | null {
+  if (marketEur === null || repair === null) return null;
+  return calculateFlip({ purchaseEur: priceEur, marketEur, partsEur: repair.partsEur, hours: repair.hours, needsTow: repair.needsTow }, settings);
+}
+
+/** The flip margin and margin per hour in SQL, the same formula as calculateFlip. */
+function flipSql(settings: FlipSettings, params: Params) {
+  const keep = params.add(1 - settings.discountPct / 100);
+  const fixed = params.add(settings.huEur + settings.registrationEur);
+  const tow = params.add(settings.towEur);
+  const transport = params.add(settings.transportEur);
+  const margin = `(l.market_price_eur * ${keep}::float8 - l.price_eur
+      - (l.repair_parts_min_eur + l.repair_parts_max_eur) / 2.0 - ${fixed}::int
+      - case when l.repair_needs_tow then ${tow}::int else ${transport}::int end)`;
+  return { margin, perHour: `(${margin} / nullif((l.repair_hours_min + l.repair_hours_max) / 2.0, 0))` };
 }
 
 /** One portal's listing of a vehicle. */
@@ -66,7 +111,7 @@ export interface SearchResult {
   items: ListingSummary[];
 }
 
-const ORDER_BY: Record<Sort, string> = {
+const ORDER_BY: Record<Exclude<Sort, "flip" | "margin">, string> = {
   newest: "l.first_seen_at desc, l.id desc",
   price_asc: "l.price_eur asc, l.id asc",
   price_desc: "l.price_eur desc, l.id desc",
@@ -80,7 +125,7 @@ const ORDER_BY: Record<Sort, string> = {
 const escapeLike = (value: string) => value.replace(/[\\%_]/g, (char) => `\\${char}`);
 
 /** Builds the WHERE clause; returns the SQL and, when a radius applies, the distance expression. */
-export function buildWhere(filters: SearchFilters, origin: Origin | null, params: Params) {
+export function buildWhere(filters: SearchFilters, origin: Origin | null, params: Params, settings = DEFAULT_FLIP_SETTINGS) {
   const where = ["l.status = 'active'", "l.source_id in (select id from sources where active)"];
   const add = (sql: (p: (value: unknown) => string) => string) => where.push(sql((value) => params.add(value)));
 
@@ -99,6 +144,11 @@ export function buildWhere(filters: SearchFilters, origin: Origin | null, params
   if (filters.hu) add((p) => `l.hu_until >= (date_trunc('month', current_date) + make_interval(months => ${p(huFilterMonths(filters.hu!))}::int))::date`);
   if (filters.zustand === "defekt") where.push("cardinality(l.damage) > 0");
   if (filters.zustand === "intakt") where.push("l.damage = '{}'");
+  if (filters.schwierigkeit !== undefined) add((p) => `l.repair_difficulty <= ${p(filters.schwierigkeit)}`);
+  if (filters.margeMin !== undefined) {
+    const { margin } = flipSql(settings, params);
+    add((p) => `${margin} >= ${p(filters.margeMin)}`);
+  }
   if (filters.source.length > 0) add((p) => `l.source_id = any(${p(filters.source)}::text[])`);
   if (filters.q) add((p) => `l.title ilike ${p(`%${escapeLike(filters.q!)}%`)}`);
 
@@ -120,10 +170,24 @@ export function buildWhere(filters: SearchFilters, origin: Origin | null, params
 /** The listing a group of duplicates is shown with: the cheapest one that matches the filters. */
 const GROUP = "coalesce(l.cluster_id, l.id)";
 
-export async function searchListings(pool: Pool, filters: SearchFilters, origin: Origin | null): Promise<SearchResult> {
+export async function searchListings(
+  pool: Pool,
+  filters: SearchFilters,
+  origin: Origin | null,
+  settings: FlipSettings = DEFAULT_FLIP_SETTINGS,
+): Promise<SearchResult> {
   const params = new Params();
-  const { where, distance } = buildWhere(filters, origin, params);
+  const { where, distance } = buildWhere(filters, origin, params, settings);
+  // The count query takes only the filter parameters; Postgres rejects parameters a query does not use.
+  const whereParams = params.values.slice();
   const sort: Sort = filters.sort === "distance" && !distance ? "newest" : filters.sort;
+  let orderBy: string;
+  if (sort === "flip" || sort === "margin") {
+    const { margin, perHour } = flipSql(settings, params);
+    orderBy = `${sort === "flip" ? perHour : margin} desc nulls last, l.id desc`;
+  } else {
+    orderBy = ORDER_BY[sort];
+  }
   const offset = (filters.page - 1) * PAGE_SIZE;
 
   // A vehicle listed on several portals counts once.
@@ -134,6 +198,8 @@ export async function searchListings(pool: Pool, filters: SearchFilters, origin:
            l.fuel, l.transmission, l.power_kw, l.body_type, l.seller_type, l.zip, l.city, l.cluster_id,
            to_char(l.hu_until, 'YYYY-MM-DD') as hu_until, l.hu_basis,
            l.damage, l.market_price_eur, l.market_comps,
+           l.vehicle_class, l.repair_parts_min_eur, l.repair_parts_max_eur, l.repair_hours_min, l.repair_hours_max,
+           l.repair_difficulty, l.repair_confidence, l.repair_needs_tow,
            s.id as source_id, s.name as source_name,
            -- The cheapest listing of a duplicate group may come without a photo; another may have one.
            coalesce(l.image_url, (select d.image_url from listings d
@@ -148,11 +214,11 @@ export async function searchListings(pool: Pool, filters: SearchFilters, origin:
       ) l
       join sources s on s.id = l.source_id
      where l.group_rank = 1
-     order by ${ORDER_BY[sort]}
+     order by ${orderBy}
      limit ${PAGE_SIZE} offset ${offset}`;
 
   const [count, items] = await Promise.all([
-    pool.query<{ total: number }>(countSql, params.values),
+    pool.query<{ total: number }>(countSql, whereParams),
     pool.query(itemsSql, params.values),
   ]);
   const total = count.rows[0]?.total ?? 0;
@@ -168,6 +234,7 @@ export async function searchListings(pool: Pool, filters: SearchFilters, origin:
     pageCount: Math.max(1, Math.ceil(total / PAGE_SIZE)),
     items: items.rows.map((row) => {
       const id = Number(row.id);
+      const repair = repairFromRow(row);
       return {
         id,
         title: row.title,
@@ -193,6 +260,8 @@ export async function searchListings(pool: Pool, filters: SearchFilters, origin:
         damage: row.damage ?? [],
         marketPriceEur: row.market_price_eur,
         marketComps: row.market_comps,
+        repair,
+        flip: flipFromRow(row.price_eur, row.market_price_eur, repair, settings),
       };
     }),
   };
@@ -324,7 +393,7 @@ export interface ListingDetail extends ListingSummary {
   lastSeenAt: string;
 }
 
-export async function getListing(pool: Pool, id: number): Promise<ListingDetail | null> {
+export async function getListing(pool: Pool, id: number, settings = DEFAULT_FLIP_SETTINGS): Promise<ListingDetail | null> {
   const { rows } = await pool.query(
     `select l.*, to_char(l.first_registration, 'YYYY-MM-DD') as first_registration_text, s.name as source_name,
             to_char(l.hu_until, 'YYYY-MM-DD') as hu_until_text,
@@ -347,6 +416,7 @@ export async function getListing(pool: Pool, id: number): Promise<ListingDetail 
     ),
   ]);
   const offers = clusterId === null ? [] : (offerMap.get(clusterId) ?? []);
+  const repair = repairFromRow(row);
   return {
     id: Number(row.id),
     title: row.title,
@@ -372,6 +442,8 @@ export async function getListing(pool: Pool, id: number): Promise<ListingDetail 
     damage: row.damage ?? [],
     marketPriceEur: row.market_price_eur,
     marketComps: row.market_comps,
+    repair,
+    flip: flipFromRow(row.price_eur, row.market_price_eur, repair, settings),
     marketLowEur: row.market_low_eur,
     marketHighEur: row.market_high_eur,
     marketDays: row.market_days,

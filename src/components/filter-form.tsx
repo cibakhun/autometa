@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { BODY_TYPE_LABELS, BODY_TYPES, FUEL_LABELS, FUELS, SELLER_TYPE_LABELS, SELLER_TYPES, TRANSMISSION_LABELS, TRANSMISSIONS } from "@/core/types";
+import { DIFFICULTY_LABELS, type Difficulty } from "@/core/repairs";
 import type { SearchFilters } from "@/search/filters";
 import { CONDITION_LABELS, CONDITIONS, HU_FILTER_LABELS, HU_FILTERS, RADII_KM, SORT_LABELS, SORTS } from "@/search/filters";
 import type { MakeFacet, SourceFacet } from "@/search/query";
@@ -18,6 +19,7 @@ const PS_STEPS = [60, 75, 100, 125, 150, 200, 250, 300];
 const CURRENT_YEAR = 2026;
 const YEARS = Array.from({ length: 27 }, (_, i) => CURRENT_YEAR - i);
 const nf = new Intl.NumberFormat("de-DE");
+const DIFFICULTIES = [1, 2, 3, 4, 5] as const satisfies readonly Difficulty[];
 
 const fieldClass =
   "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/20";
@@ -190,6 +192,23 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
           </select>
           <p id="zustand-hint" className="mt-1 text-xs text-muted">
             Erkennt Hinweise wie „Motorschaden“, „springt nicht an“ oder „Bastler“ im Anzeigentitel.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label htmlFor="schwierigkeit" className={labelClass}>Schwierigkeit bis</label>
+            <select id="schwierigkeit" name="schwierigkeit" defaultValue={filters.schwierigkeit ?? ""} aria-describedby="flip-hint" className={fieldClass}>
+              <option value="">Beliebig</option>
+              {DIFFICULTIES.map((d) => <option key={d} value={d} title={DIFFICULTY_LABELS[d]}>{d} von 5</option>)}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="margeMin" className={labelClass}>Flip-Marge ab (€)</label>
+            <input id="margeMin" name="margeMin" type="number" step={1} inputMode="numeric" defaultValue={filters.margeMin} aria-describedby="flip-hint" className={fieldClass} />
+          </div>
+          <p id="flip-hint" className="col-span-2 text-xs text-muted">
+            Nur Angebote mit Schadenshinweis haben eine Reparaturschätzung. Schwierigkeit 1: {DIFFICULTY_LABELS[1]}, 5: {DIFFICULTY_LABELS[5]}.
           </p>
         </div>
 

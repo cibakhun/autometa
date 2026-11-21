@@ -133,11 +133,18 @@ function negated(title: Title, index: number): boolean {
   return NEGATIONS.has(last) || (beforeLast !== undefined && FILLERS.has(last) && NEGATIONS.has(beforeLast));
 }
 
+/** The rest of the phrase after a match: "frei" in "Rost, frei ab sofort" belongs to another phrase. */
+function restOfPhrase(title: Title, end: number): string {
+  const next = title.phraseStarts.find((phraseStart) => phraseStart > end);
+  return title.text.slice(end, next === undefined ? undefined : next - 1);
+}
+
 function mentioned(title: Title, pattern: RegExp, negatable: boolean): boolean {
   pattern.lastIndex = 0;
   for (const match of title.text.matchAll(pattern)) {
-    if (negatable && (negated(title, match.index) || FREE.test(title.text.slice(match.index + match[0].length)))) continue;
-    if (FIXED.test(title.text.slice(match.index + match[0].length))) continue;
+    const end = match.index + match[0].length;
+    if (negatable && (negated(title, match.index) || FREE.test(restOfPhrase(title, end)))) continue;
+    if (FIXED.test(title.text.slice(end))) continue;
     return true;
   }
   return false;

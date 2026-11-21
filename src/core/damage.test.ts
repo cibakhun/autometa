@@ -26,6 +26,8 @@ describe("detectDamage", () => {
     ["Opel Astra ohne Rost, Motorschaden", ["engine"]],
     ["Opel Astra ohne TÜV Motorschaden", ["engine"]],
     ["Golf kein Rost - Getriebe defekt", ["gearbox"]],
+    // "frei" after a match counts only within its phrase.
+    ["Polo Rost, frei ab sofort", ["rust"]],
   ])("finds damage in %j", (title, kinds) => {
     expect(detectDamage(title)).toEqual(kinds);
   });

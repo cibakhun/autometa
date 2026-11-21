@@ -1,4 +1,5 @@
 import { getPool } from "@/lib/db";
+import { getFlipSettings } from "@/lib/flip-settings";
 import { parseFilters } from "@/search/filters";
 import { resolveZip, searchListings } from "@/search/query";
 
@@ -7,6 +8,6 @@ export async function GET(request: Request) {
   const filters = parseFilters(new URL(request.url).searchParams);
   const pool = getPool();
   const origin = filters.zip ? await resolveZip(pool, filters.zip) : null;
-  const result = await searchListings(pool, filters, origin);
+  const result = await searchListings(pool, filters, origin, await getFlipSettings());
   return Response.json({ filters, origin, ...result });
 }

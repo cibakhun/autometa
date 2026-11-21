@@ -25,6 +25,12 @@ describe("parseFilters", () => {
     expect(f.sort).toBe("newest");
   });
 
+  it("parses the flip filters and sorts", () => {
+    expect(parseFilters({ schwierigkeit: "3", margeMin: "-500", sort: "flip" })).toMatchObject({ schwierigkeit: 3, margeMin: -500, sort: "flip" });
+    expect(parseFilters({ sort: "margin" }).sort).toBe("margin");
+    expect(parseFilters({ schwierigkeit: "6", margeMin: "viel" })).toMatchObject({ schwierigkeit: undefined, margeMin: undefined });
+  });
+
   it("accepts only the offered HU/TÜV choices", () => {
     expect(parseFilters({ hu: "neu" }).hu).toBe("neu");
     expect(parseFilters({ hu: "12" }).hu).toBe("12");

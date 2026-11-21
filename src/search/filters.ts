@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { BODY_TYPES, FUELS, SELLER_TYPES, TRANSMISSIONS } from "@/core/types";
 
-export const SORTS = ["newest", "price_asc", "price_desc", "km_asc", "year_desc", "distance", "below_market"] as const;
+export const SORTS = ["newest", "price_asc", "price_desc", "km_asc", "year_desc", "distance", "below_market", "flip", "margin"] as const;
 export type Sort = (typeof SORTS)[number];
 
 export const SORT_LABELS: Record<Sort, string> = {
@@ -12,6 +12,8 @@ export const SORT_LABELS: Record<Sort, string> = {
   year_desc: "Erstzulassung, neueste zuerst",
   distance: "Entfernung",
   below_market: "Am weitesten unter Marktwert",
+  flip: "Flip: höchster Stundenlohn",
+  margin: "Flip: höchste Marge",
 };
 
 /** Condition as the listing's title tells it: damage mentioned ("defekt") or not ("intakt"). */
@@ -63,6 +65,9 @@ const schema = z.object({
   seller: oneOf(SELLER_TYPES),
   hu: oneOf(HU_FILTERS),
   zustand: oneOf(CONDITIONS),
+  /** Flip filters: hardest repair job at most this difficulty, margin at least this many euros. */
+  schwierigkeit: int(1, 5),
+  margeMin: int(-1_000_000, 10_000_000),
   zip: z.preprocess(blankToUndefined, z.string().regex(/^\d{5}$/).optional()).catch(undefined),
   radius: int(1, 1000),
   q: z.preprocess(blankToUndefined, z.string().trim().max(80).optional()).catch(undefined),
