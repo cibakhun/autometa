@@ -4,7 +4,7 @@ import type { NormalizedListing } from "@/core/types";
 import type { CheckOutcome, FetchContext, ListingRef, RawListing, SourceAdapter, SourceInfo } from "../adapter";
 import { cardFacts, readCards } from "../http/cards";
 import { BudgetExceededError, type FetchedPage, type PoliteFetcher } from "../http/fetcher";
-import { checkListingPages } from "./listing-check";
+import { checkListingPages, portalText } from "./listing-check";
 import { normalizeCard, PageLoader, readList, toRaw, type CardItem } from "./list-crawler";
 
 /**
@@ -86,13 +86,15 @@ const TAKEN_DOWN = /Anzeige (?:ist )?nicht mehr (?:verfügbar|aktiv|online)|Anze
 
 /**
  * What an ad's own page says. Led to a page that is no ad (the category, the start page): taken
- * down. The ad itself: taken down when it says so, else online.
+ * down. The ad itself: taken down when the portal says so outside the seller's text, online when
+ * the page carries its id (a cookie or error page does not), else unclear.
  */
 export function quokaVerdict(ref: ListingRef, page: FetchedPage): CheckOutcome {
   const id = detailId(new URL(page.url));
   if (id === null) return "gone";
   if (id !== ref.externalId) return "unclear";
-  return TAKEN_DOWN.test(page.text) ? "gone" : "active";
+  if (TAKEN_DOWN.test(portalText(page.text))) return "gone";
+  return page.text.includes(ref.externalId) ? "active" : "unclear";
 }
 
 /** Quoka sends ads that are gone to its "not found" or archive pages, which robots.txt forbids. */

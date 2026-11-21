@@ -43,6 +43,25 @@ export const MAX_GONE_IN_GROUP = 22;
 
 type Attempt = CheckOutcome | "stop";
 
+/**
+ * Elements the seller writes or the portal fills from the seller's text: scripts and meta tags
+ * (JSON-LD, og:description) and any element whose id, class or itemprop names the description.
+ */
+const SELLER_TEXT = [
+  /<script\b[\s\S]*?<\/script\s*>/gi,
+  /<style\b[\s\S]*?<\/style\s*>/gi,
+  /<meta\b[^>]*>/gi,
+  /<(\w+)\b[^>]*\b(?:id|class|itemprop)\s*=\s*["'][^"']*(?:description|beschreibung)[^"']*["'][^>]*>[\s\S]*?<\/\1\s*>/gi,
+];
+
+/**
+ * A page without the parts a seller writes, for looking for the portal's own "taken down"
+ * notices: a description saying "my old ad was deleted" must not take the listing down.
+ */
+export function portalText(html: string): string {
+  return SELLER_TEXT.reduce((text, pattern) => text.replace(pattern, " "), html);
+}
+
 export async function* checkListingPages(due: ListingRef[], options: ListingCheckOptions): AsyncGenerator<CheckResult> {
   const { fetcher, log } = options;
   const counts: Record<CheckOutcome, number> = { active: 0, gone: 0, unclear: 0 };
@@ -90,7 +109,14 @@ export async function* checkListingPages(due: ListingRef[], options: ListingChec
   try {
     for (const ref of due) {
       if (fetcher.requestsLeft < 1) break;
-      const outcome = await attempt(ref);
+      let outcome: Attempt;
+      try {
+        outcome = await attempt(ref);
+      } catch (error) {
+        // A block ends the run, but the listings checked before it still count.
+        if (plausible(group)) yield* group;
+        throw error;
+      }
       if (outcome === "stop") break;
       counts[outcome] += 1;
       group.push({ externalId: ref.externalId, outcome });

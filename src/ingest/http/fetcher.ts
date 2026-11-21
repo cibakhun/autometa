@@ -293,8 +293,12 @@ export class PoliteFetcher {
     this.hostQueues.set(host, previous.then(() => turn));
     await previous;
     try {
-      // Re-read the deadline after each wake: a Crawl-delay found meanwhile may have moved it.
-      for (let wait = this.waitFor(host); wait > 0; wait = this.waitFor(host)) await this.sleep(wait);
+      // Re-read the slot after each wake: a Crawl-delay found meanwhile may have moved it. A run
+      // whose time ends during the wait stops then, not only after the full pause.
+      for (let wait = this.waitFor(host); wait > 0; wait = this.waitFor(host)) {
+        if (this.timeIsUp()) throw new BudgetExceededError(this.maxRequests, "time");
+        await this.sleep(this.deadline === undefined ? wait : Math.min(wait, this.deadline - this.now()));
+      }
       if (this.requestCount >= this.maxRequests) throw new BudgetExceededError(this.maxRequests);
       if (this.timeIsUp()) throw new BudgetExceededError(this.maxRequests, "time");
       this.requestCount += 1;

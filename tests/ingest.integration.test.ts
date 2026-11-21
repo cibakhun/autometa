@@ -10,6 +10,7 @@ import { migrate } from "@/ingest/migrate";
 import { removeDemoData } from "@/ingest/pipeline";
 import { IngestBusyError, runIngest } from "@/ingest/run";
 import { seedReferenceData } from "@/ingest/seed";
+import { SegmentStore } from "@/ingest/segments";
 import { getSourceHealth, updateSourceStats } from "@/ingest/status";
 import { parseFilters } from "@/search/filters";
 import { getListing, getMakeFacets, getSourceFacets, getSourceStatus, searchListings } from "@/search/query";
@@ -225,6 +226,14 @@ describe.skipIf(!url)("importing scraped portals", () => {
     expect(byId.get("5")).toMatchObject({ status: "active", hours: 0 });
     const run = await pool.query("select checked, gone from ingest_runs where id = $1", [result.runId]);
     expect(run.rows[0]).toEqual({ checked: 4, gone: 1 });
+
+    // The unclear page is not asked for again in the next run, but a day later.
+    const next = { outcomes: {} as Record<string, CheckOutcome>, due: [] as ListingRef[] };
+    await runIngest(pool, fakePortal(PORTAL_A, [], { checks: next }));
+    expect(next.due).toEqual([]);
+    await pool.query("update listings set checked_at = now() - interval '21 hours' where external_id = '3'");
+    await runIngest(pool, fakePortal(PORTAL_A, [], { checks: next }));
+    expect(next.due.map((ref) => ref.externalId)).toEqual(["3"]);
   });
 
   it("keeps the checks and the clean-up when the portal blocks a listing page", async () => {
@@ -556,6 +565,26 @@ describe.skipIf(!url)("crawling AutoScout24 result lists", () => {
     const steady = createAutoScout24Adapter({ fetcher: fakeSite(routes).fetcher, makes: ["skoda"], maxPagesPerSegment: 2 });
     await runIngest(pool, steady);
     expect(steady.completedSegments!()).toContain("skoda:0-");
+  });
+
+  it("reads next the segment whose last read began longest ago, complete or not", async () => {
+    const client = await pool.connect();
+    try {
+      const store = new SegmentStore<{ make: string }>(client, "autoscout24");
+      await store.ensure(["turn:a", "turn:b", "turn:c"].map((key) => ({ key, params: { make: "turn" } })));
+      // a was read completely two days ago and began again an hour ago, but changed while read;
+      // b was read completely a day ago; c was never read.
+      await client.query(
+        `update crawl_segments
+            set last_started_at = now() - case key when 'turn:a' then interval '1 hour' else interval '1 day' end,
+                last_completed_at = now() - case key when 'turn:a' then interval '2 days' else interval '1 day' end
+          where source_id = 'autoscout24' and key in ('turn:a', 'turn:b')`,
+      );
+      const order = (await store.active()).map((s) => s.key).filter((key) => key.startsWith("turn:"));
+      expect(order).toEqual(["turn:c", "turn:b", "turn:a"]);
+    } finally {
+      client.release();
+    }
   });
 
   it("stops quietly when the request budget is used up and keeps what it read", async () => {

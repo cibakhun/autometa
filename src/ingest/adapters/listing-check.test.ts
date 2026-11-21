@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CheckResult, ListingRef } from "../adapter";
 import { BlockedError, PoliteFetcher } from "../http/fetcher";
 import { kleinanzeigenVerdict } from "./kleinanzeigen";
-import { CHECK_GROUP, checkListingPages, MAX_UNCLEAR_IN_A_ROW } from "./listing-check";
+import { CHECK_GROUP, checkListingPages, MAX_UNCLEAR_IN_A_ROW, portalText } from "./listing-check";
 import { quokaDisallowedRedirect, quokaVerdict } from "./quoka";
 
 type Reply = { status?: number; body?: string; location?: string };
@@ -68,6 +68,19 @@ describe("checkListingPages with Kleinanzeigen's ad pages", () => {
     expect(logs.at(-1)).toBe("checked 8 listing pages: 2 online, 4 taken down, 2 unclear");
   });
 
+  it("does not take an ad down for what its seller wrote", async () => {
+    const page = adPage(
+      "10",
+      `<meta name="description" content="Anzeige gelöscht und neu eingestellt">
+       <div id="viewad-description" class="box"><h2>Beschreibung</h2>
+       <p id="viewad-description-text" itemprop="description">Meine alte Anzeige wurde gelöscht,<br>daher neu eingestellt.</p></div>
+       <script type="application/ld+json">{"description":"Diese Anzeige ist nicht mehr verfügbar ab Montag"}</script>`,
+    );
+    const { run } = kleinanzeigenChecks({ [adUrl("10")]: page }, [ref("10")]);
+    expect(await run).toEqual([{ externalId: "10", outcome: "active" }]);
+    expect(portalText(page.body)).not.toMatch(/gelöscht|verfügbar/);
+  });
+
   it("follows an ad that moved to a new address with the same id", async () => {
     const moved = `${KA}/s-anzeige/bmw-320d-touring/9-216-3331`;
     const { run } = kleinanzeigenChecks({ [adUrl("9")]: { status: 301, location: moved }, [moved]: adPage("9") }, [ref("9")]);
@@ -114,9 +127,24 @@ describe("checkListingPages with Kleinanzeigen's ad pages", () => {
     expect(logs.some((line) => line.includes("unclear pages in a row"))).toBe(true);
   });
 
-  it("ends the run at a block", async () => {
-    const { run } = kleinanzeigenChecks({ [adUrl("1")]: { status: 429 } }, [ref("1")]);
-    await expect(run).rejects.toBeInstanceOf(BlockedError);
+  it("ends the run at a block and hands on what it checked before", async () => {
+    const site = fakeSite({
+      [`${KA}/robots.txt`]: { body: "User-agent: *\n" },
+      [adUrl("1")]: adPage("1"),
+      [adUrl("3")]: { status: 429 },
+    });
+    const results: CheckResult[] = [];
+    const run = async () => {
+      for await (const result of checkListingPages(["1", "2", "3", "4"].map(ref), { fetcher: site.fetcher, log: () => undefined, verdict: kleinanzeigenVerdict })) {
+        results.push(result);
+      }
+    };
+    await expect(run()).rejects.toBeInstanceOf(BlockedError);
+    expect(results).toEqual([
+      { externalId: "1", outcome: "active" },
+      { externalId: "2", outcome: "gone" },
+    ]);
+    expect(site.requested).not.toContain(adUrl("4"));
   });
 
   it("stops at once when robots.txt forbids the ad pages", async () => {
@@ -138,13 +166,19 @@ describe("checkListingPages with Quoka's ad pages", () => {
   it("counts a redirect to the not-found page robots.txt forbids as taken down", async () => {
     const site = fakeSite({
       [`${QUOKA}/robots.txt`]: { body: "User-agent: *\nAllow: /\nDisallow: /Detailansicht-AdNotFound/\n" },
-      [quokaAd("abc12345")]: { body: "<html><h1>VW Golf 7</h1></html>" },
+      [quokaAd("abc12345")]: { body: `<html><link rel="canonical" href="${quokaAd("abc12345")}"><h1>VW Golf 7</h1></html>` },
+      // A cookie wall at the ad's address says nothing about the ad.
+      [quokaAd("mno97531")]: { body: "<html><p>Wir verwenden Cookies</p></html>" },
+      // The seller's words are not Quoka's notice.
+      [quokaAd("pqr86420")]: {
+        body: `<html><link rel="canonical" href="${quokaAd("pqr86420")}"><div class="description">Alte Anzeige wurde gelöscht, Auto ist noch da.</div></html>`,
+      },
       [quokaAd("def67890")]: { status: 301, location: `${QUOKA}/Detailansicht-AdNotFound/?id=def67890` },
       [quokaAd("ghi13579")]: { status: 302, location: `${QUOKA}/anzeigen/auto-motorrad/automarkt/` },
       [`${QUOKA}/anzeigen/auto-motorrad/automarkt/`]: { body: "<html>Automarkt</html>" },
       [quokaAd("jkl24680")]: { body: "<html><p>Diese Anzeige ist nicht mehr verfügbar.</p></html>" },
     });
-    const due = ["abc12345", "def67890", "ghi13579", "jkl24680"].map((id) => ({ externalId: id, url: quokaAd(id) }));
+    const due = ["abc12345", "def67890", "ghi13579", "jkl24680", "mno97531", "pqr86420"].map((id) => ({ externalId: id, url: quokaAd(id) }));
     const results = await collect(
       checkListingPages(due, { fetcher: site.fetcher, log: () => undefined, verdict: quokaVerdict, disallowedRedirect: quokaDisallowedRedirect }),
     );
@@ -153,6 +187,8 @@ describe("checkListingPages with Quoka's ad pages", () => {
       { externalId: "def67890", outcome: "gone" },
       { externalId: "ghi13579", outcome: "gone" },
       { externalId: "jkl24680", outcome: "gone" },
+      { externalId: "mno97531", outcome: "unclear" },
+      { externalId: "pqr86420", outcome: "active" },
     ]);
     expect(site.requested).not.toContain(`${QUOKA}/Detailansicht-AdNotFound/?id=def67890`);
   });

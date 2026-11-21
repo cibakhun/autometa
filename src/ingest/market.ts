@@ -54,8 +54,9 @@ export async function updateMarketValues(pool: Pool): Promise<MarketResult> {
               extract(year from l.first_registration)::int as year,
               l.mileage_km, l.fuel, l.transmission, l.power_kw, l.price_eur,
               -- Only listings known to be sold or taken down: one we merely could not confirm for a
-              -- few days ('stale') may well still be online.
-              case when l.status = 'gone' and l.first_seen_at > st.since and l.gone_reason is distinct from 'stale'
+              -- few days ('stale') may well still be online, and one gone before reasons were
+              -- recorded may be such a case.
+              case when l.status = 'gone' and l.first_seen_at > st.since and l.gone_reason in ('missed', 'checked')
                    then extract(epoch from l.last_seen_at - l.first_seen_at) / 86400 end as days_listed
          from listings l
          join sources s on s.id = l.source_id and s.active

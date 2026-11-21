@@ -16,7 +16,7 @@ import type { NormalizedListing } from "@/core/types";
 import type { CheckOutcome, ListingRef, RawListing, SourceAdapter, SourceInfo } from "../adapter";
 import { BlockedError, BudgetExceededError, DisallowedError, HttpStatusError, type FetchedPage, type PoliteFetcher } from "../http/fetcher";
 import { decodeEntities, textOf } from "../http/html";
-import { checkListingPages } from "./listing-check";
+import { checkListingPages, portalText } from "./listing-check";
 
 /**
  * Kleinanzeigen (www.kleinanzeigen.de), car category "Autos" (c216). Its robots.txt allows the
@@ -171,13 +171,14 @@ const TAKEN_DOWN =
 
 /**
  * What an ad's own page says. Led to a page that is no ad (search, start page): taken down. The
- * ad itself: taken down when it says so, online when the page carries its id, else unclear.
+ * ad itself: taken down when the portal says so outside the seller's text, online when the page
+ * carries its id, else unclear.
  */
 export function kleinanzeigenVerdict(ref: ListingRef, page: FetchedPage): CheckOutcome {
   const id = adIdOf(page.url);
   if (id === null) return "gone";
   if (id !== ref.externalId) return "unclear";
-  if (TAKEN_DOWN.test(page.text)) return "gone";
+  if (TAKEN_DOWN.test(portalText(page.text))) return "gone";
   return page.text.includes(ref.externalId) ? "active" : "unclear";
 }
 

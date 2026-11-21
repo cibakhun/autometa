@@ -8,7 +8,7 @@ import { BlockedError } from "./http/fetcher";
 const BATCH_SIZE = 500;
 /** A listing missing from this many full reads (of the source or of its segment) in a row counts as sold. */
 export const MISSED_RUNS_UNTIL_GONE = 2;
-/** Listings not seen for this many hours are due for a check on their own page, where the adapter can. */
+/** Listings neither seen nor checked for this many hours are due for a check on their own page, where the adapter can. */
 export const CHECK_AFTER_HOURS = 20;
 /** More than one run can check; the longest unchecked come first. */
 const MAX_DUE = 5000;
@@ -338,16 +338,19 @@ async function markMissed(client: PoolClient, sourceId: string, startedAt: Date,
 }
 
 /**
- * Hands the adapter the listings not seen for CHECK_AFTER_HOURS, the longest unchecked first, and
- * applies what their pages say: online counts as seen now, taken down leaves the search at once,
- * unclear changes nothing. Written in small batches, so a run that ends early keeps its checks.
+ * Hands the adapter the listings neither seen nor checked for CHECK_AFTER_HOURS, the longest
+ * unlooked-at first, and applies what their pages say: online counts as seen now, taken down
+ * leaves the search at once, unclear only records the attempt (the listing is due again a day
+ * later). Written in small batches, so a run that ends early keeps its checks.
  */
 async function checkDueListings(client: PoolClient, adapter: SourceAdapter, totals: IngestResult) {
   const { source } = adapter;
+  // greatest() skips a null checked_at.
   const due = await client.query<{ external_id: string; url: string }>(
     `select external_id, url from listings
-      where source_id = $1 and status = 'active' and last_seen_at < now() - make_interval(hours => $2)
-      order by last_seen_at, id
+      where source_id = $1 and status = 'active'
+        and greatest(last_seen_at, checked_at) < now() - make_interval(hours => $2)
+      order by greatest(last_seen_at, checked_at), id
       limit $3`,
     [source.id, CHECK_AFTER_HOURS, MAX_DUE],
   );
@@ -356,20 +359,20 @@ async function checkDueListings(client: PoolClient, adapter: SourceAdapter, tota
   let batch: CheckResult[] = [];
   const write = async () => {
     totals.checked += batch.length;
-    const clear = batch.filter((r) => r.outcome !== "unclear");
+    const checks = batch;
     batch = [];
-    if (clear.length === 0) return;
     const updated = await client.query<{ outcome: string }>(
       `update listings l
           set status = case when v.outcome = 'gone' then 'gone' else l.status end,
               gone_reason = case when v.outcome = 'gone' then 'checked' else l.gone_reason end,
               gone_at = case when v.outcome = 'gone' then now() else l.gone_at end,
               last_seen_at = case when v.outcome = 'active' then now() else l.last_seen_at end,
-              missed_runs = case when v.outcome = 'active' then 0 else l.missed_runs end
+              missed_runs = case when v.outcome = 'active' then 0 else l.missed_runs end,
+              checked_at = now()
          from unnest($2::text[], $3::text[]) as v (external_id, outcome)
         where l.source_id = $1 and l.external_id = v.external_id and l.status = 'active'
         returning v.outcome`,
-      [source.id, clear.map((r) => r.externalId), clear.map((r) => r.outcome)],
+      [source.id, checks.map((r) => r.externalId), checks.map((r) => r.outcome)],
     );
     totals.gone += updated.rows.filter((row) => row.outcome === "gone").length;
   };

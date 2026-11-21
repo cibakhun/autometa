@@ -28,7 +28,7 @@ function fakeSite(routes: Record<string, Reply | Reply[]>) {
     random: () => 0,
     minDelayMs: 1000,
   };
-  return { calls, options };
+  return { calls, options, now: () => clock };
 }
 
 const page = (n: number) => `<html><body>${"x".repeat(60_000)} Angebot ${n}</body></html>`;
@@ -133,6 +133,17 @@ describe("PoliteFetcher", () => {
     expect((error as BudgetExceededError).reason).toBe("time");
     expect(fetcher.requestsLeft).toBe(0);
     expect(site.calls).toHaveLength(2);
+  });
+
+  it("stops waiting for its next slot when its time runs out", async () => {
+    const site = fakeSite({ "https://a.example/robots.txt": { body: "User-agent: *\nCrawl-delay: 60" }, "https://a.example/1": { body: page(1) } });
+    const fetcher = new PoliteFetcher({ ...site.options, deadline: 10_000 });
+    // The page would be due 60 s after robots.txt, long after the run's time is up.
+    const error = await fetcher.getText("https://a.example/1").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BudgetExceededError);
+    expect((error as BudgetExceededError).reason).toBe("time");
+    expect(site.now()).toBe(10_000);
+    expect(site.calls.map((c) => c.url)).toEqual(["https://a.example/robots.txt"]);
   });
 
   it("changes its pause on request and measures how long answers take", async () => {
