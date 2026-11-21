@@ -28,7 +28,7 @@ function fakeSite(routes: Record<string, Reply | Reply[]>) {
     random: () => 0,
     minDelayMs: 1000,
   };
-  return { calls, options };
+  return { calls, options, now: () => clock };
 }
 
 const page = (n: number) => `<html><body>${"x".repeat(60_000)} Angebot ${n}</body></html>`;
@@ -122,6 +122,55 @@ describe("PoliteFetcher", () => {
     await expect(fetcher.getText("https://a.example/1")).rejects.toBeInstanceOf(BudgetExceededError);
     expect(fetcher.requestsMade).toBe(2);
   });
+  it("starts no request after its deadline and then ends like at its budget", async () => {
+    const site = fakeSite({ "https://a.example/robots.txt": { status: 404 }, "https://a.example/1": { body: page(1) } });
+    // Robots.txt at 0, the page at 1,000 ms, the next one would be due at 2,000 ms.
+    const fetcher = new PoliteFetcher({ ...site.options, deadline: 1500 });
+    await fetcher.getText("https://a.example/1");
+    expect(fetcher.requestsLeft).toBeGreaterThan(0);
+    const error = await fetcher.getText("https://a.example/1").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BudgetExceededError);
+    expect((error as BudgetExceededError).reason).toBe("time");
+    expect(fetcher.requestsLeft).toBe(0);
+    expect(site.calls).toHaveLength(2);
+  });
+
+  it("stops waiting for its next slot when its time runs out", async () => {
+    const site = fakeSite({ "https://a.example/robots.txt": { body: "User-agent: *\nCrawl-delay: 60" }, "https://a.example/1": { body: page(1) } });
+    const fetcher = new PoliteFetcher({ ...site.options, deadline: 10_000 });
+    // The page would be due 60 s after robots.txt, long after the run's time is up.
+    const error = await fetcher.getText("https://a.example/1").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BudgetExceededError);
+    expect((error as BudgetExceededError).reason).toBe("time");
+    expect(site.now()).toBe(10_000);
+    expect(site.calls.map((c) => c.url)).toEqual(["https://a.example/robots.txt"]);
+  });
+
+  it("does not wait out a retry backoff past its deadline", async () => {
+    const site = fakeSite({ "https://a.example/robots.txt": { status: 404 }, "https://a.example/1": { status: 503 } });
+    // The 503 comes at 1,000 ms; the retry would wait 2,000 ms more.
+    const fetcher = new PoliteFetcher({ ...site.options, deadline: 1500 });
+    const error = await fetcher.getText("https://a.example/1").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BudgetExceededError);
+    expect((error as BudgetExceededError).reason).toBe("time");
+    expect(site.now()).toBe(1500);
+    expect(site.calls).toHaveLength(2);
+  });
+
+  it("changes its pause on request and measures how long answers take", async () => {
+    const site = fakeSite({ "https://a.example/robots.txt": { status: 404 }, "https://a.example/1": { body: page(1) } });
+    const fetcher = new PoliteFetcher(site.options);
+    expect(fetcher.averageResponseMs).toBeNull();
+    await fetcher.getText("https://a.example/1");
+    fetcher.setDelay(3000);
+    expect(fetcher.delayMs).toBe(3000);
+    await fetcher.getText("https://a.example/1");
+    await fetcher.getText("https://a.example/1");
+    // The pause after a request is read when it ends, so the new one applies from the second gap on.
+    expect(site.calls.map((c) => c.at)).toEqual([0, 1000, 2000, 5000]);
+    expect(fetcher.averageResponseMs).toBe(0);
+  });
+
   it("retries network errors and treats an unreachable robots.txt as disallow-all", async () => {
     const flaky = fakeSite({
       "https://a.example/robots.txt": { status: 404 },

@@ -44,10 +44,13 @@ export class HttpStatusError extends Error {
   }
 }
 
-/** The per-run request budget is used up. */
+/** The run's request budget or its time is used up. Adapters end the run quietly on it. */
 export class BudgetExceededError extends Error {
-  constructor(readonly maxRequests: number) {
-    super(`Request budget of ${maxRequests} used up`);
+  constructor(
+    readonly maxRequests: number,
+    readonly reason: "requests" | "time" = "requests",
+  ) {
+    super(reason === "time" ? "Time for this run is up" : `Request budget of ${maxRequests} used up`);
     this.name = "BudgetExceededError";
   }
 }
@@ -67,6 +70,8 @@ export interface PoliteFetcherOptions {
   respectRobots?: boolean;
   /** Most requests one run may make, robots.txt included. */
   maxRequests?: number;
+  /** Time (ms since 1970, like Date.now()) after which no request starts; the run then ends like at its budget. */
+  deadline?: number;
   /** Retries for network errors, timeouts and 5xx answers (never for blocks, 4xx or the budget). */
   maxRetries?: number;
   /** Longest time one request may take, body included, before it counts as a network error. */
@@ -112,9 +117,10 @@ const LOGIN_PATH = /\/(login|signin|sign-in|anmelden|einloggen)(\/|\.|\?|$)/i;
 export class PoliteFetcher {
   readonly userAgent: string;
   readonly respectRobots: boolean;
-  private readonly minDelayMs: number;
+  private minDelayMs: number;
   private readonly jitterRatio: number;
   private readonly maxRequests: number;
+  private readonly deadline: number | undefined;
   private readonly maxRetries: number;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
@@ -128,6 +134,8 @@ export class PoliteFetcher {
   /** Crawl-delay per host when robots.txt asks for more than minDelayMs. */
   private readonly hostDelays = new Map<string, number>();
   private requestCount = 0;
+  /** Moving average of how long an answer takes, body included. */
+  private responseMs: number | null = null;
 
   constructor(options: PoliteFetcherOptions = {}) {
     this.userAgent = options.userAgent ?? DEFAULT_USER_AGENT;
@@ -135,6 +143,7 @@ export class PoliteFetcher {
     this.minDelayMs = options.minDelayMs ?? 5000;
     this.jitterRatio = options.jitterRatio ?? 0.2;
     this.maxRequests = options.maxRequests ?? 500;
+    this.deadline = options.deadline;
     this.maxRetries = options.maxRetries ?? 2;
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.fetchImpl = options.fetchImpl ?? fetch;
@@ -147,9 +156,42 @@ export class PoliteFetcher {
     return this.requestCount;
   }
 
-  /** Requests this run may still make before BudgetExceededError. */
+  /** Requests this run may still make before BudgetExceededError; 0 once its time is up. */
   get requestsLeft(): number {
+    if (this.timeIsUp()) return 0;
     return Math.max(0, this.maxRequests - this.requestCount);
+  }
+
+  /** The pause between two requests to the same host that the fetcher keeps (a longer Crawl-delay still wins). */
+  get delayMs(): number {
+    return this.minDelayMs;
+  }
+
+  /**
+   * Changes the pause for the next requests, for a source that paces itself to read its inventory
+   * once a day. The caller keeps it at or above the configured minimum.
+   */
+  setDelay(ms: number): void {
+    this.minDelayMs = ms;
+  }
+
+  /** How long an answer took on average in this run, or null before the first one. */
+  get averageResponseMs(): number | null {
+    return this.responseMs;
+  }
+
+  private timeIsUp(): boolean {
+    return this.deadline !== undefined && this.now() >= this.deadline;
+  }
+
+  /**
+   * Waits, but never past the run's deadline: a run whose time ends during a pause or a retry
+   * backoff stops then (BudgetExceededError), not only after the full wait.
+   */
+  private async sleepWithinRun(ms: number): Promise<void> {
+    if (this.timeIsUp()) throw new BudgetExceededError(this.maxRequests, "time");
+    await this.sleep(this.deadline === undefined ? ms : Math.min(ms, this.deadline - this.now()));
+    if (this.timeIsUp()) throw new BudgetExceededError(this.maxRequests, "time");
   }
 
   /** Fetches a page as text, or throws BlockedError / DisallowedError / BudgetExceededError. */
@@ -165,13 +207,13 @@ export class PoliteFetcher {
       } catch (error) {
         if (!isNetworkError(error) || attempt >= this.maxRetries) throw error;
         attempt += 1;
-        await this.sleep(this.minDelayMs * 2 ** attempt);
+        await this.sleepWithinRun(this.minDelayMs * 2 ** attempt);
         continue;
       }
       this.assertNotBlocked(page);
       if (page.status >= 500 && attempt < this.maxRetries) {
         attempt += 1;
-        await this.sleep(this.minDelayMs * 2 ** attempt);
+        await this.sleepWithinRun(this.minDelayMs * 2 ** attempt);
         continue;
       }
       if (page.status >= 400) throw new HttpStatusError(page.url, page.status, page.text.slice(0, 500));
@@ -261,11 +303,13 @@ export class PoliteFetcher {
     this.hostQueues.set(host, previous.then(() => turn));
     await previous;
     try {
-      // Re-read the deadline after each wake: a Crawl-delay found meanwhile may have moved it.
-      for (let wait = this.waitFor(host); wait > 0; wait = this.waitFor(host)) await this.sleep(wait);
+      // Re-read the slot after each wake: a Crawl-delay found meanwhile may have moved it.
+      for (let wait = this.waitFor(host); wait > 0; wait = this.waitFor(host)) await this.sleepWithinRun(wait);
       if (this.requestCount >= this.maxRequests) throw new BudgetExceededError(this.maxRequests);
+      if (this.timeIsUp()) throw new BudgetExceededError(this.maxRequests, "time");
       this.requestCount += 1;
 
+      const sentAt = this.now();
       try {
         const response = await this.fetchImpl(url.href, {
           headers: { "user-agent": this.userAgent, accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8" },
@@ -284,6 +328,8 @@ export class PoliteFetcher {
         }
         return { status: response.status, location, text: await response.text() };
       } finally {
+        const took = this.now() - sentAt;
+        this.responseMs = this.responseMs === null ? took : this.responseMs * 0.8 + took * 0.2;
         // Read the delay now, not before the request: robots.txt may have raised it meanwhile.
         const delay = Math.max(this.minDelayMs, this.hostDelays.get(host) ?? 0);
         const next = this.now() + delay * (1 + this.jitterRatio * this.random());

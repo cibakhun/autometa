@@ -1,6 +1,14 @@
 import { MAKES } from "@/core/taxonomy";
 import type { AdapterFactory } from "../adapter";
-import { createFetcherFromEnv, readList } from "../http/config";
+import {
+  createFetcherFromEnv,
+  cycleHours,
+  floorDelayMs,
+  intervalMinutes,
+  readList,
+  RELAXED_DELAY_MS,
+  runMinutes,
+} from "../http/config";
 import { createAutoDeAdapter } from "./autode";
 import { createAutoheroAdapter } from "./autohero";
 import { createAutoScout24Adapter } from "./autoscout24";
@@ -32,24 +40,38 @@ export function makesFromEnv(name: string): string[] | undefined {
 
 const logFor = (source: string) => (message: string) => console.log(`[${source}] ${message}`);
 
+/**
+ * Pause for sources that read their newest pages and then check older listings one by one on
+ * their own page for the rest of the run: one request every 3 s to the portal.
+ */
+export const CHECKING_DELAY_MS = 3000;
+
 /** All known sources. */
 export const ADAPTERS: Record<string, AdapterFactory> = {
   demo: () => createDemoAdapter({ count: demoListingCount() }),
+  // Paces itself between the floor and the relaxed pause to read its whole inventory once per cycle.
   autoscout24: () =>
     createAutoScout24Adapter({
-      fetcher: createFetcherFromEnv(),
+      fetcher: createFetcherFromEnv({ delayMs: RELAXED_DELAY_MS }),
       makes: makesFromEnv("AUTOSCOUT24_MAKES"),
+      pace: {
+        cycleHours: cycleHours(),
+        runMinutes: runMinutes(),
+        intervalMinutes: intervalMinutes(),
+        minDelayMs: floorDelayMs(),
+        maxDelayMs: Math.max(RELAXED_DELAY_MS, floorDelayMs()),
+      },
       log: logFor("autoscout24"),
     }),
   kleinanzeigen: () =>
     createKleinanzeigenAdapter({
-      fetcher: createFetcherFromEnv(),
+      fetcher: createFetcherFromEnv({ delayMs: CHECKING_DELAY_MS }),
       makes: makesFromEnv("KLEINANZEIGEN_MAKES"),
       log: logFor("kleinanzeigen"),
     }),
   quoka: () =>
     createQuokaAdapter({
-      fetcher: createFetcherFromEnv(),
+      fetcher: createFetcherFromEnv({ delayMs: CHECKING_DELAY_MS }),
       makes: makesFromEnv("QUOKA_MAKES"),
       log: logFor("quoka"),
     }),

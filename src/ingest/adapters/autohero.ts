@@ -86,7 +86,7 @@ export function createAutoheroAdapter(options: AutoheroOptions): SourceAdapter {
     source: AUTOHERO,
     fullSnapshot: false,
     // About 1,000 model pages at 300 per hourly run: every page comes round within a few hours.
-    staleAfterDays: options.staleAfterDays ?? 3,
+    staleAfterDays: options.staleAfterDays ?? 2,
     normalize: normalizeAutohero,
     async *fetch(context?: FetchContext): AsyncGenerator<RawListing> {
       const loader = new PageLoader(AUTOHERO.id, options.fetcher, log, context?.db);

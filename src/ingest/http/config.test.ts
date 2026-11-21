@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createFetcherFromEnv, readList } from "./config";
+import { createFetcherFromEnv, cycleHours, floorDelayMs, readList, RELAXED_DELAY_MS, runMinutes } from "./config";
 
 describe("createFetcherFromEnv", () => {
   afterEach(() => {
@@ -21,6 +21,31 @@ describe("createFetcherFromEnv", () => {
     const fetcher = createFetcherFromEnv();
     expect(fetcher.userAgent).toBe("AutoMetaBot/0.2 (+https://example.org/bot)");
     expect(fetcher.respectRobots).toBe(false);
+  });
+
+  it("keeps each source's own pause, but never below the floor, and ends the run after its minutes", async () => {
+    for (const name of ["SCRAPE_MIN_DELAY_MS", "SCRAPE_INTERVAL_MINUTES", "SCRAPE_RUN_MINUTES"]) vi.stubEnv(name, undefined);
+    expect(floorDelayMs()).toBe(2000);
+    expect(createFetcherFromEnv().delayMs).toBe(RELAXED_DELAY_MS);
+    expect(createFetcherFromEnv({ delayMs: 3000 }).delayMs).toBe(3000);
+    vi.stubEnv("SCRAPE_MIN_DELAY_MS", "4000");
+    expect(createFetcherFromEnv({ delayMs: 3000 }).delayMs).toBe(4000);
+
+    let clock = 0;
+    const fetcher = createFetcherFromEnv({ now: () => clock });
+    expect(fetcher.requestsLeft).toBeGreaterThan(1000);
+    clock = 50 * 60_000;
+    expect(fetcher.requestsLeft).toBe(0);
+  });
+
+  it("leaves a sixth of each round for the steps after the imports", () => {
+    for (const name of ["SCRAPE_INTERVAL_MINUTES", "SCRAPE_RUN_MINUTES", "SCRAPE_CYCLE_HOURS"]) vi.stubEnv(name, undefined);
+    expect(runMinutes()).toBe(50);
+    expect(cycleHours()).toBe(24);
+    vi.stubEnv("SCRAPE_INTERVAL_MINUTES", "30");
+    expect(runMinutes()).toBe(25);
+    vi.stubEnv("SCRAPE_RUN_MINUTES", "40");
+    expect(() => runMinutes()).toThrow(/SCRAPE_RUN_MINUTES/);
   });
 
   it("rejects delays under one second and unclear switches", () => {

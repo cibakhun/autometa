@@ -26,6 +26,10 @@ import { SegmentStore, type Segment, type SegmentDraft } from "../segments";
  *    segment was read to the end and every listing it reported came in, listings of that segment
  *    we did not see count as missed; after two misses in a row they are taken out of the search.
  * Listings not seen for staleAfterDays are taken out as well, as a safety net.
+ *
+ * With a pace, the adapter sets its own pause between requests so that the whole plan (every
+ * segment, at its last reported size) is read once per cycle, usually a day: never faster than the
+ * pace's minimum, never slower than its maximum. Each run goes on where the last one stopped.
  */
 
 export const AUTOSCOUT24: SourceInfo = {
@@ -59,6 +63,42 @@ export interface SweepParams {
   priceTo: number | null;
 }
 
+/** How fast the sweep may go to read the whole inventory once per cycle. */
+export interface Pace {
+  /** Hours in which every segment should be read once. */
+  cycleHours: number;
+  /** Minutes the adapter fetches per round, and the round's length. */
+  runMinutes: number;
+  intervalMinutes: number;
+  /** Bounds of the pause between two requests. */
+  minDelayMs: number;
+  maxDelayMs: number;
+}
+
+/** Extra requests for segments that changed while read and are read again, and for splits. */
+const REREAD_MARGIN = 1.15;
+
+/** Pages one read of the whole plan takes: each segment at its last count, one page for a new one. */
+export function planPages(segments: Pick<Segment<SweepParams>, "lastTotal">[], maxPagesPerSegment: number): number {
+  return segments.reduce(
+    (sum, s) => sum + (s.lastTotal ? Math.min(Math.ceil(s.lastTotal / PAGE_SIZE), maxPagesPerSegment) : 1),
+    0,
+  );
+}
+
+/**
+ * The pause between requests that reads planned pages once per cycle, besides the newest pages of
+ * every run, in the time the runs fetch. The fetcher adds up to 20 % random extra to each pause
+ * (10 % on average) and each answer takes its time, so both come off. Rounded to 100 ms.
+ */
+export function paceDelayMs(pages: number, newestPerRun: number, pace: Pace, responseMs: number): number {
+  const runs = (pace.cycleHours * 60) / pace.intervalMinutes;
+  const requests = pages * REREAD_MARGIN + newestPerRun * runs;
+  const perRequestMs = (runs * pace.runMinutes * 60_000) / Math.max(1, requests);
+  const delay = Math.round((perRequestMs - responseMs) / 1.1 / 100) * 100;
+  return Math.min(pace.maxDelayMs, Math.max(pace.minDelayMs, delay));
+}
+
 export interface AutoScout24Options {
   fetcher: PoliteFetcher;
   /** Our make slugs to read. Defaults to every make of the taxonomy. */
@@ -68,6 +108,8 @@ export interface AutoScout24Options {
   /** Most result pages we read per segment; AutoScout24 itself stops somewhere around 20. */
   maxPagesPerSegment?: number;
   staleAfterDays?: number;
+  /** Without a pace, the fetcher keeps the pause it was made with. */
+  pace?: Pace;
   log?: (message: string) => void;
 }
 
@@ -279,6 +321,7 @@ export function createAutoScout24Adapter(options: AutoScout24Options): SourceAda
   const newestPages = options.newestPages ?? 1;
   const maxPagesPerSegment = options.maxPagesPerSegment ?? 20;
   const log = options.log ?? (() => undefined);
+  const pace = options.pace;
   let store!: SegmentStore<SweepParams>;
   let completed: string[] = [];
   let failuresInARow = 0;
@@ -379,7 +422,9 @@ export function createAutoScout24Adapter(options: AutoScout24Options): SourceAda
   return {
     source: AUTOSCOUT24,
     fullSnapshot: false,
-    staleAfterDays: options.staleAfterDays ?? 30,
+    // Read once a day, a listing missing for three days is gone even where its segment never
+    // counted as read completely (it changed while read) or it was seen outside any segment.
+    staleAfterDays: options.staleAfterDays ?? 3,
     normalize: normalizeAutoScout24,
     completedSegments: () => completed,
     async *fetch(context?: FetchContext) {
@@ -387,16 +432,30 @@ export function createAutoScout24Adapter(options: AutoScout24Options): SourceAda
       store = new SegmentStore<SweepParams>(context.db, AUTOSCOUT24.id);
       completed = [];
       failuresInARow = 0;
+      const wanted = new Set(makes);
+      /** Sets the pause for the plan as it is now; logs it the first time. */
+      const keepPace = (segments: Segment<SweepParams>[], first = false) => {
+        if (!pace) return;
+        const pages = planPages(
+          segments.filter((s) => wanted.has(s.params.make)),
+          maxPagesPerSegment,
+        );
+        const delay = paceDelayMs(pages, makes.length * newestPages, pace, fetcher.averageResponseMs ?? 500);
+        fetcher.setDelay(delay);
+        if (first) log(`pace: ${(delay / 1000).toFixed(1)} s between requests for about ${pages} pages per ${pace.cycleHours} h`);
+      };
       try {
-        yield* newest();
         await store.ensure(makes.map((make) => root(make)));
-        const wanted = new Set(makes);
+        keepPace(await store.active(), true);
+        yield* newest();
         const done = new Set<string>();
         // Read the plan again after every segment: a split adds smaller segments to read next.
         for (;;) {
           // Page 1 alone may split the segment; keep one request for it and one more for page 2.
           if (fetcher.requestsLeft < 2) break;
-          const next = (await store.active()).find((s) => wanted.has(s.params.make) && !done.has(s.key));
+          const segments = await store.active();
+          keepPace(segments);
+          const next = segments.find((s) => wanted.has(s.params.make) && !done.has(s.key));
           if (!next) break;
           done.add(next.key);
           yield* sweep(next);

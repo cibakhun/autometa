@@ -36,13 +36,17 @@ export class SegmentStore<P> {
     );
   }
 
-  /** Segments to read, the longest unread first; never-read segments come first of all. */
+  /**
+   * Segments to read, the one whose last read began longest ago first; never-read segments come
+   * first of all. Ordered by the last attempt, not the last complete read, so a segment that
+   * changes while it is read waits its turn like the others instead of leading every run.
+   */
   async active(): Promise<Segment<P>[]> {
     const { rows } = await this.db.query(
       `select key, params, last_total, last_started_at, last_completed_at
          from crawl_segments
         where source_id = $1 and not retired
-        order by coalesce(last_completed_at, last_started_at) asc nulls first, key`,
+        order by last_started_at asc nulls first, key`,
       [this.sourceId],
     );
     return rows.map((row) => ({

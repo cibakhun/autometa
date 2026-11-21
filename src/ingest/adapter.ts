@@ -54,6 +54,14 @@ export interface SourceAdapter {
   /** Returns null when the listing cannot be used (e.g. no price). */
   normalize(raw: RawListing): NormalizedListing | null;
   /**
+   * For sources whose lists cannot show every stored listing again (for example only their newest
+   * pages may be read) but whose robots.txt allows a listing's own page: checks the given listings
+   * there, in the given order, and yields what each page says. Stops quietly when the run's request
+   * budget or time is used up, and early when the answers look implausible. Called after fetch()
+   * finished without an error. Only the outcome is kept, never the page.
+   */
+  checkListings?(due: ListingRef[], context: FetchContext): AsyncIterable<CheckResult>;
+  /**
    * Segments the last fetch() read completely. Active listings of these segments that the run did
    * not see count as missed, like listings missing from a full snapshot. Called after fetch()
    * finished without an error.
@@ -68,6 +76,23 @@ export interface FetchContext {
    * pool, so an import never waits for a second connection.
    */
   db: PoolClient;
+}
+
+/** A stored listing that is due for a check on its own page. */
+export interface ListingRef {
+  externalId: string;
+  url: string;
+}
+
+/**
+ * What a listing's own page says: still offered, taken down, or nothing clear (the listing stays
+ * as it is and is checked again later).
+ */
+export type CheckOutcome = "active" | "gone" | "unclear";
+
+export interface CheckResult {
+  externalId: string;
+  outcome: CheckOutcome;
 }
 
 export type AdapterFactory = (context: AdapterContext) => SourceAdapter;

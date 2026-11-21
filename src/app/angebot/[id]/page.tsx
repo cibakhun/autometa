@@ -14,6 +14,7 @@ import { MARKET_RULES } from "@/ingest/market";
 import { getPool } from "@/lib/db";
 import { getFlipSettings } from "@/lib/flip-settings";
 import {
+  formatDayTime,
   formatEuro,
   formatInspection,
   formatKm,
@@ -57,7 +58,7 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
     ["Standort", [listing.zip, listing.city].filter(Boolean).join(" ") || null],
     ["Anbieter", listing.sellerName ?? (listing.sellerType ? SELLER_TYPE_LABELS[listing.sellerType] : null)],
     ["Quelle", listing.sourceName],
-    ["Zuletzt gesehen", new Date(listing.lastSeenAt).toLocaleDateString("de-DE")],
+    ["Zuletzt geprüft", formatDayTime(listing.checkedAt)],
   ];
 
   return (
@@ -68,7 +69,7 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
       <article className="mt-3 rounded-xl border border-line bg-surface p-6">
         {listing.status === "gone" && (
           <p className="mb-4 rounded-md border border-warn-line bg-warn-bg px-3 py-2 text-sm text-warn-text">
-            Dieses Angebot ist bei {listing.sourceName} nicht mehr zu finden und wahrscheinlich verkauft.
+            {goneNotice(listing)}
           </p>
         )}
         <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
@@ -317,4 +318,16 @@ function PriceHistory({ listing }: { listing: ListingDetail }) {
       </ul>
     </section>
   );
+}
+
+/** Why a listing is no longer in the search, as far as we know. */
+function goneNotice(listing: ListingDetail): string {
+  switch (listing.goneReason) {
+    case "checked":
+      return `Dieses Angebot ist bei ${listing.sourceName} nicht mehr online.`;
+    case "stale":
+      return `Dieses Angebot konnten wir seit ${formatDayTime(listing.checkedAt)} nicht mehr bei ${listing.sourceName} bestätigen, deshalb steht es nicht mehr in der Suche. Ob es noch online ist, zeigt der Link zum Angebot.`;
+    default:
+      return `Dieses Angebot ist bei ${listing.sourceName} nicht mehr zu finden und wahrscheinlich verkauft.`;
+  }
 }

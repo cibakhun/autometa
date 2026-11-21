@@ -3,6 +3,7 @@ import { DAMAGE_LABELS } from "@/core/damage";
 import { FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
 import type { FlipResult } from "@/core/flip";
 import {
+  formatDayTime,
   formatDistance,
   formatEuro,
   formatInspectionShort,
@@ -80,12 +81,17 @@ export function ResultCard({ listing, minMarginEur }: { listing: ListingSummary;
           </p>
         )}
         <div className="mt-auto flex items-center justify-between gap-2 pt-4">
-          <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong">{listing.sourceName}</span>
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong">{listing.sourceName}</span>
+            <span className="text-xs text-muted" title="Zuletzt in der Liste der Börse gesehen oder auf der Anzeige selbst bestätigt">
+              geprüft {formatDayTime(listing.checkedAt)}
+            </span>
+          </span>
           <a
             href={`/go/${listing.id}`}
             target="_blank"
             rel="noopener nofollow"
-            className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-on-accent hover:bg-accent-strong"
+            className="shrink-0 whitespace-nowrap rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-on-accent hover:bg-accent-strong"
           >
             Zum Angebot
           </a>

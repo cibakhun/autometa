@@ -6,7 +6,8 @@ import { detectDamage } from "@/core/damage";
  * same make and model, first registered at most a year apart, similar mileage, same fuel and
  * gearbox, similar power. Listings whose title mentions damage or whose HU had expired are not
  * comparable, nor are prices below MIN_COMP_PRICE_EUR (giveaways, placeholders, parts).
- * Listings that disappeared in the last GONE_WINDOW_DAYS count with their last price.
+ * Listings that disappeared in the last GONE_WINDOW_DAYS count with their last price; how long
+ * they stayed online counts only for those known to be sold or taken down.
  */
 export const MARKET_RULES = {
   minComps: 5,
@@ -52,7 +53,10 @@ export async function updateMarketValues(pool: Pool): Promise<MarketResult> {
               coalesce(l.cluster_id, l.id) as vehicle, l.make_slug, l.model_slug,
               extract(year from l.first_registration)::int as year,
               l.mileage_km, l.fuel, l.transmission, l.power_kw, l.price_eur,
-              case when l.status = 'gone' and l.first_seen_at > st.since
+              -- Only listings known to be sold or taken down: one we merely could not confirm for a
+              -- few days ('stale') may well still be online, and one gone before reasons were
+              -- recorded may be such a case.
+              case when l.status = 'gone' and l.first_seen_at > st.since and l.gone_reason in ('missed', 'checked')
                    then extract(epoch from l.last_seen_at - l.first_seen_at) / 86400 end as days_listed
          from listings l
          join sources s on s.id = l.source_id and s.active
