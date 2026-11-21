@@ -2,11 +2,14 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { DAMAGE_LABELS } from "@/core/damage";
+import { coveredComponents, hiddenDefectRisk, type DefectProfile } from "@/core/defects";
 import type { FlipSettings } from "@/core/flip";
-import { CONFIDENCE_LABELS, DIFFICULTY_LABELS, VEHICLE_CLASS_LABELS } from "@/core/repairs";
+import { CONFIDENCE_LABELS, DIFFICULTY_LABELS, estimateRepairs, VEHICLE_CLASS_LABELS } from "@/core/repairs";
+import { findMake, findModel } from "@/core/taxonomy";
 import { BODY_TYPE_LABELS, FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
 import { FlipCalculator } from "@/components/flip-calculator";
 import { ListingPhoto } from "@/components/listing-photo";
+import { ModelFileSection } from "@/components/model-file";
 import { MARKET_RULES } from "@/ingest/market";
 import { getPool } from "@/lib/db";
 import { getFlipSettings } from "@/lib/flip-settings";
@@ -21,7 +24,8 @@ import {
   formatRegistration,
   formatSignedPrice,
 } from "@/lib/format";
-import { getListing, type ListingDetail } from "@/search/query";
+import { getModelFile, type ModelFile } from "@/search/defects";
+import { getListing, riskTotal, type ListingDetail } from "@/search/query";
 
 export default function ListingPage({ params }: PageProps<"/angebot/[id]">) {
   return (
@@ -35,8 +39,10 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
   const { id } = await params;
   if (!/^\d{1,18}$/.test(id)) notFound();
   const settings = await getFlipSettings();
-  const listing = await getListing(getPool(), Number(id), settings);
+  const pool = getPool();
+  const listing = await getListing(pool, Number(id), settings);
   if (!listing) notFound();
+  const file = await getModelFile(pool, listing.makeSlug, listing.modelSlug, listing.firstRegistration);
 
   const rows: [string, string | null][] = [
     ["Preis", formatPrice(listing.priceEur)],
@@ -84,7 +90,8 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
             ))}
         </dl>
         <ConditionAndMarket listing={listing} />
-        <Flip listing={listing} settings={settings} />
+        <Flip listing={listing} settings={settings} file={file} />
+        <ModelFileFor listing={listing} file={file} />
         <PriceHistory listing={listing} />
         <div className="mt-6 flex flex-wrap items-center gap-3">
           <a
@@ -197,22 +204,54 @@ function ConditionAndMarket({ listing }: { listing: ListingDetail }) {
   );
 }
 
+const repairFacts = (listing: ListingDetail) => ({
+  makeSlug: listing.makeSlug,
+  powerKw: listing.powerKw,
+  bodyType: listing.bodyType,
+  fuel: listing.fuel,
+  huBasis: listing.huBasis,
+  huUntil: listing.huUntil,
+});
+
+/** The profile the risk buffer uses: the model's own, else the average car of its age. */
+function riskProfile(file: ModelFile | null): { profile: DefectProfile | null; basis: "model" | "average" | null } {
+  if (file?.profile) return { profile: file.profile, basis: "model" };
+  if (file?.average) return { profile: file.average, basis: "average" };
+  return { profile: null, basis: null };
+}
+
+/** The Modell-Akte for a car whose model and age group are known. */
+function ModelFileFor({ listing, file }: { listing: ListingDetail; file: ModelFile | null }) {
+  if (!file || !listing.makeSlug || !listing.modelSlug) return null;
+  const make = findMake(listing.makeSlug);
+  const model = findModel(listing.makeSlug, listing.modelSlug);
+  if (!make || !model) return null;
+  const estimate = estimateRepairs(listing.damage, repairFacts(listing));
+  const { profile } = riskProfile(file);
+  const risk = hiddenDefectRisk(profile, estimate.vehicleClass, coveredComponents(estimate.jobs.map((j) => j.job.id)));
+  return <ModelFileSection makeName={make.name} modelName={model.name} file={file} jobs={estimate.jobs.map((j) => j.job)} risk={risk} />;
+}
+
 /** The flip estimate from the catalog and the calculator to adjust it; folded away for intact cars. */
-function Flip({ listing, settings }: { listing: ListingDetail; settings: FlipSettings }) {
+function Flip({ listing, settings, file }: { listing: ListingDetail; settings: FlipSettings; file: ModelFile | null }) {
   const damaged = listing.damage.length > 0;
+  const { profile, basis } = riskProfile(file);
   const calculator = (
     <FlipCalculator
       priceEur={listing.priceEur}
       marketEur={listing.marketPriceEur}
       damage={listing.damage}
-      facts={{ makeSlug: listing.makeSlug, powerKw: listing.powerKw, bodyType: listing.bodyType, fuel: listing.fuel, huBasis: listing.huBasis, huUntil: listing.huUntil }}
+      facts={repairFacts(listing)}
       settings={settings}
+      profile={profile}
+      profileBasis={basis}
     />
   );
   const note = (
     <p className="mt-3 text-xs text-muted">
       Teile und Stunden sind Schätzungen aus dem <Link href="/reparaturen" className="text-accent hover:underline">Reparaturkatalog</Link>{" "}
-      für einen Hobbyschrauber; versteckte Mängel sind nicht eingerechnet. Abschlag und Nebenkosten kommen aus deinen{" "}
+      für einen Hobbyschrauber. Der Risikopuffer rechnet mit Mängeln, die die HU bei solchen Autos oft findet, und mit einem schlimmeren
+      Schaden, wenn der Preis weit unter dem Marktwert liegt. Abschlag und Nebenkosten kommen aus deinen{" "}
       <Link href="/einstellungen" className="text-accent hover:underline">Einstellungen</Link>.
     </p>
   );
@@ -237,7 +276,8 @@ function Flip({ listing, settings }: { listing: ListingDetail; settings: FlipSet
           <span className={`font-semibold ${flip.marginEur >= settings.minMarginEur ? "text-good-text" : flip.marginEur < 0 ? "text-warn-text" : ""}`}>
             {formatSignedPrice(flip.marginEur)}
           </span>{" "}
-          Marge (je nach Teilen {formatSignedPrice(flip.marginRangeEur[0])} bis {formatSignedPrice(flip.marginRangeEur[1])}), rund{" "}
+          Marge (je nach Teilen {formatSignedPrice(flip.marginRangeEur[0])} bis {formatSignedPrice(flip.marginRangeEur[1])}
+          {riskTotal(repair) > 0 && <>, nach {formatEuro(riskTotal(repair))} Risikopuffer</>}), rund{" "}
           {formatNumber(flip.hours)} Stunden
           {flip.perHourEur !== null && flip.marginEur > 0 && <>, also ca. {formatEuro(flip.perHourEur)} pro Stunde</>}. Schwierigkeit{" "}
           {repair.difficulty} von 5 ({DIFFICULTY_LABELS[repair.difficulty]}), Sicherheit {CONFIDENCE_LABELS[repair.confidence]},{" "}

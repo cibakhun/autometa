@@ -33,6 +33,8 @@ export class HttpStatusError extends Error {
   constructor(
     readonly url: string,
     readonly status: number,
+    /** The start of the error page, for APIs that explain what was wrong. */
+    readonly body = "",
   ) {
     super(`HTTP ${status} for ${url}`);
     this.name = "HttpStatusError";
@@ -169,7 +171,7 @@ export class PoliteFetcher {
         await this.sleep(this.minDelayMs * 2 ** attempt);
         continue;
       }
-      if (page.status >= 400) throw new HttpStatusError(page.url, page.status);
+      if (page.status >= 400) throw new HttpStatusError(page.url, page.status, page.text.slice(0, 500));
       return page;
     }
   }

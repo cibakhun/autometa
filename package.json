@@ -14,7 +14,8 @@
     "db:prepare": "tsx scripts/prepare.ts",
     "ingest": "tsx scripts/ingest.ts",
     "db:setup": "npm run db:migrate && npm run db:prepare",
-    "worker": "tsx scripts/worker.ts"
+    "worker": "tsx scripts/worker.ts",
+    "defects": "tsx scripts/defects.ts"
   },
   "dependencies": {
     "domhandler": "^6.0.1",
