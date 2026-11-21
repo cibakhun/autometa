@@ -222,6 +222,14 @@ export interface RepairEstimate {
   needsTow: boolean;
 }
 
+/** The HU has run out: the listing says so, or its last valid month lies before this month. */
+export function huExpired(basis: InspectionBasis | null | undefined, until: string | null | undefined, now = new Date()): boolean {
+  if (basis === "expired") return true;
+  if (!until) return false;
+  const thisMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-01`;
+  return until < thisMonth;
+}
+
 const round10 = (value: number) => Math.round(value / 10) * 10;
 const roundHalf = (value: number) => Math.round(value * 2) / 2;
 
@@ -238,7 +246,8 @@ export function scaledParts(job: RepairJob, cls: VehicleClass): [number, number]
  */
 export function estimateRepairs(
   damage: readonly DamageKind[],
-  facts: VehicleFacts & { huBasis?: InspectionBasis | null },
+  facts: VehicleFacts & { huBasis?: InspectionBasis | null; huUntil?: string | null },
+  now = new Date(),
 ): RepairEstimate {
   const cls = vehicleClass(facts);
   const picked = new Map<string, DamageKind | null>();
@@ -251,7 +260,7 @@ export function estimateRepairs(
     if (CONFIDENCES.indexOf(rule.confidence) > CONFIDENCES.indexOf(confidence)) confidence = rule.confidence;
     if (!rule.drivable) needsTow = true;
   }
-  if (facts.huBasis === "expired") picked.set("hu_prep", null);
+  if (huExpired(facts.huBasis, facts.huUntil, now)) picked.set("hu_prep", null);
   picked.set("prep", null);
 
   const replaced = new Set([...picked.keys()].flatMap((id) => findJob(id)?.replaces ?? []));

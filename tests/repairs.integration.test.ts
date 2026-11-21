@@ -82,6 +82,11 @@ describe.skipIf(!url)("repair estimates and flip list against Postgres", () => {
     expect((await estimate(intact)).repair_difficulty).toBeNull();
     expect(await updateRepairEstimates(pool)).toBe(0);
 
+    // An HU whose stated month has passed adds the HU preparation (1–3 h, 30–150 €).
+    await pool.query("update listings set hu_basis = 'stated', hu_until = '2020-05-01' where id = $1", [clutch]);
+    expect(await updateRepairEstimates(pool)).toBe(1);
+    expect(await estimate(clutch)).toMatchObject({ repair_parts_min_eur: 260, repair_parts_max_eur: 680, repair_hours_min: 9, repair_hours_max: 18 });
+
     await pool.query("update listings set damage = '{}' where id = $1", [clutch]);
     expect(await updateRepairEstimates(pool)).toBe(1);
     expect((await estimate(clutch)).repair_difficulty).toBeNull();
@@ -108,6 +113,8 @@ describe.skipIf(!url)("repair estimates and flip list against Postgres", () => {
     const minimum = await search("sort=flip&margeMin=1860");
     expect(minimum.items.map((item) => item.id)).toEqual([turbo, engine]);
     expect(minimum.total).toBe(2);
+    // The turbo margin of 1875 shows as 1.880 €, so it passes a minimum of exactly that.
+    expect((await search("sort=flip&margeMin=1880")).items.map((item) => item.id)).toEqual([turbo, engine]);
 
     // The visitor's settings change the margin: a 20 % discount sells for 4800, so the clutch job
     // (4800 − 3000 − 350 − 380 = 1070) drops below 1080 while turbo (1095) and engine (2045) stay.

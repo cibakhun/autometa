@@ -74,7 +74,12 @@ describe("estimateRepairs", () => {
     expect(ids(["clutch"], tesla)).toEqual(["prep"]);
   });
 
-  it("prepares the HU when it has run out", () => {
-    expect(ids(["rust"], { ...golf, huBasis: "expired" })).toEqual(["rust_welding", "hu_prep", "prep"]);
+  it("prepares the HU when it has run out, also when its stated month has passed", () => {
+    const now = new Date("2026-11-21T12:00:00Z");
+    const jobs = (facts: Parameters<typeof estimateRepairs>[1]) => estimateRepairs(["rust"], facts, now).jobs.map((j) => j.job.id);
+    expect(jobs({ ...golf, huBasis: "expired" })).toEqual(["rust_welding", "hu_prep", "prep"]);
+    expect(jobs({ ...golf, huBasis: "stated", huUntil: "2026-10-01" })).toEqual(["rust_welding", "hu_prep", "prep"]);
+    expect(jobs({ ...golf, huBasis: "stated", huUntil: "2026-11-01" })).toEqual(["rust_welding", "prep"]);
+    expect(jobs({ ...golf, huBasis: null, huUntil: null })).toEqual(["rust_welding", "prep"]);
   });
 });

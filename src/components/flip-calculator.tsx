@@ -22,7 +22,7 @@ export interface FlipCalculatorProps {
   priceEur: number;
   marketEur: number | null;
   damage: DamageKind[];
-  facts: VehicleFacts & { huBasis: InspectionBasis | null };
+  facts: VehicleFacts & { huBasis: InspectionBasis | null; huUntil: string | null };
   settings: FlipSettings;
 }
 
@@ -76,12 +76,14 @@ export function FlipCalculator({ priceEur, marketEur, damage, facts, settings }:
 
   const updateJob = (key: number, patch: Partial<JobRow>) =>
     setJobs((rows) => rows.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+  /** A job that a bigger one replaces (a replacement engine includes the timing chain) is dropped. */
   const addJob = (id: string) => {
     const job = findJob(id);
     if (!job) return;
     const parts = scaledParts(job, estimate.vehicleClass);
+    const replaced = new Set(job.replaces ?? []);
     setJobs((rows) => [
-      ...rows,
+      ...rows.filter((row) => !replaced.has(row.id)),
       { key: nextKey, id, label: job.label, difficulty: job.difficulty, parts: String(round10(mid(parts))), hours: String(mid(job.hours)) },
     ]);
     setNextKey((key) => key + 1);
@@ -114,7 +116,9 @@ export function FlipCalculator({ priceEur, marketEur, damage, facts, settings }:
             towEur: pickupEur,
           },
         );
-  const available = REPAIR_JOBS.filter((job) => !jobs.some((row) => row.id === job.id));
+  // Not offered: jobs already listed, and jobs a listed one includes.
+  const included = new Set(jobs.flatMap((row) => [row.id, ...(findJob(row.id)?.replaces ?? [])]));
+  const available = REPAIR_JOBS.filter((job) => !included.has(job.id));
 
   const field = (id: string, label: string, value: string, set: (value: string) => void, hint?: string) => (
     <div>
