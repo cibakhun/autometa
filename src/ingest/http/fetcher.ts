@@ -22,8 +22,11 @@ export class BlockedError extends Error {
 
 /** robots.txt does not allow this URL for our user agent. */
 export class DisallowedError extends Error {
-  constructor(readonly url: string) {
-    super(`robots.txt disallows ${url}`);
+  constructor(
+    readonly url: string,
+    readonly reason?: string,
+  ) {
+    super(`robots.txt disallows ${url}${reason ? ` (${reason})` : ""}`);
     this.name = "DisallowedError";
   }
 }
@@ -190,7 +193,8 @@ export class PoliteFetcher {
   private async assertAllowed(target: URL): Promise<void> {
     if (!this.respectRobots) return;
     const policy = await this.policyFor(target);
-    if (!policy.isAllowed(target.pathname + target.search)) throw new DisallowedError(target.href);
+    const path = target.pathname + target.search;
+    if (!policy.isAllowed(path)) throw new DisallowedError(target.href, policy.why?.(path));
   }
 
   private async loadPolicy(origin: string, host: string): Promise<RobotsPolicy> {
@@ -199,12 +203,14 @@ export class PoliteFetcher {
       page = await this.follow(new URL(`${origin}/robots.txt`), false);
     } catch (error) {
       if (!isNetworkError(error)) throw error;
-      return DISALLOW_ALL; // unreachable: assume nothing is allowed
+      // Unreachable: assume nothing is allowed.
+      const message = error instanceof Error ? error.message : String(error);
+      return { ...DISALLOW_ALL, why: () => `robots.txt unreachable: ${message}` };
     }
     // A site that answers robots.txt with 401, 403, 429, a captcha or a login page does not
     // want bots. RFC 9309 would read 401/403 as "no robots.txt"; our rule is to stop instead.
     this.assertNotBlocked(page);
-    if (page.status >= 500) return DISALLOW_ALL;
+    if (page.status >= 500) return { ...DISALLOW_ALL, why: () => `robots.txt answered ${page.status}` };
     if (page.status >= 400) return ALLOW_ALL; // no robots.txt: everything is allowed
     const policy = policyFor(parseRobotsTxt(page.text), this.userAgent);
     if (policy.crawlDelaySeconds !== null) {
