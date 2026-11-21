@@ -184,6 +184,16 @@ export class PoliteFetcher {
     return this.deadline !== undefined && this.now() >= this.deadline;
   }
 
+  /**
+   * Waits, but never past the run's deadline: a run whose time ends during a pause or a retry
+   * backoff stops then (BudgetExceededError), not only after the full wait.
+   */
+  private async sleepWithinRun(ms: number): Promise<void> {
+    if (this.timeIsUp()) throw new BudgetExceededError(this.maxRequests, "time");
+    await this.sleep(this.deadline === undefined ? ms : Math.min(ms, this.deadline - this.now()));
+    if (this.timeIsUp()) throw new BudgetExceededError(this.maxRequests, "time");
+  }
+
   /** Fetches a page as text, or throws BlockedError / DisallowedError / BudgetExceededError. */
   async getText(url: string): Promise<FetchedPage> {
     const target = new URL(url);
@@ -197,13 +207,13 @@ export class PoliteFetcher {
       } catch (error) {
         if (!isNetworkError(error) || attempt >= this.maxRetries) throw error;
         attempt += 1;
-        await this.sleep(this.minDelayMs * 2 ** attempt);
+        await this.sleepWithinRun(this.minDelayMs * 2 ** attempt);
         continue;
       }
       this.assertNotBlocked(page);
       if (page.status >= 500 && attempt < this.maxRetries) {
         attempt += 1;
-        await this.sleep(this.minDelayMs * 2 ** attempt);
+        await this.sleepWithinRun(this.minDelayMs * 2 ** attempt);
         continue;
       }
       if (page.status >= 400) throw new HttpStatusError(page.url, page.status, page.text.slice(0, 500));
@@ -293,12 +303,8 @@ export class PoliteFetcher {
     this.hostQueues.set(host, previous.then(() => turn));
     await previous;
     try {
-      // Re-read the slot after each wake: a Crawl-delay found meanwhile may have moved it. A run
-      // whose time ends during the wait stops then, not only after the full pause.
-      for (let wait = this.waitFor(host); wait > 0; wait = this.waitFor(host)) {
-        if (this.timeIsUp()) throw new BudgetExceededError(this.maxRequests, "time");
-        await this.sleep(this.deadline === undefined ? wait : Math.min(wait, this.deadline - this.now()));
-      }
+      // Re-read the slot after each wake: a Crawl-delay found meanwhile may have moved it.
+      for (let wait = this.waitFor(host); wait > 0; wait = this.waitFor(host)) await this.sleepWithinRun(wait);
       if (this.requestCount >= this.maxRequests) throw new BudgetExceededError(this.maxRequests);
       if (this.timeIsUp()) throw new BudgetExceededError(this.maxRequests, "time");
       this.requestCount += 1;

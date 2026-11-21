@@ -146,6 +146,17 @@ describe("PoliteFetcher", () => {
     expect(site.calls.map((c) => c.url)).toEqual(["https://a.example/robots.txt"]);
   });
 
+  it("does not wait out a retry backoff past its deadline", async () => {
+    const site = fakeSite({ "https://a.example/robots.txt": { status: 404 }, "https://a.example/1": { status: 503 } });
+    // The 503 comes at 1,000 ms; the retry would wait 2,000 ms more.
+    const fetcher = new PoliteFetcher({ ...site.options, deadline: 1500 });
+    const error = await fetcher.getText("https://a.example/1").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BudgetExceededError);
+    expect((error as BudgetExceededError).reason).toBe("time");
+    expect(site.now()).toBe(1500);
+    expect(site.calls).toHaveLength(2);
+  });
+
   it("changes its pause on request and measures how long answers take", async () => {
     const site = fakeSite({ "https://a.example/robots.txt": { status: 404 }, "https://a.example/1": { body: page(1) } });
     const fetcher = new PoliteFetcher(site.options);
