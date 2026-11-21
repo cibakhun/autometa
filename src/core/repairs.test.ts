@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DAMAGE_KINDS } from "./damage";
 import { COMPONENT_INFO, DEFECT_COMPONENTS } from "./defects";
 import {
+  countedJobs,
   DAMAGE_JOBS,
   estimateRepairs,
   findJob,
@@ -99,7 +100,7 @@ describe("unclearDamageRisk", () => {
   const compact = { fuel: "petrol" as const, vehicleClass: "compact" as const };
   /** The risk with the jobs of the full estimate for that damage, as the import computes it. */
   const risk = (damage: Parameters<typeof ids>[0], facts: { fuel: "petrol" | "electric"; vehicleClass: "compact" }, price: number, market: number | null) =>
-    unclearDamageRisk(damage, facts, price, market, ids(damage, { ...golf, fuel: facts.fuel }));
+    unclearDamageRisk(damage, facts, price, market, countedJobs(estimateRepairs(damage, { ...golf, fuel: facts.fuel })));
   const mid = (id: string) => {
     const [from, to] = scaledParts(findJob(id)!, "compact");
     return (from + to) / 2;
@@ -133,8 +134,19 @@ describe("unclearDamageRisk", () => {
   });
 
   it("counts nothing extra for a worse case picked by hand", () => {
-    expect(unclearDamageRisk(["accident"], compact, 1500, 6000, ["accident_heavy", "paint"])).toBeNull();
-    expect(unclearDamageRisk(["accident"], compact, 1500, 6000, ["body_panels", "accident_heavy", "paint"])).toBeNull();
+    const row = (id: string, partsEur = mid(id)) => ({ id, partsEur });
+    expect(unclearDamageRisk(["accident"], compact, 1500, 6000, [row("accident_heavy"), row("paint")])).toBeNull();
+    expect(unclearDamageRisk(["accident"], compact, 1500, 6000, [row("body_panels"), row("accident_heavy"), row("paint")])).toBeNull();
+  });
+
+  it("credits the replaced jobs at the cost typed for them", () => {
+    // The timing chain typed in at 100 € instead of its catalog price: the engine costs that much more.
+    const rows = [
+      { id: "no_start", partsEur: mid("no_start") },
+      { id: "timing_chain", partsEur: 100 },
+    ];
+    const found = unclearDamageRisk(["not_running"], compact, 600, 6000, rows)!;
+    expect(found.eur).toBe(Math.round((mid("engine_used") - mid("no_start") - 100) / 10) * 10);
   });
 
   it("takes the most expensive worse case of several hints", () => {

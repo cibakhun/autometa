@@ -113,10 +113,17 @@ export function FlipCalculator({ priceEur, marketEur, damage, facts, settings, p
   const pickupEur = num(pickup);
   // Jobs in the list cover their component groups and a worse case picked by hand; a market value
   // typed in changes how unclear damage looks.
-  const jobIds = jobs.map((row) => row.id);
-  const hidden = hiddenDefectRisk(profile, estimate.vehicleClass, coveredComponents(jobIds));
+  const hidden = hiddenDefectRisk(profile, estimate.vehicleClass, coveredComponents(jobs.map((row) => row.id)));
   const unclear =
-    market.trim() === "" ? null : unclearDamageRisk(damage, { fuel: facts.fuel, vehicleClass: estimate.vehicleClass }, num(purchase), num(market), jobIds);
+    market.trim() === ""
+      ? null
+      : unclearDamageRisk(
+          damage,
+          { fuel: facts.fuel, vehicleClass: estimate.vehicleClass },
+          num(purchase),
+          num(market),
+          jobs.map((row) => ({ id: row.id, partsEur: num(row.parts) })),
+        );
   const riskComputed = (hidden?.eur ?? 0) + (unclear?.eur ?? 0);
   const risk = riskTyped ?? String(riskComputed);
   const riskHint = [

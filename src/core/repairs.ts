@@ -324,6 +324,16 @@ export interface UnclearRisk {
   eur: number;
 }
 
+/** A job already in the estimate or calculator, with the parts cost counted for it. */
+export interface CountedJob {
+  id: string;
+  partsEur: number;
+}
+
+/** The jobs of an estimate with the middle of their parts range. */
+export const countedJobs = (estimate: RepairEstimate): CountedJob[] =>
+  estimate.jobs.map((j) => ({ id: j.job.id, partsEur: (j.partsEur[0] + j.partsEur[1]) / 2 }));
+
 /** Middle of a job's parts range for a vehicle class. */
 const partsMid = (id: string, cls: VehicleClass) => {
   const found = findJob(id);
@@ -335,37 +345,38 @@ const partsMid = (id: string, cls: VehicleClass) => {
 /**
  * The extra parts cost to expect because a damage's extent is unclear: for each damage kind with
  * a worse case, that case's cost beyond the jobs it replaces, times how likely the price makes it.
- * The biggest of these counts (one car has one worst case). jobIds are the jobs already counted:
- * the whole estimate, or what is picked in the calculator. A worse case among them, or replaced
- * by one of them, costs nothing extra. Null when nothing applies or there is no market value to
- * compare the price with.
+ * The biggest of these counts (one car has one worst case). counted are the jobs already counted
+ * with their parts cost: the whole estimate, or the rows in the calculator as typed. A worse case
+ * among them, or replaced by one of them, costs nothing extra; the jobs it replaces are credited
+ * at their counted cost. Null when nothing applies or there is no market value to compare the
+ * price with.
  */
 export function unclearDamageRisk(
   damage: readonly DamageKind[],
   facts: { fuel: Fuel | null; vehicleClass: VehicleClass },
   priceEur: number,
   marketEur: number | null,
-  jobIds: readonly string[],
+  counted: readonly CountedJob[],
 ): UnclearRisk | null {
   if (marketEur === null || marketEur <= 0) return null;
   const belowMarket = Math.max(0, Math.min(1, 1 - priceEur / marketEur));
   const probability = Math.max(0, Math.min(1, (belowMarket - SEVERE_FROM) / (SEVERE_CERTAIN - SEVERE_FROM)));
   if (probability === 0) return null;
-  const counted = new Set(jobIds.flatMap((id) => [id, ...(findJob(id)?.replaces ?? [])]));
+  const covered = new Set(counted.flatMap(({ id }) => [id, ...(findJob(id)?.replaces ?? [])]));
   let worst: UnclearRisk | null = null;
   for (const kind of damage) {
     const severe = SEVERE_CASES[kind];
     if (!severe) continue;
     const severeJobs = severe.jobs.map((id) => (facts.fuel === "electric" && id === "engine_used" ? "high_voltage" : id));
     // Another hint already brought the worse case into the estimate (engine and not running).
-    const missing = severeJobs.filter((id) => !counted.has(id));
+    const missing = severeJobs.filter((id) => !covered.has(id));
     if (missing.length === 0) continue;
     // An electric car's high-voltage fault stands in for the replacement engine, with what that replaces.
     const replaced = new Set([...severe.jobs, ...severeJobs].flatMap((id) => [id, ...(findJob(id)?.replaces ?? [])]));
     const extraEur = Math.max(
       0,
       missing.reduce((sum, id) => sum + partsMid(id, facts.vehicleClass), 0) -
-        [...new Set(jobIds)].filter((id) => replaced.has(id)).reduce((sum, id) => sum + partsMid(id, facts.vehicleClass), 0),
+        counted.filter(({ id }) => replaced.has(id)).reduce((sum, job) => sum + job.partsEur, 0),
     );
     const eur = round10(probability * extraEur);
     if (eur > 0 && (!worst || eur > worst.eur)) {

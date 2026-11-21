@@ -2,7 +2,7 @@ import type { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ageBucket, coveredComponents, hiddenDefectRisk } from "@/core/defects";
 import { DEFAULT_FLIP_SETTINGS } from "@/core/flip";
-import { estimateRepairs, unclearDamageRisk } from "@/core/repairs";
+import { countedJobs, estimateRepairs, unclearDamageRisk } from "@/core/repairs";
 import { refreshDefectProfiles } from "@/ingest/defects/refresh";
 import { RdwClient } from "@/ingest/defects/rdw";
 import { PoliteFetcher } from "@/ingest/http/fetcher";
@@ -161,7 +161,7 @@ describe.skipIf(!url)("defect profiles and risk buffer against Postgres", () => 
     const jobIds = estimate.jobs.map((j) => j.job.id);
     const profile = { sample: 300, anyDefect: 0, components: { brakes: count(4), rust: count(10) } };
     const hidden = hiddenDefectRisk(profile, estimate.vehicleClass, coveredComponents(jobIds))!.eur;
-    const unclear = unclearDamageRisk(["accident"], { fuel: "petrol", vehicleClass: estimate.vehicleClass }, 1500, 6000, jobIds)!.eur;
+    const unclear = unclearDamageRisk(["accident"], { fuel: "petrol", vehicleClass: estimate.vehicleClass }, 1500, 6000, countedJobs(estimate))!.eur;
     const stored = await pool.query("select repair_risk_hidden_eur, repair_risk_unclear_eur from listings where id = $1", [accident]);
     expect(stored.rows[0]).toEqual({ repair_risk_hidden_eur: hidden, repair_risk_unclear_eur: unclear });
     expect(hidden).toBeGreaterThan(0);
@@ -193,9 +193,44 @@ describe.skipIf(!url)("defect profiles and risk buffer against Postgres", () => 
       await other.query("select pg_advisory_unlock(hashtext('autometa-defect-profiles'))");
       other.release();
     }
-    // Two writers at once take turns; the second finds nothing left to change.
-    const counts = await Promise.all([updateRepairEstimates(pool, now), updateRepairEstimates(pool, now)]);
-    expect(counts.sort()).toEqual([0, 0]);
+  });
+
+  it("lets repair estimates wait for a running writer and then use the newest profiles", async () => {
+    const accident = await addCar("golf", 2014, 1500, ["accident"]);
+    const bucket = ageBucket("2014-06-01", now)!;
+    await pool.query(
+      `insert into model_defect_profiles (make_slug, model_slug, age_bucket, sample, any_defect, components, window_months, rdw_names, refreshed_at)
+       values ('volkswagen', 'golf', $1, 300, 60, '{"brakes": 30}', 24, '{GOLF}', $2)
+       on conflict (make_slug, model_slug, age_bucket) do update set components = excluded.components, refreshed_at = excluded.refreshed_at`,
+      [bucket, now],
+    );
+    const hiddenOf = async () =>
+      (await pool.query("select repair_risk_hidden_eur as eur from listings where id = $1", [accident])).rows[0].eur as number | null;
+
+    const other = await pool.connect();
+    let writer: Promise<number> | undefined;
+    try {
+      await other.query("select pg_advisory_lock(hashtext('autometa-repair-estimates'))");
+      let done = false;
+      writer = updateRepairEstimates(pool, now).finally(() => {
+        done = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(done).toBe(false);
+      expect(await hiddenOf()).toBeNull();
+      // Newer profiles arrive while the writer waits: it must load them after it got the lock.
+      await pool.query(`update model_defect_profiles set components = '{"brakes": 30, "rust": 90}' where model_slug = 'golf'`);
+    } finally {
+      await other.query("select pg_advisory_unlock(hashtext('autometa-repair-estimates'))");
+      other.release();
+    }
+    expect(await writer).toBeGreaterThan(0);
+    const estimate = estimateRepairs(["accident"], { makeSlug: "volkswagen", powerKw: 85, bodyType: null, fuel: "petrol" }, now);
+    const covered = coveredComponents(estimate.jobs.map((j) => j.job.id));
+    const newest = hiddenDefectRisk({ sample: 300, anyDefect: 60, components: { brakes: 30, rust: 90 } }, estimate.vehicleClass, covered)!.eur;
+    const older = hiddenDefectRisk({ sample: 300, anyDefect: 60, components: { brakes: 30 } }, estimate.vehicleClass, covered)!.eur;
+    expect(newest).not.toBe(older);
+    expect(await hiddenOf()).toBe(newest);
   });
 
   it("records a refused query as the run's error and keeps what it wrote before", async () => {

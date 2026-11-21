@@ -2,7 +2,7 @@ import type { Pool, PoolClient } from "pg";
 import type { DamageKind } from "@/core/damage";
 import { ageBucket, coveredComponents, hiddenDefectRisk } from "@/core/defects";
 import type { InspectionBasis } from "@/core/inspection";
-import { estimateRepairs, unclearDamageRisk, type RepairEstimate } from "@/core/repairs";
+import { countedJobs, estimateRepairs, unclearDamageRisk, type RepairEstimate } from "@/core/repairs";
 import type { BodyType, Fuel } from "@/core/types";
 import { loadProfileIndex, type ProfileIndex } from "@/search/defects";
 
@@ -28,9 +28,14 @@ export interface RiskInput {
 export function riskParts(input: RiskInput, estimate: RepairEstimate, profiles: ProfileIndex, now = new Date()) {
   const bucket = ageBucket(input.firstRegistration, now);
   const profile = bucket === null ? null : (profiles.model(input.makeSlug, input.modelSlug, bucket) ?? profiles.average(bucket));
-  const jobIds = estimate.jobs.map((j) => j.job.id);
-  const hidden = hiddenDefectRisk(profile, estimate.vehicleClass, coveredComponents(jobIds));
-  const unclear = unclearDamageRisk(input.damage, { fuel: input.fuel, vehicleClass: estimate.vehicleClass }, input.priceEur, input.marketEur, jobIds);
+  const hidden = hiddenDefectRisk(profile, estimate.vehicleClass, coveredComponents(estimate.jobs.map((j) => j.job.id)));
+  const unclear = unclearDamageRisk(
+    input.damage,
+    { fuel: input.fuel, vehicleClass: estimate.vehicleClass },
+    input.priceEur,
+    input.marketEur,
+    countedJobs(estimate),
+  );
   return {
     hiddenEur: hidden?.eur ?? null,
     unclearEur: input.marketEur === null ? null : (unclear?.eur ?? 0),
