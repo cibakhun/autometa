@@ -55,6 +55,8 @@ describe("PoliteFetcher", () => {
     const fetcher = new PoliteFetcher(site.options);
     await expect(fetcher.getText("https://a.example/privat/1")).rejects.toBeInstanceOf(DisallowedError);
     expect(site.calls.map((c) => c.url)).toEqual(["https://a.example/robots.txt"]);
+    // The message names the rule, so a refused run says why.
+    await expect(fetcher.getText("https://a.example/privat/2")).rejects.toThrow("(Disallow: /privat)");
   });
 
   it("skips robots.txt when switched off", async () => {
@@ -69,7 +71,7 @@ describe("PoliteFetcher", () => {
     await expect(new PoliteFetcher(missing.options).getText("https://a.example/x")).resolves.toMatchObject({ status: 200 });
 
     const down = fakeSite({ "https://a.example/robots.txt": { status: 503 } });
-    await expect(new PoliteFetcher(down.options).getText("https://a.example/x")).rejects.toBeInstanceOf(DisallowedError);
+    await expect(new PoliteFetcher(down.options).getText("https://a.example/x")).rejects.toThrow("(robots.txt answered 503)");
   });
 
   it("waits at least the Crawl-delay from robots.txt", async () => {
@@ -129,7 +131,9 @@ describe("PoliteFetcher", () => {
     expect(flaky.calls.filter((c) => c.url === "https://a.example/x")).toHaveLength(2);
 
     const down = fakeSite({ "https://a.example/robots.txt": new TypeError("fetch failed") });
-    await expect(new PoliteFetcher(down.options).getText("https://a.example/x")).rejects.toBeInstanceOf(DisallowedError);
+    const error = await new PoliteFetcher(down.options).getText("https://a.example/x").catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(DisallowedError);
+    expect((error as DisallowedError).reason).toMatch(/^robots.txt unreachable: /);
     expect(down.calls.map((c) => c.url)).toEqual(["https://a.example/robots.txt"]);
   });
 

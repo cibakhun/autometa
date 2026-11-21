@@ -23,6 +23,8 @@ export interface RobotsPolicy {
   isAllowed(pathWithQuery: string): boolean;
   /** Crawl-delay of the matching group, if the site sets one. */
   crawlDelaySeconds: number | null;
+  /** Why a path is not allowed, for the error message: the deciding rule or what went wrong. */
+  why?(pathWithQuery: string): string;
 }
 
 export function parseRobotsTxt(text: string): RobotsGroup[] {
@@ -121,24 +123,29 @@ export function policyFor(groups: RobotsGroup[], userAgent: string): RobotsPolic
     .flatMap((g) => g.rules)
     .map((rule) => {
       const pattern = normalizePath(rule.pattern);
-      return { allow: rule.allow, length: pattern.length, compiled: compile(pattern) };
+      return { allow: rule.allow, pattern: rule.pattern, length: pattern.length, compiled: compile(pattern) };
     });
   const delays = selected.map((g) => g.crawlDelaySeconds).filter((d): d is number => d !== null);
 
+  /** The rule that decides a path: the longest match, Allow on a tie; null when none matches. */
+  const deciding = (pathWithQuery: string) => {
+    // A literal "*" or "$" in the path is compared in encoded form, so that a rule can match
+    // it by writing %2A or %24 (RFC 9309, 2.2.3), while "*" and "$" in rules stay operators.
+    const path = normalizePath(pathWithQuery || "/").replace(/\*/g, "%2A").replace(/\$/g, "%24");
+    let best: (typeof rules)[number] | null = null;
+    for (const rule of rules) {
+      if (!matches(rule.compiled, path)) continue;
+      if (!best || rule.length > best.length || (rule.length === best.length && rule.allow && !best.allow)) best = rule;
+    }
+    return best;
+  };
+
   return {
     crawlDelaySeconds: delays.length > 0 ? Math.max(...delays) : null,
-    isAllowed(pathWithQuery: string) {
-      // A literal "*" or "$" in the path is compared in encoded form, so that a rule can match
-      // it by writing %2A or %24 (RFC 9309, 2.2.3), while "*" and "$" in rules stay operators.
-      const path = normalizePath(pathWithQuery || "/").replace(/\*/g, "%2A").replace(/\$/g, "%24");
-      let best: { allow: boolean; length: number } | null = null;
-      for (const rule of rules) {
-        if (!matches(rule.compiled, path)) continue;
-        if (!best || rule.length > best.length || (rule.length === best.length && rule.allow && !best.allow)) {
-          best = { allow: rule.allow, length: rule.length };
-        }
-      }
-      return best ? best.allow : true;
+    isAllowed: (pathWithQuery: string) => deciding(pathWithQuery)?.allow ?? true,
+    why(pathWithQuery: string) {
+      const rule = deciding(pathWithQuery);
+      return rule ? `${rule.allow ? "Allow" : "Disallow"}: ${rule.pattern}` : "no rule matches";
     },
   };
 }
