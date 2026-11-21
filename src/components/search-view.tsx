@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getPool } from "@/lib/db";
+import { getFlipSettings } from "@/lib/flip-settings";
 import { formatNumber } from "@/lib/format";
 import { filtersToQuery, parseFilters, SORT_LABELS, type SearchFilters } from "@/search/filters";
 import { getMakeFacets, getSourceFacets, resolveZip, searchListings, type Origin, type SearchResult } from "@/search/query";
@@ -7,13 +8,13 @@ import { FilterForm } from "./filter-form";
 import { ResultCard } from "./result-card";
 
 export async function SearchView({ searchParams }: { searchParams: PageProps<"/">["searchParams"] }) {
-  const filters = parseFilters(await searchParams);
+  const [filters, settings] = await Promise.all([searchParams.then(parseFilters), getFlipSettings()]);
   const pool = getPool();
   const origin = filters.zip ? await resolveZip(pool, filters.zip) : null;
   const [facets, sources, result] = await Promise.all([
     getMakeFacets(pool),
     getSourceFacets(pool),
-    searchListings(pool, filters, origin),
+    searchListings(pool, filters, origin, settings),
   ]);
 
   return (
@@ -32,7 +33,7 @@ export async function SearchView({ searchParams }: { searchParams: PageProps<"/"
           <ul className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
             {result.items.map((item) => (
               <li key={item.id}>
-                <ResultCard listing={item} />
+                <ResultCard listing={item} minMarginEur={settings.minMarginEur} />
               </li>
             ))}
           </ul>

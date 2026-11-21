@@ -1,11 +1,23 @@
 import Link from "next/link";
 import { DAMAGE_LABELS } from "@/core/damage";
 import { FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
-import { formatDistance, formatInspectionShort, formatKm, formatMarketGap, formatPower, formatPrice, formatRegistration } from "@/lib/format";
-import type { ListingSummary } from "@/search/query";
+import type { FlipResult } from "@/core/flip";
+import {
+  formatDistance,
+  formatEuro,
+  formatInspectionShort,
+  formatKm,
+  formatMarketGap,
+  formatNumber,
+  formatPower,
+  formatPrice,
+  formatRegistration,
+  formatSignedPrice,
+} from "@/lib/format";
+import type { ListingSummary, RepairSummary } from "@/search/query";
 import { ListingPhoto } from "./listing-photo";
 
-export function ResultCard({ listing }: { listing: ListingSummary }) {
+export function ResultCard({ listing, minMarginEur }: { listing: ListingSummary; minMarginEur?: number }) {
   const facts = [
     formatRegistration(listing.firstRegistration),
     formatKm(listing.mileageKm),
@@ -53,6 +65,7 @@ export function ResultCard({ listing }: { listing: ListingSummary }) {
             <span className={gap.below ? "font-medium text-good-text" : "text-muted"}>{gap.text}</span>
           </p>
         )}
+        {listing.flip && listing.repair && <FlipLine flip={listing.flip} repair={listing.repair} minMarginEur={minMarginEur} />}
         {listing.otherOffers.length > 0 && (
           <p className="mt-2 text-sm">
             <span className="text-muted">Auch bei </span>
@@ -79,5 +92,24 @@ export function ResultCard({ listing }: { listing: ListingSummary }) {
         </div>
       </div>
     </article>
+  );
+}
+
+/** "Flip ca. +1.310 € · 8 h · 164 €/h · Schwierigkeit 3/5" */
+function FlipLine({ flip, repair, minMarginEur }: { flip: FlipResult; repair: RepairSummary; minMarginEur?: number }) {
+  const good = flip.marginEur > 0 && (minMarginEur === undefined || flip.marginEur >= minMarginEur);
+  const parts = [
+    `${formatNumber(flip.hours)} h`,
+    flip.perHourEur !== null && flip.marginEur > 0 ? `${formatEuro(flip.perHourEur)}/h` : null,
+    `Schwierigkeit ${repair.difficulty}/5`,
+  ].filter(Boolean);
+  return (
+    <p className="mt-2 text-sm">
+      <span className="text-muted">Flip ca. </span>
+      <span className={good ? "font-medium text-good-text" : flip.marginEur < 0 ? "font-medium text-warn-text" : "font-medium"}>
+        {formatSignedPrice(flip.marginEur)}
+      </span>
+      <span className="text-muted"> · {parts.join(" · ")}</span>
+    </p>
   );
 }
