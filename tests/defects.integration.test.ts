@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ageBucket, coveredComponents, hiddenDefectRisk } from "@/core/defects";
 import { DEFAULT_FLIP_SETTINGS } from "@/core/flip";
@@ -231,6 +231,17 @@ describe.skipIf(!url)("defect profiles and risk buffer against Postgres", () => 
     const older = hiddenDefectRisk({ sample: 300, anyDefect: 60, components: { brakes: 30 } }, estimate.vehicleClass, covered)!.eur;
     expect(newest).not.toBe(older);
     expect(await hiddenOf()).toBe(newest);
+  });
+
+  it("needs only one database connection", async () => {
+    await pool.query("delete from model_defect_profiles");
+    const single = new Pool({ connectionString: url, max: 1 });
+    try {
+      const result = await refreshDefectProfiles(single, { client: fakeRdw().client, now, random: () => 0, log: () => undefined });
+      expect(result).toMatchObject({ profiles: 2, error: null });
+    } finally {
+      await single.end();
+    }
   });
 
   it("records a refused query as the run's error and keeps what it wrote before", async () => {
