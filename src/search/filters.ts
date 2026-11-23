@@ -52,6 +52,16 @@ const oneOf = <T extends readonly [string, ...string[]]>(values: T) =>
 
 const slug = z.preprocess(blankToUndefined, z.string().regex(/^[a-z0-9-]{1,40}$/).optional()).catch(undefined);
 
+/** A point in time from the URL ("2026-11-22T14:00:00.000Z"), normalized to ISO; anything else is dropped. */
+const instant = z
+  .preprocess(blankToUndefined, z.string().max(40).regex(/^\d{4}-\d{2}-\d{2}T[\d:.]+(Z|[+-]\d{2}:?\d{2})$/).optional())
+  .transform((value) => {
+    if (value === undefined) return undefined;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+  })
+  .catch(undefined);
+
 const schema = z.object({
   make: slug,
   model: slug,
@@ -71,6 +81,11 @@ const schema = z.object({
   zip: z.preprocess(blankToUndefined, z.string().regex(/^\d{5}$/).optional()).catch(undefined),
   radius: int(1, 1000),
   q: z.preprocess(blankToUndefined, z.string().trim().max(80).optional()).catch(undefined),
+  /**
+   * Only vehicles new to AutoMeta after this moment (on no portal before) or cheaper since then:
+   * what a saved search found since it was last opened.
+   */
+  seit: instant,
   sort: z.enum(SORTS).catch("newest"),
   page: z.coerce.number().int().min(1).max(MAX_PAGE).catch(1),
 });

@@ -7,6 +7,7 @@ import type { FlipSettings } from "@/core/flip";
 import { CONFIDENCE_LABELS, DIFFICULTY_LABELS, estimateRepairs, VEHICLE_CLASS_LABELS } from "@/core/repairs";
 import { findMake, findModel } from "@/core/taxonomy";
 import { BODY_TYPE_LABELS, FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
+import { FavoriteButton } from "@/components/favorite-button";
 import { FlipCalculator } from "@/components/flip-calculator";
 import { ListingPhoto } from "@/components/listing-photo";
 import { ModelFileSection } from "@/components/model-file";
@@ -25,6 +26,8 @@ import {
   formatRegistration,
   formatSignedPrice,
 } from "@/lib/format";
+import { currentDevice } from "@/lib/profile";
+import { favoriteIds } from "@/profiles/favorites";
 import { getModelFile, type ModelFile } from "@/search/defects";
 import { getListing, riskTotal, type ListingDetail } from "@/search/query";
 
@@ -39,11 +42,14 @@ export default function ListingPage({ params }: PageProps<"/angebot/[id]">) {
 async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["params"] }) {
   const { id } = await params;
   if (!/^\d{1,18}$/.test(id)) notFound();
-  const settings = await getFlipSettings();
+  const [settings, device] = await Promise.all([getFlipSettings(), currentDevice()]);
   const pool = getPool();
   const listing = await getListing(pool, Number(id), settings);
   if (!listing) notFound();
-  const file = await getModelFile(pool, listing.makeSlug, listing.modelSlug, listing.firstRegistration);
+  const [file, favorites] = await Promise.all([
+    getModelFile(pool, listing.makeSlug, listing.modelSlug, listing.firstRegistration),
+    favoriteIds(pool, device?.profileId ?? null, [listing.id]),
+  ]);
 
   const rows: [string, string | null][] = [
     ["Preis", formatPrice(listing.priceEur)],
@@ -77,7 +83,14 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
           <ListingPhoto src={listing.imageUrl} alt={listing.title} className="aspect-[4/3] w-full shrink-0 rounded-lg sm:w-72" />
           <div className="flex min-w-0 flex-1 flex-wrap items-start justify-between gap-4">
             <h1 className="min-w-0 text-2xl font-bold leading-tight [overflow-wrap:anywhere]">{listing.title}</h1>
-            <p className="text-2xl font-bold">{formatPrice(listing.priceEur)}</p>
+            <div className="text-right">
+              <p className="text-2xl font-bold">{formatPrice(listing.priceEur)}</p>
+              {listing.priceDroppedAt && listing.priceBeforeDropEur !== null && (
+                <p className="text-sm font-medium text-good-text">
+                  gesenkt am {formatDayTime(listing.priceDroppedAt)}, vorher <s>{formatPrice(listing.priceBeforeDropEur)}</s>
+                </p>
+              )}
+            </div>
           </div>
         </div>
         <dl className="mt-6 grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
@@ -103,6 +116,7 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
           >
             Zum Angebot bei {listing.sourceName}
           </a>
+          <FavoriteButton listingId={listing.id} initial={favorites.has(listing.id)} variant="inline" />
           <p className="text-xs text-muted">Weitere Fotos, Beschreibung und Kontakt findest du in der Originalanzeige.</p>
         </div>
         {listing.otherOffers.length > 0 && (

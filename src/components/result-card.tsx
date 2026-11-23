@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { DAMAGE_LABELS } from "@/core/damage";
 import { FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
 import type { FlipResult } from "@/core/flip";
@@ -16,9 +17,28 @@ import {
   formatSignedPrice,
 } from "@/lib/format";
 import type { ListingSummary, RepairSummary } from "@/search/query";
+import { FavoriteButton } from "./favorite-button";
 import { ListingPhoto } from "./listing-photo";
 
-export function ResultCard({ listing, minMarginEur }: { listing: ListingSummary; minMarginEur?: number }) {
+/** A price drop is worth a note on the card for this long (counted back from the last check). */
+const RECENT_DROP_MS = 14 * 24 * 3600_000;
+
+export function ResultCard({
+  listing,
+  minMarginEur,
+  favorite = false,
+  newSince,
+  note,
+}: {
+  listing: ListingSummary;
+  minMarginEur?: number;
+  /** Whether the listing is on the visitor's watch list (the heart). */
+  favorite?: boolean;
+  /** "Neu" badge for listings first seen after this moment (ISO), e.g. what a saved search found. */
+  newSince?: string;
+  /** Extra line at the top, e.g. on the watch list: "Nicht mehr online". */
+  note?: ReactNode;
+}) {
   const facts = [
     formatRegistration(listing.firstRegistration),
     formatKm(listing.mileageKm),
@@ -34,20 +54,41 @@ export function ResultCard({ listing, minMarginEur }: { listing: ListingSummary;
   ].filter(Boolean);
   const gap = formatMarketGap(listing.priceEur, listing.marketPriceEur);
   const damaged = listing.damage.length > 0;
+  const isNew = newSince !== undefined && listing.firstSeenAt > newSince;
+  const dropped =
+    listing.priceDroppedAt !== null &&
+    listing.priceBeforeDropEur !== null &&
+    (newSince !== undefined
+      ? listing.priceDroppedAt > newSince
+      : Date.parse(listing.priceDroppedAt) > Date.parse(listing.checkedAt) - RECENT_DROP_MS);
 
   return (
     <article className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-sm">
-      <Link href={`/angebot/${listing.id}`} tabIndex={-1} aria-hidden="true">
-        <ListingPhoto src={listing.imageUrl} alt="" className="aspect-[4/3] w-full" />
-      </Link>
+      <div className="relative">
+        <Link href={`/angebot/${listing.id}`} tabIndex={-1} aria-hidden="true">
+          <ListingPhoto src={listing.imageUrl} alt="" className="aspect-[4/3] w-full" />
+        </Link>
+        {isNew && (
+          <span className="absolute left-2 top-2 rounded-full bg-accent px-2.5 py-0.5 text-xs font-semibold text-on-accent shadow-sm">Neu</span>
+        )}
+        <FavoriteButton listingId={listing.id} initial={favorite} />
+      </div>
       <div className="flex flex-1 flex-col p-4">
+        {note}
         <div className="flex items-start justify-between gap-3">
           <h2 className="min-w-0 font-semibold leading-snug [overflow-wrap:anywhere]">
             <Link href={`/angebot/${listing.id}`} className="hover:text-accent">
               {listing.title}
             </Link>
           </h2>
-          <p className="shrink-0 text-lg font-bold">{formatPrice(listing.priceEur)}</p>
+          <div className="shrink-0 text-right">
+            <p className="text-lg font-bold">{formatPrice(listing.priceEur)}</p>
+            {dropped && (
+              <p className="text-xs font-medium text-good-text" title={`Preis gesenkt am ${formatDayTime(listing.priceDroppedAt!)}`}>
+                vorher <s>{formatPrice(listing.priceBeforeDropEur!)}</s>
+              </p>
+            )}
+          </div>
         </div>
         <p className="mt-2 text-sm text-muted">{facts.join(" · ")}</p>
         {place.length > 0 && <p className="mt-1 text-sm text-muted">{place.join(" · ")}</p>}
