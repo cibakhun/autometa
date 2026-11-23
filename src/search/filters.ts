@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { BODY_TYPES, FUELS, SELLER_TYPES, TRANSMISSIONS } from "@/core/types";
 
-export const SORTS = ["newest", "price_asc", "price_desc", "km_asc", "year_desc", "distance", "below_market", "flip", "margin"] as const;
+export const SORTS = ["newest", "empfehlung", "price_asc", "price_desc", "km_asc", "year_desc", "distance", "below_market", "flip", "margin"] as const;
 export type Sort = (typeof SORTS)[number];
 
 export const SORT_LABELS: Record<Sort, string> = {
   newest: "Neueste zuerst",
+  empfehlung: "Empfehlung: zuverlässig und günstig",
   price_asc: "Preis aufsteigend",
   price_desc: "Preis absteigend",
   km_asc: "Kilometer aufsteigend",
@@ -86,6 +87,8 @@ const schema = z.object({
    * what a saved search found since it was last opened.
    */
   seit: instant,
+  /** The sentence of a search in own words (src/search/natural.ts), shown above the results; no filter itself. */
+  ki: z.preprocess(blankToUndefined, z.string().trim().max(200).optional()).catch(undefined),
   sort: z.enum(SORTS).catch("newest"),
   page: z.coerce.number().int().min(1).max(MAX_PAGE).catch(1),
 });

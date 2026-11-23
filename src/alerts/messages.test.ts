@@ -37,6 +37,7 @@ const listing = (overrides: Partial<ListingSummary>): ListingSummary => ({
   firstSeenAt: "2026-11-23T09:00:00.000Z",
   priceDroppedAt: null,
   priceBeforeDropEur: null,
+  reliabilityRatio: null,
   ...overrides,
 });
 
