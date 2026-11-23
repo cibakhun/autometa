@@ -10,7 +10,7 @@ import { prepareData } from "@/ingest/prepare";
 import { runIngest } from "@/ingest/run";
 import { seedReferenceData } from "@/ingest/seed";
 import { parseFilters } from "@/search/filters";
-import { getMakeFacets, recordClick, resolveZip, searchListings } from "@/search/query";
+import { ageBucketSql, findTown, getMakeFacets, recommendationScore, recordClick, resolveZip, searchListings } from "@/search/query";
 import { emptyTestDatabase } from "./test-database";
 
 /**
@@ -104,6 +104,68 @@ describe.skipIf(!url)("search against Postgres", () => {
   it("escapes LIKE wildcards in the free-text search", async () => {
     const result = await searchListings(pool, parseFilters({ q: "%" }), null);
     expect(result.total).toBe(0);
+  });
+
+  it("finds every word of the search term in the title, in any order", async () => {
+    const { rows } = await pool.query<{ title: string }>("select title from listings where title ~ '^\\S+ \\S+ \\S+' limit 1");
+    const [first, second] = rows[0].title.split(" ");
+    const result = await searchListings(pool, parseFilters({ q: `${second} ${first}` }), null);
+    expect(result.total).toBeGreaterThan(0);
+    expect(result.items.every((item) => item.title.includes(first) && item.title.includes(second))).toBe(true);
+  });
+
+  it("finds towns by name for the search in own words", async () => {
+    const munich = await findTown(pool, "München");
+    expect(munich?.city).toBe("München");
+    expect(munich?.zip).toMatch(/^8/);
+    expect(await findTown(pool, "muenchen")).toEqual(munich);
+    expect((await findTown(pool, "frankfurt"))?.city).toBe("Frankfurt am Main");
+    expect(await findTown(pool, "Gibtsnichtstadt")).toBeNull();
+    expect(await findTown(pool, "%")).toBeNull();
+  });
+
+  it("sorts by recommendation: models with fewer HU defects than cars of their age first", async () => {
+    // Two models in the age group with the most listings: one gets 20 % defects, the other 60 % (average 40 %).
+    const { rows } = await pool.query<{ make_slug: string; model_slug: string; bucket: number }>(
+      `with cars as (
+         select make_slug, model_slug, ${ageBucketSql("first_registration")} as bucket
+           from listings where status = 'active' and model_slug is not null)
+       select make_slug, model_slug, bucket from cars
+        where bucket = (select bucket from cars where bucket is not null group by bucket order by count(*) desc, bucket limit 1)
+        group by 1, 2, 3 order by count(*) desc, 1, 2 limit 2`,
+    );
+    const [good, bad] = rows;
+    try {
+      await pool.query(
+        `insert into model_defect_profiles (make_slug, model_slug, age_bucket, sample, any_defect, window_months)
+         values ($1, $2, $3, 200, 40, 24), ($4, $5, $6, 200, 120, 24)`,
+        [good.make_slug, good.model_slug, good.bucket, bad.make_slug, bad.model_slug, bad.bucket],
+      );
+      const result = await searchListings(pool, parseFilters({ sort: "empfehlung" }), null);
+      const scores = result.items.map(recommendationScore);
+      expect(scores).toEqual([...scores].sort((a, b) => b - a));
+      expect(result.total).toBe(600);
+
+      // Without market values only the Modell-Akte counts: the better model first, the worse one last.
+      await pool.query("drop table if exists saved_market; create table saved_market as select id, market_price_eur from listings");
+      await pool.query("update listings set market_price_eur = null");
+      const reliable = await searchListings(pool, parseFilters({ sort: "empfehlung" }), null);
+      expect(reliable.items[0]).toMatchObject({ makeSlug: good.make_slug, modelSlug: good.model_slug });
+      expect(reliable.items[0].reliabilityRatio).toBeCloseTo(0.5);
+      const last = await searchListings(pool, parseFilters({ sort: "empfehlung", page: String(reliable.pageCount) }), null);
+      expect(last.items.at(-1)).toMatchObject({ makeSlug: bad.make_slug, modelSlug: bad.model_slug });
+      expect(last.items.at(-1)!.reliabilityRatio).toBeCloseTo(1.5);
+
+      const worse = await searchListings(pool, parseFilters({ sort: "empfehlung", make: bad.make_slug, model: bad.model_slug }), null);
+      expect(worse.items.some((item) => item.reliabilityRatio !== null && Math.abs(item.reliabilityRatio - 1.5) < 1e-9)).toBe(true);
+      // Other sorts leave the comparison out.
+      const newest = await searchListings(pool, parseFilters({}), null);
+      expect(newest.items.every((item) => item.reliabilityRatio === null)).toBe(true);
+    } finally {
+      await pool.query("delete from model_defect_profiles");
+      await pool.query(`update listings l set market_price_eur = s.market_price_eur from saved_market s where s.id = l.id;
+                        drop table if exists saved_market`).catch(() => undefined);
+    }
   });
 
   it("counts makes and models for the filter form", async () => {
