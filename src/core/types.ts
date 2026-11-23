@@ -69,6 +69,8 @@ export interface NormalizedListing {
   mileageKm: number | null;
   /** First day of the month of first registration, ISO date (YYYY-MM-DD). */
   firstRegistration: string | null;
+  /** True when the source gave only the year; firstRegistration is then January of that year. */
+  firstRegistrationYearOnly?: boolean;
   fuel: Fuel | null;
   transmission: Transmission | null;
   powerKw: number | null;

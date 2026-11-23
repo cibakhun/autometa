@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { groupCandidates, type CandidatePair } from "./duplicates";
 
-const pair = (a: number, aSource: string, b: number, bSource: string, score = 0.01): CandidatePair => ({ a, b, aSource, bSource, score });
+const pair = (a: number, aSource: string, b: number, bSource: string, score = 0.01, weak = false): CandidatePair => ({
+  a,
+  b,
+  aSource,
+  bSource,
+  score,
+  weak,
+});
 
 describe("groupCandidates", () => {
   it("joins the same vehicle across portals under the smallest id", () => {
@@ -28,5 +35,27 @@ describe("groupCandidates", () => {
     expect(groupCandidates([]).size).toBe(0);
     const pairs = [pair(7, "a", 8, "b", 0.03), pair(8, "b", 9, "c", 0.01), pair(7, "a", 9, "c", 0.02)];
     expect(groupCandidates(pairs)).toEqual(groupCandidates([...pairs].reverse()));
+  });
+
+  it("uses a weak match (no place or only the year) when it is the only candidate on both sides", () => {
+    // Autohero 7 matches AutoScout24 3 to the kilometre; 3 is also on Kleinanzeigen as 5.
+    const groups = groupCandidates([pair(3, "autoscout24", 5, "kleinanzeigen", 0.02), pair(3, "autoscout24", 7, "autohero", 1, true)]);
+    expect(Object.fromEntries(groups)).toEqual({ 3: 3, 5: 3, 7: 3 });
+  });
+
+  it("drops a weak match when a listing has a second candidate on the same portal", () => {
+    // auto.de 9 fits two AutoScout24 listings: no guess.
+    const groups = groupCandidates([pair(1, "autoscout24", 9, "autode", 0, true), pair(2, "autoscout24", 9, "autode", 0, true)]);
+    expect(groups.size).toBe(0);
+    // AutoScout24 1 fits two Quoka listings, one of them on a place-confirmed match: only that one stays.
+    const mixed = groupCandidates([pair(1, "autoscout24", 4, "quoka", 0.05), pair(1, "autoscout24", 6, "quoka", 0, true)]);
+    expect(Object.fromEntries(mixed)).toEqual({ 1: 1, 4: 1 });
+  });
+
+  it("joins weak pairs only after all place-confirmed ones, whatever their score", () => {
+    // 1 (A) - 2 (B) - 3 (C) are confirmed by the place. 4 (A) fits 3 to the kilometre with the
+    // lowest score, but A is already in the group by then, so 4 stays out.
+    const groups = groupCandidates([pair(1, "a", 2, "b", 0.05), pair(2, "b", 3, "c", 0.05), pair(3, "c", 4, "a", 0, true)]);
+    expect(Object.fromEntries(groups)).toEqual({ 1: 1, 2: 1, 3: 1 });
   });
 });
