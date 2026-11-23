@@ -1,7 +1,7 @@
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { NormalizedListing } from "@/core/types";
-import type { CheckOutcome, ListingRef, RawListing, SourceAdapter, SourceInfo } from "@/ingest/adapter";
+import type { CheckOutcome, ListingRef, PageFacts, RawListing, SourceAdapter, SourceInfo } from "@/ingest/adapter";
 import { createAutoScout24Adapter, listUrl, paceDelayMs, planPages } from "@/ingest/adapters/autoscout24";
 import { createDemoAdapter } from "@/ingest/adapters/demo";
 import { updateDuplicates } from "@/ingest/duplicates";
@@ -77,7 +77,7 @@ function fakePortal(
     staleAfterDays?: number;
     beforeEnd?: () => Promise<void>;
     /** What each listing's own page says, for a portal whose listings are checked one by one. */
-    checks?: { outcomes: Record<string, CheckOutcome>; due: ListingRef[]; blockAt?: string };
+    checks?: { outcomes: Record<string, CheckOutcome>; due: ListingRef[]; blockAt?: string; facts?: Record<string, PageFacts> };
   } = {},
 ): SourceAdapter {
   const checks = options.checks;
@@ -92,7 +92,7 @@ function fakePortal(
           if (ref.externalId === checks.blockAt) throw new BlockedError(ref.url, "rate limited (429)");
           checks.due.push(ref);
           const outcome = checks.outcomes[ref.externalId];
-          if (outcome) yield { externalId: ref.externalId, outcome };
+          if (outcome) yield { externalId: ref.externalId, outcome, ...checks.facts?.[ref.externalId] };
         }
       },
     }),
@@ -234,6 +234,48 @@ describe.skipIf(!url)("importing scraped portals", () => {
     await pool.query("update listings set checked_at = now() - interval '21 hours' where external_id = '3'");
     await runIngest(pool, fakePortal(PORTAL_A, [], { checks: next }));
     expect(next.due.map((ref) => ref.externalId)).toEqual(["3"]);
+  });
+
+  it("keeps the price and the day put online that a listing's own page shows", async () => {
+    await runIngest(
+      pool,
+      fakePortal(PORTAL_A, [
+        { listing: car(PORTAL_A, "1", { priceEur: 5000 }), segment: "vw:4000-6000" },
+        { listing: car(PORTAL_A, "2", { priceEur: 5000 }) },
+        { listing: car(PORTAL_A, "3", { priceEur: 5000 }) },
+      ]),
+    );
+    await pool.query("update listings set last_seen_at = now() - interval '30 hours'");
+    const checks = {
+      outcomes: { "1": "active", "2": "active", "3": "gone" } as Record<string, CheckOutcome>,
+      due: [] as ListingRef[],
+      facts: { "1": { priceEur: 4500, listedOn: "2026-11-02" }, "2": { listedOn: "2026-11-10" }, "3": { priceEur: 100 } } as Record<string, PageFacts>,
+    };
+    await runIngest(pool, fakePortal(PORTAL_A, [], { checks }));
+    expect(checks.due.map((ref) => ref.priceEur)).toEqual([5000, 5000, 5000]);
+
+    const { rows } = await pool.query(
+      `select external_id, price_eur, to_char(listed_on, 'YYYY-MM-DD') as listed_on, segment, price_before_drop_eur,
+              price_dropped_at is not null as dropped
+         from listings order by external_id`,
+    );
+    expect(rows).toEqual([
+      // A new price leaves the segment it was cut by; the history and the drop are kept as for a list.
+      { external_id: "1", price_eur: 4500, listed_on: "2026-11-02", segment: null, price_before_drop_eur: 5000, dropped: true },
+      { external_id: "2", price_eur: 5000, listed_on: "2026-11-10", segment: null, price_before_drop_eur: null, dropped: false },
+      // Nothing but the outcome counts for a listing that is gone.
+      { external_id: "3", price_eur: 5000, listed_on: null, segment: null, price_before_drop_eur: null, dropped: false },
+    ]);
+    const [id] = (await pool.query("select id from listings where external_id = '1'")).rows.map((row) => Number(row.id));
+    expect((await getListing(pool, id))?.priceHistory.map((point) => point.priceEur)).toEqual([5000, 4500]);
+
+    // A later page with a later day (pushed up again) keeps the earliest one.
+    await pool.query("update listings set last_seen_at = now() - interval '30 hours', checked_at = null where external_id = '1'");
+    const again = { outcomes: { "1": "active" } as Record<string, CheckOutcome>, due: [] as ListingRef[], facts: { "1": { priceEur: 4500, listedOn: "2026-11-20" } } };
+    await runIngest(pool, fakePortal(PORTAL_A, [], { checks: again }));
+    const after = await pool.query("select to_char(listed_on, 'YYYY-MM-DD') as listed_on from listings where external_id = '1'");
+    expect(after.rows[0].listed_on).toBe("2026-11-02");
+    expect((await getListing(pool, id))?.priceHistory).toHaveLength(2);
   });
 
   it("keeps the checks and the clean-up when the portal blocks a listing page", async () => {

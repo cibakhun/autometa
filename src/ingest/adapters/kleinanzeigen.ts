@@ -13,7 +13,7 @@ import {
 } from "@/core/normalize";
 import { MAKES } from "@/core/taxonomy";
 import type { NormalizedListing } from "@/core/types";
-import type { CheckOutcome, ListingRef, RawListing, SourceAdapter, SourceInfo } from "../adapter";
+import type { CheckOutcome, ListingRef, PageFacts, RawListing, SourceAdapter, SourceInfo } from "../adapter";
 import { BlockedError, BudgetExceededError, DisallowedError, HttpStatusError, type FetchedPage, type PoliteFetcher } from "../http/fetcher";
 import { decodeEntities, textOf } from "../http/html";
 import { checkListingPages, portalText } from "./listing-check";
@@ -182,6 +182,51 @@ export function kleinanzeigenVerdict(ref: ListingRef, page: FetchedPage): CheckO
   return page.text.includes(ref.externalId) ? "active" : "unclear";
 }
 
+/** The ad page's price box, e.g. <h2 class="boxedarticle--price" id="viewad-price">6.500 € VB</h2>. */
+const PRICE_BOX = /<(\w+)\b[^>]*\bid="viewad-price"[^>]*>([\s\S]*?)<\/\1\s*>/i;
+/** A former price inside the price box, struck through after a reduction. */
+const FORMER_PRICE = [/<(s|del|strike)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, /<(\w+)\b[^>]*\bclass="[^"]*\bold\b[^"]*"[^>]*>[\s\S]*?<\/\1\s*>/gi];
+/** The date under the price ("21.11.2026"): the first date in that box, before the next element with an id. */
+const LISTED_ON = /\bid="viewad-extra-info"[^>]*>(?:(?!\bid=)[\s\S]){0,300}?\b(\d{2})\.(\d{2})\.(\d{4})\b/;
+
+/** Today in Germany as YYYY-MM-DD (the Canadian format is ISO). */
+const berlinDay = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Berlin", year: "numeric", month: "2-digit", day: "2-digit" });
+
+/** A list or ad price as Kleinanzeigen writes it ("18.500 € VB", "Zu verschenken"), in euros; null for anything else. */
+export function parseKleinanzeigenPrice(text: string | null): number | null {
+  if (text === "Zu verschenken") return 0;
+  if (!text || !/^(\d{1,3}(\.\d{3})*|\d+) €( VB)?$/.test(text)) return null;
+  const price = parseInteger(text);
+  // Under 100 € is a placeholder ("1 € VB"), not a price.
+  return price !== null && price >= 100 ? price : null;
+}
+
+/**
+ * The price an ad's own page asks and the day it was put online, from the boxes under its title.
+ * Anything not shown in the expected form is left out, so a changed page changes no listing.
+ */
+export function kleinanzeigenFacts(page: FetchedPage, now = Date.now()): PageFacts {
+  const facts: PageFacts = {};
+  // Without scripts and the seller's description: only the portal's own boxes count.
+  const html = portalText(page.text);
+  const box = html.match(PRICE_BOX);
+  if (box) {
+    const price = parseKleinanzeigenPrice(textOf(FORMER_PRICE.reduce((text, pattern) => text.replace(pattern, " "), box[2])));
+    if (price !== null) facts.priceEur = price;
+  }
+  const date = html.match(LISTED_ON);
+  if (date) {
+    const [, day, month, year] = date;
+    const iso = `${year}-${month}-${day}`;
+    const time = Date.parse(`${iso}T00:00:00Z`);
+    // A real day (no 31.02.), not before the portal existed and not after today in Germany.
+    if (!Number.isNaN(time) && new Date(time).toISOString().startsWith(iso) && Number(year) >= 2005 && iso <= berlinDay.format(now)) {
+      facts.listedOn = iso;
+    }
+  }
+  return facts;
+}
+
 export function normalizeKleinanzeigen(raw: RawListing): NormalizedListing | null {
   const item = raw.payload as unknown as KleinanzeigenItem;
   // Cars given away ("Zu verschenken") are kept at 0 €; other prices under 100 € are placeholders.
@@ -270,7 +315,8 @@ export function createKleinanzeigenAdapter(options: KleinanzeigenOptions): Sourc
     fullSnapshot: false,
     staleAfterDays: options.staleAfterDays ?? 2,
     normalize: normalizeKleinanzeigen,
-    checkListings: (due) => checkListingPages(due, { fetcher, log, verdict: kleinanzeigenVerdict }),
+    checkListings: (due) =>
+      checkListingPages(due, { fetcher, log, verdict: kleinanzeigenVerdict, facts: (_ref, page) => kleinanzeigenFacts(page) }),
     async *fetch() {
       failuresInARow = 0;
       const seen = new Set<string>();

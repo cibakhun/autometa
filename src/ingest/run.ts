@@ -339,15 +339,16 @@ async function markMissed(client: PoolClient, sourceId: string, startedAt: Date,
 
 /**
  * Hands the adapter the listings neither seen nor checked for CHECK_AFTER_HOURS, the longest
- * unlooked-at first, and applies what their pages say: online counts as seen now, taken down
- * leaves the search at once, unclear only records the attempt (the listing is due again a day
- * later). Written in small batches, so a run that ends early keeps its checks.
+ * unlooked-at first, and applies what their pages say: online counts as seen now (with the price
+ * the page asks, which the price history keeps like a price seen in a list), taken down leaves the
+ * search at once, unclear only records the attempt (the listing is due again a day later).
+ * Written in small batches, so a run that ends early keeps its checks.
  */
 async function checkDueListings(client: PoolClient, adapter: SourceAdapter, totals: IngestResult) {
   const { source } = adapter;
   // greatest() skips a null checked_at.
-  const due = await client.query<{ external_id: string; url: string }>(
-    `select external_id, url from listings
+  const due = await client.query<{ external_id: string; url: string; price_eur: number }>(
+    `select external_id, url, price_eur from listings
       where source_id = $1 and status = 'active'
         and greatest(last_seen_at, checked_at) < now() - make_interval(hours => $2)
       order by greatest(last_seen_at, checked_at), id
@@ -368,18 +369,30 @@ async function checkDueListings(client: PoolClient, adapter: SourceAdapter, tota
               gone_at = case when v.outcome = 'gone' then now() else l.gone_at end,
               last_seen_at = case when v.outcome = 'active' then now() else l.last_seen_at end,
               missed_runs = case when v.outcome = 'active' then 0 else l.missed_runs end,
+              price_eur = case when v.outcome = 'active' and v.price_eur is not null then v.price_eur else l.price_eur end,
+              -- Segments are cut by price, so a new price may belong to another one (see writeBatch).
+              segment = case when v.outcome = 'active' and v.price_eur is distinct from l.price_eur and v.price_eur is not null
+                             then null else l.segment end,
+              -- The earliest day any page named: a later one may be the day it was pushed up again.
+              listed_on = least(l.listed_on, v.listed_on),
               checked_at = now()
-         from unnest($2::text[], $3::text[]) as v (external_id, outcome)
+         from unnest($2::text[], $3::text[], $4::int[], $5::date[]) as v (external_id, outcome, price_eur, listed_on)
         where l.source_id = $1 and l.external_id = v.external_id and l.status = 'active'
         returning v.outcome`,
-      [source.id, checks.map((r) => r.externalId), checks.map((r) => r.outcome)],
+      [
+        source.id,
+        checks.map((r) => r.externalId),
+        checks.map((r) => r.outcome),
+        checks.map((r) => r.priceEur ?? null),
+        checks.map((r) => r.listedOn ?? null),
+      ],
     );
     totals.gone += updated.rows.filter((row) => row.outcome === "gone").length;
   };
 
   try {
     for await (const check of adapter.checkListings!(
-      due.rows.map((row) => ({ externalId: row.external_id, url: row.url })),
+      due.rows.map((row) => ({ externalId: row.external_id, url: row.url, priceEur: row.price_eur })),
       { db: client },
     )) {
       batch.push(check);

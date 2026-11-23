@@ -39,6 +39,11 @@ describe("describeSearch", () => {
     expect(describeSearch(filters("priceMin=1000&priceMax=2000&yearMin=2005&yearMax=2010"))).toBe("1.000–2.000 € · 2005–2010");
   });
 
+  it("names price drops", () => {
+    expect(describeSearch(filters("make=bmw&gesenkt=7"))).toBe("BMW · Preis gesenkt (7 Tage)");
+    expect(describeSearch(filters("gesenkt=ja"))).toBe("Preis gesenkt");
+  });
+
   it("falls back to all listings and stays short", () => {
     expect(describeSearch(filters(""))).toBe("Alle Angebote");
     const long = describeSearch(filters(`q=${"x".repeat(80)}&make=volkswagen&model=golf`));
