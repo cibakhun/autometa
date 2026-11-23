@@ -18,8 +18,9 @@ export const MAX_NAME_LENGTH = 80;
 export class TooManySearchesError extends Error {}
 
 /**
- * The query string a search is saved under: its filters and sort, without page and "seit", and
- * lists (fuel, body, source) in a fixed order, so the same search is saved only once.
+ * The query string a search is saved under: its filters and sort, without page, "seit" and the
+ * sentence of a search in own words ("ki"), and lists (fuel, body, source) in a fixed order, so
+ * the same search is saved only once.
  */
 export function normalizeSearchQuery(raw: string | URLSearchParams): string {
   const params = typeof raw === "string" ? new URLSearchParams(raw.replace(/^\?/, "")) : raw;
@@ -27,7 +28,7 @@ export function normalizeSearchQuery(raw: string | URLSearchParams): string {
   const sorted = <T extends string>(values: readonly T[]) => [...new Set(values)].sort();
   return filtersToQuery(
     { ...filters, fuel: sorted(filters.fuel), body: sorted(filters.body), source: sorted(filters.source) },
-    { page: 1, seit: undefined },
+    { page: 1, seit: undefined, ki: undefined },
   ).replace(/^\?/, "");
 }
 

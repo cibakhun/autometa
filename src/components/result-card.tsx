@@ -121,6 +121,7 @@ export function ResultCard({
           </p>
         )}
         {listing.flip && listing.repair && <FlipLine flip={listing.flip} repair={listing.repair} minMarginEur={minMarginEur} />}
+        {listing.reliabilityRatio !== null && <ReliabilityLine ratio={listing.reliabilityRatio} />}
         {listing.otherOffers.length > 0 && (
           <p className="mt-2 text-sm">
             <span className="text-muted">Auch bei </span>
@@ -152,6 +153,21 @@ export function ResultCard({
         </div>
       </div>
     </article>
+  );
+}
+
+/** "Modell-Akte: 23 % weniger HU-Mängel als gleich alte Autos" (shown when sorted by recommendation). */
+function ReliabilityLine({ ratio }: { ratio: number }) {
+  const percent = Math.round(Math.abs(1 - ratio) * 100);
+  const text =
+    percent < 5
+      ? "HU-Mängel wie bei gleich alten Autos"
+      : `${percent} % ${ratio < 1 ? "weniger" : "mehr"} HU-Mängel als gleich alte Autos`;
+  return (
+    <p className="mt-2 text-sm" title="Anteil der Autos dieses Modells und Alters mit Mangel bei der Hauptuntersuchung (RDW-Daten), verglichen mit allen gleich alten Autos">
+      <span className="text-muted">Modell-Akte: </span>
+      <span className={percent < 5 ? "" : ratio < 1 ? "font-medium text-good-text" : "font-medium text-warn-text"}>{text}</span>
+    </p>
   );
 }
 

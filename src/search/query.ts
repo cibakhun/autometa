@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 import { boundingBox, distanceSql } from "@/core/geo";
 import type { DamageKind } from "@/core/damage";
+import { AGE_BUCKETS, MIN_SAMPLE } from "@/core/defects";
 import { calculateFlip, DEFAULT_FLIP_SETTINGS, type FlipResult, type FlipSettings } from "@/core/flip";
 import type { InspectionBasis } from "@/core/inspection";
 import type { PricePoint } from "@/core/price-history";
@@ -63,6 +64,12 @@ export interface ListingSummary {
   /** When the price last went down, and what it was before; null when it did not or went up again. */
   priceDroppedAt: string | null;
   priceBeforeDropEur: number | null;
+  /**
+   * How often the model had HU defects at the car's age, compared with all cars of that age
+   * (Modell-Akte): 0.8 means 20 % fewer. Only filled when sorted by recommendation; null
+   * without a profile.
+   */
+  reliabilityRatio: number | null;
 }
 
 export interface RepairSummary {
@@ -132,7 +139,7 @@ export interface SearchResult {
   items: ListingSummary[];
 }
 
-const ORDER_BY: Record<Exclude<Sort, "flip" | "margin">, string> = {
+const ORDER_BY: Record<Exclude<Sort, "flip" | "margin" | "empfehlung">, string> = {
   newest: "l.first_seen_at desc, l.id desc",
   price_asc: "l.price_eur asc, l.id asc",
   price_desc: "l.price_eur desc, l.id desc",
@@ -145,6 +152,48 @@ const ORDER_BY: Record<Exclude<Sort, "flip" | "margin">, string> = {
 };
 
 const escapeLike = (value: string) => value.replace(/[\\%_]/g, (char) => `\\${char}`);
+
+/** The age group (index into AGE_BUCKETS) of a first registration in SQL, null outside them; as ageBucket. */
+export function ageBucketSql(column = "l.first_registration"): string {
+  const age = `(extract(year from current_date)::int - extract(year from ${column})::int)`;
+  return `(case ${AGE_BUCKETS.map(([from, to], i) => `when ${age} between ${from} and ${to} then ${i}`).join(" ")} end)`;
+}
+
+/**
+ * Per model and age group: its share of cars with an HU defect divided by that of all cars of
+ * the age group (the same average as poolProfiles). Below 1 means more reliable than usual.
+ */
+const RELIABILITY_CTE = `reliability as (
+  select p.make_slug, p.model_slug, p.age_bucket, (p.any_defect::float8 / p.sample) / nullif(a.rate, 0) as ratio
+    from model_defect_profiles p
+    join (select age_bucket, sum(any_defect)::float8 / sum(sample) as rate
+            from model_defect_profiles where sample >= ${MIN_SAMPLE} group by age_bucket) a on a.age_bucket = p.age_bucket
+   where p.sample >= ${MIN_SAMPLE})`;
+
+/**
+ * Recommendation ("Empfehlung"): points for a model with fewer HU defects than cars of its age
+ * (1 point per percent, ±50) plus points for a price below market value (1 point per percent,
+ * ±30). Listings whose title names damage get the lowest price points, since their market value
+ * is that of an intact car. Unknown parts count 0. Kept in step with recommendationScore.
+ */
+// greatest() and least() skip nulls in Postgres, hence the explicit case for an unknown ratio.
+const RECOMMENDATION_SQL = `(case when l.reliability_ratio is null then 0 else greatest(-50, least(50, (1 - l.reliability_ratio) * 100)) end
+  + case when cardinality(l.damage) > 0 then -30
+         when l.market_price_eur > 0 then greatest(-30, least(30, (l.market_price_eur - l.price_eur) * 100.0 / l.market_price_eur))
+         else 0 end)`;
+
+/** The recommendation points of a listing, as RECOMMENDATION_SQL. */
+export function recommendationScore(listing: Pick<ListingSummary, "reliabilityRatio" | "damage" | "marketPriceEur" | "priceEur">): number {
+  const clamp = (value: number, limit: number) => Math.max(-limit, Math.min(limit, value));
+  const reliability = listing.reliabilityRatio === null ? 0 : clamp((1 - listing.reliabilityRatio) * 100, 50);
+  const price =
+    listing.damage.length > 0
+      ? -30
+      : listing.marketPriceEur !== null && listing.marketPriceEur > 0
+        ? clamp(((listing.marketPriceEur - listing.priceEur) * 100) / listing.marketPriceEur, 30)
+        : 0;
+  return reliability + price;
+}
 
 /** Builds the WHERE clause; returns the SQL and, when a radius applies, the distance expression. */
 export interface WhereOptions {
@@ -190,7 +239,10 @@ export function buildWhere(
     add((p) => `floor(${margin} / 10 + 0.5) * 10 >= ${p(filters.margeMin)}`);
   }
   if (filters.source.length > 0) add((p) => `l.source_id = any(${p(filters.source)}::text[])`);
-  if (filters.q) add((p) => `l.title ilike ${p(`%${escapeLike(filters.q!)}%`)}`);
+  // Every word of the search term somewhere in the title: "GTI Standheizung" finds "Golf GTI mit Standheizung".
+  for (const word of (filters.q ?? "").split(/\s+/).filter(Boolean)) {
+    add((p) => `l.title ilike ${p(`%${escapeLike(word)}%`)}`);
+  }
   if (filters.seit) {
     // New: first seen after that moment, and no portal had the same vehicle before. Or cheaper since.
     const since = params.add(filters.seit);
@@ -268,18 +320,25 @@ export async function searchListings(
   if (sort === "flip" || sort === "margin") {
     const { margin, perHour } = flipSql(settings, params);
     orderBy = `${sort === "flip" ? perHour : margin} desc nulls last, l.id desc`;
+  } else if (sort === "empfehlung") {
+    orderBy = `${RECOMMENDATION_SQL} desc, l.id desc`;
   } else {
     orderBy = ORDER_BY[sort];
   }
+  // The Modell-Akte comparison, only for the recommendation: a join over every matching listing.
+  const reliability = sort === "empfehlung";
   const offset = (filters.page - 1) * PAGE_SIZE;
 
   // A vehicle listed on several portals counts once.
   const countSql = `select count(distinct ${GROUP})::int as total from listings l where ${where}`;
   const itemsSql = `
-    select ${summaryColumns(distance ? `round(${distance}::numeric, 1)::float8` : "null::float8")}
+    ${reliability ? `with ${RELIABILITY_CTE}` : ""}
+    select ${summaryColumns(distance ? `round(${distance}::numeric, 1)::float8` : "null::float8")}${reliability ? ", l.reliability_ratio" : ""}
       from (
         select l.*, row_number() over (partition by ${GROUP} order by l.price_eur asc, l.id asc) as group_rank
+               ${reliability ? ", r.ratio as reliability_ratio" : ""}
           from listings l
+          ${reliability ? `left join reliability r on r.make_slug = l.make_slug and r.model_slug = l.model_slug and r.age_bucket = ${ageBucketSql()}` : ""}
          where ${where}
       ) l
       join sources s on s.id = l.source_id
@@ -342,6 +401,7 @@ export function summaryFromRow(row: Record<string, any>, offers: Map<number, Off
     firstSeenAt: new Date(row.first_seen_at).toISOString(),
     priceDroppedAt: row.price_dropped_at ? new Date(row.price_dropped_at).toISOString() : null,
     priceBeforeDropEur: row.price_before_drop_eur ?? null,
+    reliabilityRatio: row.reliability_ratio === null || row.reliability_ratio === undefined ? null : Number(row.reliability_ratio),
   };
 }
 
@@ -391,6 +451,42 @@ export async function resolveZip(pool: Pool | PoolClient, zip: string): Promise<
     [zip],
   );
   return near.rows[0] ? { ...near.rows[0], exact: false } : null;
+}
+
+/** A town name as compared below: lowercase, "ä" as "a", "ß" as "ss". */
+const townKey = (name: string) =>
+  name.trim().toLowerCase().replace(/\s+/g, " ").replace(/ä/g, "a").replace(/ö/g, "o").replace(/ü/g, "u").replace(/ß/g, "ss");
+
+/**
+ * The central postal code of a German town named as typed ("München", "muenchen", "Frankfurt"):
+ * the town whose name matches exactly or with a suffix ("Frankfurt am Main"), the one with the
+ * most postal codes when several do, and its code closest to the middle of them. Null if none.
+ */
+export async function findTown(pool: Pool | PoolClient, name: string): Promise<{ zip: string; city: string } | null> {
+  const key = townKey(name);
+  if (key.length < 2 || key.length > 60) return null;
+  const spelled = key.replace(/ae/g, "a").replace(/oe/g, "o").replace(/ue/g, "u");
+  const { rows } = await pool.query<{ zip: string; city: string }>(
+    `with hits as (
+       select zip, city, lat, lng, replace(translate(lower(city), 'äöü', 'aou'), 'ß', 'ss') as key
+         from postal_codes
+        where replace(translate(lower(city), 'äöü', 'aou'), 'ß', 'ss') in ($1, $2)
+           or replace(translate(lower(city), 'äöü', 'aou'), 'ß', 'ss') like $3
+           or replace(translate(lower(city), 'äöü', 'aou'), 'ß', 'ss') like $4
+     ), town as (
+       select city, avg(lat) as lat, avg(lng) as lng
+         from hits
+        group by city
+        order by bool_or(key in ($1, $2)) desc, count(*) desc, city
+        limit 1
+     )
+     select h.zip, t.city
+       from hits h join town t on t.city = h.city
+      order by (h.lat - t.lat) ^ 2 + (h.lng - t.lng) ^ 2, h.zip
+      limit 1`,
+    [key, spelled, `${escapeLike(key)} %`, `${escapeLike(spelled)} %`],
+  );
+  return rows[0] ?? null;
 }
 
 export interface MakeFacet {
@@ -568,6 +664,7 @@ export async function getListing(pool: Pool, id: number, settings = DEFAULT_FLIP
     checkedAt: new Date(row.last_seen_at).toISOString(),
     priceDroppedAt: row.price_dropped_at ? new Date(row.price_dropped_at).toISOString() : null,
     priceBeforeDropEur: row.price_before_drop_eur ?? null,
+    reliabilityRatio: null,
   };
 }
 

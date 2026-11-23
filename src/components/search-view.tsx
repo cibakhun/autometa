@@ -6,8 +6,10 @@ import { currentDevice } from "@/lib/profile";
 import { favoriteIds } from "@/profiles/favorites";
 import { findSavedSearch, normalizeSearchQuery } from "@/profiles/searches";
 import { filtersToQuery, parseFilters, SORT_LABELS, type SearchFilters } from "@/search/filters";
-import { getMakeFacets, getSourceFacets, resolveZip, searchListings, type Origin, type SearchResult } from "@/search/query";
+import { parseNaturalSearch } from "@/search/natural";
+import { findTown, getMakeFacets, getSourceFacets, resolveZip, searchListings, type Origin, type SearchResult } from "@/search/query";
 import { FilterForm } from "./filter-form";
+import { NaturalSearchBox } from "./natural-search";
 import { ResultCard } from "./result-card";
 import { SaveSearchButton } from "./save-search-button";
 
@@ -16,11 +18,14 @@ export async function SearchView({ searchParams }: { searchParams: PageProps<"/"
   const pool = getPool();
   const origin = filters.zip ? await resolveZip(pool, filters.zip) : null;
   const savedQuery = normalizeSearchQuery(filtersToQuery(filters));
-  const [facets, sources, result, saved] = await Promise.all([
+  const [facets, sources, result, saved, natural] = await Promise.all([
     getMakeFacets(pool),
     getSourceFacets(pool),
     searchListings(pool, filters, origin, settings),
     findSavedSearch(pool, device?.profileId ?? null, savedQuery),
+    // Read the sentence again to show how it was understood; the filters themselves come from the URL.
+    // A failed town lookup only costs the explanation, never the results.
+    filters.ki ? parseNaturalSearch(filters.ki, (name) => findTown(pool, name)).catch(() => null) : null,
   ]);
   const favorites = await favoriteIds(
     pool,
@@ -29,36 +34,40 @@ export async function SearchView({ searchParams }: { searchParams: PageProps<"/"
   );
 
   return (
-    <div className="grid gap-6 md:grid-cols-[18rem_1fr]">
-      <aside>
-        <FilterForm key={filtersToQuery(filters, { page: 1 })} facets={facets} sources={sources} filters={filters} />
-      </aside>
-      <section aria-label="Suchergebnisse" className="min-w-0">
-        <ResultHeader result={result} filters={filters} origin={origin} savedQuery={savedQuery} saved={saved} />
-        {filters.seit && <NewSinceNotice filters={filters} />}
-        {result.items.length === 0 ? (
-          <div className="rounded-xl border border-line bg-surface p-8 text-center">
-            <p className="font-medium">Keine Fahrzeuge gefunden.</p>
-            <p className="mt-1 text-sm text-muted">Lockere einen Filter oder vergrößere den Umkreis.</p>
-          </div>
-        ) : (
-          <ul className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-            {result.items.map((item) => (
-              <li key={item.id}>
-                <ResultCard
-                  listing={item}
-                  minMarginEur={settings.minMarginEur}
-                  favorite={favorites.has(item.id)}
-                  newSince={filters.seit}
-                  allDrops={filters.gesenkt !== undefined || filters.sort === "price_drop"}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-        <Pagination result={result} filters={filters} />
-      </section>
-    </div>
+    <>
+      {/* Keyed by the sentence, so the field does not keep an old one after the filter form changed the search. */}
+      <NaturalSearchBox key={filters.ki ?? ""} text={filters.ki} search={natural} sort={filters.sort} />
+      <div className="grid gap-6 md:grid-cols-[18rem_1fr]">
+        <aside>
+          <FilterForm key={filtersToQuery(filters, { page: 1 })} facets={facets} sources={sources} filters={filters} />
+        </aside>
+        <section aria-label="Suchergebnisse" className="min-w-0">
+          <ResultHeader result={result} filters={filters} origin={origin} savedQuery={savedQuery} saved={saved} />
+          {filters.seit && <NewSinceNotice filters={filters} />}
+          {result.items.length === 0 ? (
+            <div className="rounded-xl border border-line bg-surface p-8 text-center">
+              <p className="font-medium">Keine Fahrzeuge gefunden.</p>
+              <p className="mt-1 text-sm text-muted">Lockere einen Filter oder vergrößere den Umkreis.</p>
+            </div>
+          ) : (
+            <ul className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+              {result.items.map((item) => (
+                <li key={item.id}>
+                  <ResultCard
+                    listing={item}
+                    minMarginEur={settings.minMarginEur}
+                    favorite={favorites.has(item.id)}
+                    newSince={filters.seit}
+                    allDrops={filters.gesenkt !== undefined || filters.sort === "price_drop"}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+          <Pagination result={result} filters={filters} />
+        </section>
+      </div>
+    </>
   );
 }
 
