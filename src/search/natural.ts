@@ -55,6 +55,8 @@ export interface NaturalSearch {
 export type PlaceLookup = (name: string) => Promise<{ zip: string; city: string } | null>;
 
 export const MAX_TEXT_LENGTH = 200;
+/** Words from the text that the title must contain, at most. */
+const MAX_TITLE_WORDS = 3;
 
 // ---------------------------------------------------------------------------------------------
 // Text handling
@@ -139,7 +141,7 @@ const MINQ = alt("ab", "über", "mehr als", "mindestens", "mind", "min", "größ
 const APPROXQ = alt("ca", "circa", "zirka", "etwa", "ungefähr", "rund", "um die", "so um die", "in etwa", "so etwa", "budget ca", "budget etwa", "budget um die");
 const YEAR = "(?:19[5-9]\\d|20[0-4]\\d)";
 const YEARWORD = alt("baujahr", "bj", "ez", "erstzulassung", "jahrgang", "modelljahr", "zulassung", "zugelassen");
-const NOT_A_PRICE = `(?!\\s*(?:km|kilometer|tkm|ps|kw|jahre?|monate?|sitzer|türer|türig|gang|zoll|liter|ccm|cm|m)${B1})`;
+const NOT_A_PRICE = `(?!\\s*(?:km|kilometer|tkm|ps|kw|pferde\\w*|jahre?|monate?|sitzer|turer|tuerer|turig|tuerig|gang|zoll|liter|ccm|cm|m)${B1})`;
 
 /** Parses "8.000", "8,5", "8k", "150 tsd" (dots as thousands, a comma or dot with 1-2 digits as decimals). */
 export function parseAmount(raw: string): number | null {
@@ -152,6 +154,7 @@ export function parseAmount(raw: string): number | null {
   }
   text = text.replace(/[.,]+$/, "");
   if (/^\d{1,3}(\.\d{3})+$/.test(text)) text = text.replace(/\./g, "");
+  else if (/^\d{1,3}(\.\d{3})+,\d{1,2}$/.test(text)) text = text.replace(/\./g, "").replace(",", ".");
   else if (/^\d{1,3}(,\d{3})+$/.test(text)) text = text.replace(/,/g, "");
   else if (/^\d+[.,]\d{1,2}$/.test(text)) text = text.replace(",", ".");
   else if (!/^\d+$/.test(text)) return null;
@@ -290,6 +293,8 @@ export async function parseNaturalSearch(input: string, findPlace: PlaceLookup |
     return true;
   };
   const q = draft.query;
+  // A radius counts only with a place, which may come later in the text.
+  let radiusAt: { index: number; 0: string } | null = null;
 
   findMakeAndModel(text, draft);
 
@@ -344,7 +349,8 @@ export async function parseNaturalSearch(input: string, findPlace: PlaceLookup |
 
   // Seats and doors
   text.scan(`${B0}(?:([5-9])[\\s-]*sitzer|${alt("fünfsitzer")}|(${alt("siebensitzer", "achtsitzer", "neunsitzer", "sieben sitzer", "acht sitzer", "neun sitzer")})|([6-9])[\\s-]*${alt("sitze", "sitzen", "sitzplätze", "sitzplätzen", "plätze", "plätzen")})${B1}`, (m) => {
-    const seats = Number(m[1] ?? m[3] ?? (m[2] ? 7 : 5));
+    const word = m[2]?.replace(/[\s-]/g, "");
+    const seats = Number(m[1] ?? m[3] ?? (word ? { siebensitzer: 7, achtsitzer: 8, neunsitzer: 9 }[word] : 5));
     if (seats < 6) return ignored(m, "Die Sitzzahl steht in keinem Angebot.");
     draft.body.add("van");
     return understood(m, `${seats}-Sitzer → ${BODY_TYPE_LABELS.van} (die Sitzzahl selbst ist kein Filter)`);
@@ -360,7 +366,8 @@ export async function parseNaturalSearch(input: string, findPlace: PlaceLookup |
       const value = parseAmount(m[1] ?? m[2] ?? m[3]);
       if (value === null || value <= 0) return false;
       q.radius = snapRadius(value);
-      return understood(m, `Umkreis ${q.radius} km`);
+      radiusAt = { index: m.index, 0: m[0] };
+      return true;
     },
   );
 
@@ -371,13 +378,13 @@ export async function parseNaturalSearch(input: string, findPlace: PlaceLookup |
     if (value === null) return false;
     if (m[3] === "tkm" && value < 2000) value *= 1000;
     if (m[1] && new RegExp(`^${MINQ}$`).test(m[1])) return ignored(m, "Eine Mindest-Laufleistung ist kein Filter.");
-    q.kmMax = roundTo(value, 1000) || roundTo(value, 1);
+    q.kmMax = Math.round(value);
     return understood(m, `bis ${formatNumber(q.kmMax)} km`);
   });
   text.scan(`${B0}${alt("laufleistung", "kilometerstand", "km stand", "tacho", "tachostand")}\\s+(?:(${MAXQ})\\.?\\s+)?(${NUM})${B1}`, (m) => {
     const value = parseAmount(m[2]);
     if (value === null) return false;
-    q.kmMax = value < 1000 ? value * 1000 : roundTo(value, 1000);
+    q.kmMax = Math.round(value < 1000 ? value * 1000 : value);
     return understood(m, `bis ${formatNumber(q.kmMax)} km`);
   });
   text.scan(words("wenig km", "wenig kilometer", "wenig gelaufen", "kaum gelaufen", "wenig gefahren", "kaum gefahren", "geringe laufleistung",
@@ -387,7 +394,7 @@ export async function parseNaturalSearch(input: string, findPlace: PlaceLookup |
   });
 
   // Power
-  text.scan(`${B0}(?:(${MAXQ}|${MINQ})\\.?\\s+)?(${NUM})\\s*(ps|kw|pferdestärken)${B1}`, (m) => {
+  text.scan(`${B0}(?:(${MAXQ}|${MINQ})\\.?\\s+)?(${NUM})\\s*(ps|kw|${alt("pferdestärken", "pferdestärke", "pferde")})${B1}`, (m) => {
     const value = parseAmount(m[2]);
     if (value === null || value <= 0) return false;
     if (m[1] && !new RegExp(`^${MINQ}$`).test(m[1])) return ignored(m, "Eine Höchstleistung ist kein Filter.");
@@ -460,7 +467,7 @@ export async function parseNaturalSearch(input: string, findPlace: PlaceLookup |
   );
 
   // Postal code: "PLZ 80331", "in 80331", "um 10115"
-  text.scan(`${B0}(?:(${alt("plz", "postleitzahl", "in", "bei", "um", "nahe", "nähe", "raum", "umgebung", "aus", "rund um", "nähe von", "im raum")})\\s+)?(\\d{5})(?![\\d.,]\\d)${B1}(?!\\s*(?:${EUR}|km|kilometer|ps|kw|k${B1}|tsd))`, (m) => {
+  text.scan(`${B0}(?:(${alt("plz", "postleitzahl", "in", "bei", "um", "nahe", "nähe", "raum", "umgebung", "aus", "rund um", "nähe von", "im raum")})\\s+)?(\\d{5})(?![\\d.,]\\d)${B1}(?!\\s*(?:${EUR}|km|kilometer|ps|kw|k${B1}|tsd|(?:-|bis|und)\\s*\\d))`, (m) => {
     const before = text.norm.slice(0, m.index).trimEnd();
     if (!m[1] && new RegExp(`(?:${MAXQ}|${MINQ}|${APPROXQ})\\.?$`).test(before)) return false;
     q.zip = m[2];
@@ -515,6 +522,27 @@ export async function parseNaturalSearch(input: string, findPlace: PlaceLookup |
 
   // --- Words
 
+  // Phrases that contain a shorter phrase of another rule: "nicht fahrbereit" (not "fahrbereit"),
+  // "wenig Mängel" (not "Mängel"), "günstig im Unterhalt" (not "günstig").
+  const noFilter = (phrases: string[], reason: string) => text.scan(words(...phrases), (m) => ignored(m, reason));
+  text.scan(words("nicht fahrbereit", "nicht mehr fahrbereit", "nicht fahrtüchtig", "springt nicht an", "springt nicht mehr an"), (m) => {
+    q.zustand = "defekt";
+    return understood(m, "mit Schadenshinweis (defekt, Bastler)");
+  });
+  text.scan(words("zuverlässig", "zuverlässige", "zuverlässiger", "zuverlässiges", "zuverlässigen", "zuverlässigkeit", "robust", "robuste", "robuster",
+    "robustes", "robusten", "langlebig", "langlebige", "langlebiger", "langlebiges", "langlebigen", "problemlos", "problemlose", "problemloser",
+    "problemloses", "solide", "solider", "solides", "soliden", "unkaputtbar", "haltbar", "sorgenfrei", "wenig mängel", "wenige mängel", "wenig mängeln", "wenigen mängeln",
+    "wenig reparaturen", "wenig probleme", "keine probleme", "wenig werkstatt", "selten kaputt", "qualität", "hohe qualität", "verlässlich",
+    "verlässliche", "verlässlicher", "verlässliches", "verlässlichen"), (m) => {
+    draft.reliable = true;
+    return understood(m, "zuverlässig → wenig HU-Mängel zuerst (Modell-Akte), ohne Schadenshinweis");
+  });
+  noFilter(["sparsam", "sparsame", "sparsamer", "sparsames", "sparsamen", "wenig verbrauch", "geringer verbrauch", "niedriger verbrauch",
+    "verbrauchsarm", "spritsparend", "spritsparer", "wenig sprit", "günstig im unterhalt", "günstig im verbrauch", "günstig in der steuer",
+    "niedrige unterhaltskosten", "geringe unterhaltskosten", "wenig unterhalt", "niedrige kosten", "geringe kosten", "wenig steuer",
+    "niedrige steuer", "günstige versicherung", "günstig in der versicherung", "günstig zu versichern", "wenig versicherung"],
+  "Verbrauch, Steuer und Versicherung stehen in keinem Angebot.");
+
   // Negations first, so "kein Diesel" is not read as "Diesel".
   const NOT = alt("kein", "keine", "keinen", "ohne", "nicht", "bloß kein", "bitte kein", "bitte keinen", "bitte keine", "lieber kein", "lieber keinen", "nicht als");
   for (const [fuel, phrases] of FUEL_WORDS) {
@@ -552,7 +580,6 @@ export async function parseNaturalSearch(input: string, findPlace: PlaceLookup |
       "gepflegt", "gepflegter", "gepflegtes", "gepflegten", "unfallfreier", "unfallfreies", "unfallfreien", "ohne probleme",
     )})${B1}`,
     (m) => {
-      if (/^nicht\s*fahrbereit/.test(m[0])) return false;
       q.zustand = "intakt";
       return understood(m, "ohne Schadenshinweis im Titel");
     },
@@ -625,14 +652,6 @@ export async function parseNaturalSearch(input: string, findPlace: PlaceLookup |
   }
 
   // What the ranking should favour
-  text.scan(words("zuverlässig", "zuverlässige", "zuverlässiger", "zuverlässiges", "zuverlässigen", "zuverlässigkeit", "robust", "robuste", "robuster",
-    "robustes", "robusten", "langlebig", "langlebige", "langlebiger", "langlebiges", "langlebigen", "problemlos", "problemlose", "problemloser",
-    "problemloses", "solide", "solider", "solides", "soliden", "unkaputtbar", "haltbar", "sorgenfrei", "wenig mängel", "wenige mängel",
-    "wenig reparaturen", "wenig probleme", "keine probleme", "wenig werkstatt", "selten kaputt", "qualität", "hohe qualität", "verlässlich",
-    "verlässliche", "verlässlicher", "verlässliches", "verlässlichen"), (m) => {
-    draft.reliable = true;
-    return understood(m, "zuverlässig → wenig HU-Mängel zuerst (Modell-Akte), ohne Schadenshinweis");
-  });
   text.scan(words("günstig", "günstige", "günstiger", "günstiges", "günstigen", "billig", "billige", "billiger", "billiges", "billigen", "preiswert",
     "preiswerte", "preiswerter", "preiswertes", "preiswerten", "schnäppchen", "unter marktwert", "unter wert", "guter preis", "gutem preis",
     "preis leistung", "preisleistung", "bezahlbar", "bezahlbare", "bezahlbaren", "erschwinglich", "deal", "deals", "low budget"), (m) => {
@@ -654,12 +673,6 @@ export async function parseNaturalSearch(input: string, findPlace: PlaceLookup |
   explicitSort(["stundenlohn", "höchster stundenlohn", "bester stundenlohn"], "flip", "Flip: höchster Stundenlohn");
 
   // Recognized, but nothing to filter on
-  const noFilter = (phrases: string[], reason: string) => text.scan(words(...phrases), (m) => ignored(m, reason));
-  noFilter(["sparsam", "sparsame", "sparsamer", "sparsames", "sparsamen", "wenig verbrauch", "geringer verbrauch", "niedriger verbrauch",
-    "verbrauchsarm", "spritsparend", "spritsparer", "spritsparer", "wenig sprit", "günstig im unterhalt", "günstig im verbrauch",
-    "niedrige unterhaltskosten", "geringe unterhaltskosten", "wenig unterhalt", "niedrige kosten", "geringe kosten", "wenig steuer",
-    "niedrige steuer", "günstige versicherung", "günstig in der versicherung", "wenig versicherung"],
-  "Verbrauch, Steuer und Versicherung stehen in keinem Angebot.");
   noFilter(["schwarz", "schwarzer", "schwarze", "schwarzes", "weiß", "weißer", "weiße", "weißes", "silber", "silberner", "silberne", "grau",
     "grauer", "graue", "graues", "rot", "roter", "rote", "rotes", "blau", "blauer", "blaue", "blaues", "grün", "grüner", "grüne", "grünes",
     "gelb", "gelber", "gelbe", "gelbes", "orange", "braun", "brauner", "braune", "beige", "farbe"], "Die Farbe ist (noch) kein Filter.");
@@ -674,13 +687,19 @@ export async function parseNaturalSearch(input: string, findPlace: PlaceLookup |
 
   for (const [title, phrases] of TITLE_WORDS) {
     text.scan(words(...phrases), (m) => {
-      if (draft.q.length < 3 && !draft.q.includes(title)) draft.q.push(title);
+      if (draft.q.includes(title)) return true;
+      if (draft.q.length >= MAX_TITLE_WORDS) return ignored(m, `Höchstens ${MAX_TITLE_WORDS} Wörter für die Titelsuche.`);
+      draft.q.push(title);
       return understood(m, `„${title}“ im Titel`);
     });
   }
 
   findModelWithoutMake(text, draft);
   if (findPlace && !q.zip) await findPlaceName(text, draft, findPlace);
+  if (radiusAt) {
+    if (q.zip) understood(radiusAt, `Umkreis ${q.radius} km`);
+    else ignored(radiusAt, "Ohne Ort oder PLZ gibt es keinen Umkreis.");
+  }
   if (!q.zip) {
     noFilter(["in der nähe", "in meiner nähe", "in der umgebung", "in meiner umgebung", "nähe", "umgebung", "nahe", "in der gegend"],
       "Ohne Ort oder PLZ gibt es keinen Umkreis. Schreib z. B. „bei 10115“ oder „um München“.");
@@ -692,7 +711,7 @@ export async function parseNaturalSearch(input: string, findPlace: PlaceLookup |
     if (STOPWORDS.has(token.word)) continue;
     const original = text.slice(token.start, token.end);
     // Codes such as "GTI" or "TDCi" written in capitals often stand in the title as written.
-    if (/^[A-Z][A-Z0-9]{1,5}$/.test(original) && draft.q.length < 3) {
+    if (/^[A-Z][A-Z0-9]{1,5}$/.test(original) && draft.q.length < MAX_TITLE_WORDS) {
       draft.q.push(original);
       draft.understood.push({ at: token.start, text: original, label: `„${original}“ im Titel` });
       continue;
@@ -742,9 +761,10 @@ function snapRadius(km: number): number {
 function finish(draft: Draft, year: number): NaturalQuery {
   const q = draft.query;
   q.fuel = draft.fuel.size > 0 ? [...draft.fuel] : draft.fuelOut.size > 0 ? FUELS.filter((f) => !draft.fuelOut.has(f) && f !== "other") : [];
+  const familyBodies: BodyType[] = ["estate", "van", "suv"];
   if (draft.body.size > 0) q.body = [...draft.body];
+  else if (draft.family) q.body = familyBodies.filter((b) => !draft.bodyOut.has(b));
   else if (draft.bodyOut.size > 0) q.body = BODY_TYPES.filter((b) => !draft.bodyOut.has(b));
-  else if (draft.family) q.body = ["estate", "van", "suv"];
   if (draft.q.length > 0) q.q = draft.q.join(" ");
   if (draft.flip) q.zustand = "defekt";
   if (draft.reliable && !q.zustand) q.zustand = "intakt";
@@ -877,7 +897,9 @@ function addModels(text: Text, draft: Draft, tokens: Token[], make: MakeDef, fou
     const makeNamed = draft.understood.some((item) => item.label === make.name);
     draft.understood.push({ at, text: spelled, label: makeNamed ? f.model.name : `${make.name} ${f.model.name}` });
     const next = tokens[f.end];
-    if (next && GENERATION.test(next.word) && !UNIT_AFTER.test(tokens[f.end + 1]?.word ?? "")) {
+    // "Golf 7 Diesel" names the generation; "Golf 8.000 €" or "Golf 7 Jahre" do not.
+    const after = next ? text.norm.slice(next.end, next.end + 12) : "";
+    if (next && GENERATION.test(next.word) && !/^[.,]\d/.test(after) && !UNIT_AFTER.test(tokens[f.end + 1]?.word ?? "") && !/^\s*€/.test(after)) {
       consumeTokens(text, tokens, f.end, f.end + 1);
       draft.ignored.push({ at: next.start, text: text.slice(next.start, next.end), reason: "Die Modellgeneration ist kein Filter; gib dafür das Baujahr an." });
     }

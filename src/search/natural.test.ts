@@ -157,6 +157,30 @@ describe("parseNaturalSearch", () => {
     expect(result.query.zip).toBeUndefined();
   });
 
+  it("handles the review cases", async () => {
+    expect(parseAmount("8.000,50")).toBe(8000.5);
+    expect(await query("Achtsitzer")).toMatchObject({ body: ["van"] });
+    expect((await parse("Neunsitzer")).understood[0].label).toMatch(/^9-Sitzer/);
+    expect(await query("Familienauto, kein SUV")).toMatchObject({ body: ["estate", "van"] });
+    expect(await query("unter 150.500 km")).toMatchObject({ kmMax: 150_500 });
+    expect(await query("10000-15000 €")).toEqual({ priceMin: 10_000, priceMax: 15_000, sort: "empfehlung" });
+    expect(await query("nicht fahrbereit")).toMatchObject({ zustand: "defekt" });
+    expect(await query("fahrbereit")).toMatchObject({ zustand: "intakt" });
+    expect(await query("Kombi mit wenig Mängeln")).toMatchObject({ zustand: "intakt", sort: "empfehlung" });
+    expect(await query("wenig Mängel")).toMatchObject({ zustand: "intakt" });
+    const upkeep = await parse("günstig im Unterhalt");
+    expect(upkeep.query.sort).toBe("empfehlung");
+    expect(upkeep.ignored.map((item) => item.text)).toEqual(["günstig im Unterhalt"]);
+    expect(await query("ab 150 Pferdestärken")).toMatchObject({ psMin: 150 });
+    expect(await query("Golf 8.000 €")).toMatchObject({ model: "golf", priceMax: 8000 });
+    const radius = await parse("im Umkreis von 30 km");
+    expect(radius.understood).toEqual([]);
+    expect(radius.ignored.map((item) => item.text)).toEqual(["im Umkreis von 30 km"]);
+    const many = await parse("GTI Standheizung Navi Leder");
+    expect(many.query.q).toBe("GTI Standheizung Navi");
+    expect(many.ignored.map((item) => item.text)).toEqual(["Leder"]);
+  });
+
   it("gives the search page's query with the text as ki", async () => {
     const text = "zuverlässiger Kombi bis 8.000 €";
     const params = naturalSearchParams(await parse(text), text);

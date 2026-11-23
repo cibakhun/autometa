@@ -125,46 +125,47 @@ describe.skipIf(!url)("search against Postgres", () => {
   });
 
   it("sorts by recommendation: models with fewer HU defects than cars of their age first", async () => {
-    // Two models in the age group with the most listings: one gets 20 % defects, the other 60 % (average 40 %).
-    const { rows } = await pool.query<{ make_slug: string; model_slug: string; bucket: number }>(
-      `with cars as (
-         select make_slug, model_slug, ${ageBucketSql("first_registration")} as bucket
-           from listings where status = 'active' and model_slug is not null)
-       select make_slug, model_slug, bucket from cars
-        where bucket = (select bucket from cars where bucket is not null group by bucket order by count(*) desc, bucket limit 1)
-        group by 1, 2, 3 order by count(*) desc, 1, 2 limit 2`,
-    );
-    const [good, bad] = rows;
+    // Fixtures and searches in one transaction that is rolled back, so the shared listings stay as they were.
+    const client = await pool.connect();
     try {
-      await pool.query(
+      await client.query("begin");
+      // Two models in the age group with the most listings: one gets 20 % defects, the other 60 % (average 40 %).
+      const { rows } = await client.query<{ make_slug: string; model_slug: string; bucket: number }>(
+        `with cars as (
+           select make_slug, model_slug, ${ageBucketSql("first_registration")} as bucket
+             from listings where status = 'active' and model_slug is not null)
+         select make_slug, model_slug, bucket from cars
+          where bucket = (select bucket from cars where bucket is not null group by bucket order by count(*) desc, bucket limit 1)
+          group by 1, 2, 3 order by count(*) desc, 1, 2 limit 2`,
+      );
+      const [good, bad] = rows;
+      await client.query(
         `insert into model_defect_profiles (make_slug, model_slug, age_bucket, sample, any_defect, window_months)
          values ($1, $2, $3, 200, 40, 24), ($4, $5, $6, 200, 120, 24)`,
         [good.make_slug, good.model_slug, good.bucket, bad.make_slug, bad.model_slug, bad.bucket],
       );
-      const result = await searchListings(pool, parseFilters({ sort: "empfehlung" }), null);
+      const result = await searchListings(client, parseFilters({ sort: "empfehlung" }), null);
       const scores = result.items.map(recommendationScore);
       expect(scores).toEqual([...scores].sort((a, b) => b - a));
       expect(result.total).toBe(600);
 
-      // Without market values only the Modell-Akte counts: the better model first, the worse one last.
-      await pool.query("drop table if exists saved_market; create table saved_market as select id, market_price_eur from listings");
-      await pool.query("update listings set market_price_eur = null");
-      const reliable = await searchListings(pool, parseFilters({ sort: "empfehlung" }), null);
-      expect(reliable.items[0]).toMatchObject({ makeSlug: good.make_slug, modelSlug: good.model_slug });
-      expect(reliable.items[0].reliabilityRatio).toBeCloseTo(0.5);
-      const last = await searchListings(pool, parseFilters({ sort: "empfehlung", page: String(reliable.pageCount) }), null);
-      expect(last.items.at(-1)).toMatchObject({ makeSlug: bad.make_slug, modelSlug: bad.model_slug });
-      expect(last.items.at(-1)!.reliabilityRatio).toBeCloseTo(1.5);
-
-      const worse = await searchListings(pool, parseFilters({ sort: "empfehlung", make: bad.make_slug, model: bad.model_slug }), null);
+      const worse = await searchListings(client, parseFilters({ sort: "empfehlung", make: bad.make_slug, model: bad.model_slug }), null);
       expect(worse.items.some((item) => item.reliabilityRatio !== null && Math.abs(item.reliabilityRatio - 1.5) < 1e-9)).toBe(true);
       // Other sorts leave the comparison out.
-      const newest = await searchListings(pool, parseFilters({}), null);
+      const newest = await searchListings(client, parseFilters({}), null);
       expect(newest.items.every((item) => item.reliabilityRatio === null)).toBe(true);
+
+      // Without market values only the Modell-Akte counts: the better model first, the worse one last.
+      await client.query("update listings set market_price_eur = null");
+      const reliable = await searchListings(client, parseFilters({ sort: "empfehlung" }), null);
+      expect(reliable.items[0]).toMatchObject({ makeSlug: good.make_slug, modelSlug: good.model_slug });
+      expect(reliable.items[0].reliabilityRatio).toBeCloseTo(0.5);
+      const last = await searchListings(client, parseFilters({ sort: "empfehlung", page: String(reliable.pageCount) }), null);
+      expect(last.items.at(-1)).toMatchObject({ makeSlug: bad.make_slug, modelSlug: bad.model_slug });
+      expect(last.items.at(-1)!.reliabilityRatio).toBeCloseTo(1.5);
     } finally {
-      await pool.query("delete from model_defect_profiles");
-      await pool.query(`update listings l set market_price_eur = s.market_price_eur from saved_market s where s.id = l.id;
-                        drop table if exists saved_market`).catch(() => undefined);
+      await client.query("rollback");
+      client.release();
     }
   });
 

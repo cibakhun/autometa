@@ -24,7 +24,8 @@ export async function SearchView({ searchParams }: { searchParams: PageProps<"/"
     searchListings(pool, filters, origin, settings),
     findSavedSearch(pool, device?.profileId ?? null, savedQuery),
     // Read the sentence again to show how it was understood; the filters themselves come from the URL.
-    filters.ki ? parseNaturalSearch(filters.ki, (name) => findTown(pool, name)) : null,
+    // A failed town lookup only costs the explanation, never the results.
+    filters.ki ? parseNaturalSearch(filters.ki, (name) => findTown(pool, name)).catch(() => null) : null,
   ]);
   const favorites = await favoriteIds(
     pool,
@@ -34,7 +35,8 @@ export async function SearchView({ searchParams }: { searchParams: PageProps<"/"
 
   return (
     <>
-      <NaturalSearchBox text={filters.ki} search={natural} sort={filters.sort} />
+      {/* Keyed by the sentence, so the field does not keep an old one after the filter form changed the search. */}
+      <NaturalSearchBox key={filters.ki ?? ""} text={filters.ki} search={natural} sort={filters.sort} />
       <div className="grid gap-6 md:grid-cols-[18rem_1fr]">
         <aside>
           <FilterForm key={filtersToQuery(filters, { page: 1 })} facets={facets} sources={sources} filters={filters} />

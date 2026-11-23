@@ -232,7 +232,7 @@ export function buildWhere(
   }
   if (filters.source.length > 0) add((p) => `l.source_id = any(${p(filters.source)}::text[])`);
   // Every word of the search term somewhere in the title: "GTI Standheizung" finds "Golf GTI mit Standheizung".
-  for (const word of (filters.q ?? "").split(/\s+/).filter(Boolean).slice(0, 5)) {
+  for (const word of (filters.q ?? "").split(/\s+/).filter(Boolean)) {
     add((p) => `l.title ilike ${p(`%${escapeLike(word)}%`)}`);
   }
   if (filters.seit) {
