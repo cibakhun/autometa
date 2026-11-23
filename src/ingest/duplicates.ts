@@ -20,8 +20,9 @@ import { distanceSql } from "@/core/geo";
  *    1,000 EUR): auto.de asks up to about 13 % more than the dealer's own listing elsewhere.
  *
  * Matches of kind 2 and 3 count only when they are unambiguous: neither listing has another
- * candidate on the other's portal. A group never holds two listings of the same source: a
- * vehicle is listed once per portal.
+ * candidate on the other's portal. A group never holds two listings of the same source (a
+ * vehicle is listed once per portal), nor two different known months of first registration
+ * (a listing with only the year could otherwise link two cars of that year).
  */
 
 export const MATCH_RULES = {
@@ -44,6 +45,8 @@ interface Candidate {
   b: number;
   a_source: string;
   b_source: string;
+  a_month: string | null;
+  b_month: string | null;
   score: number;
 }
 
@@ -93,7 +96,9 @@ async function regroup(client: PoolClient): Promise<DuplicateResult> {
   const mileageWindow = `b.mileage_km between least(a.mileage_km - $3::int, floor(a.mileage_km * (1 - $4::float8))::int)
                                   and greatest(a.mileage_km + $3::int, ceil(a.mileage_km / (1 - $4::float8))::int)`;
   const closePrice = "abs(a.price_eur - b.price_eur) <= greatest($5::int, $6::float8 * greatest(a.price_eur, b.price_eur))";
-  const columns = `a.id::int8 as a, b.id::int8 as b, a.source_id as a_source, b.source_id as b_source, ${SCORE} as score`;
+  const month = (l: string) => `case when ${l}.first_registration_year_only then null else to_char(${l}.first_registration, 'YYYY-MM') end`;
+  const columns = `a.id::int8 as a, b.id::int8 as b, a.source_id as a_source, b.source_id as b_source,
+                   ${month("a")} as a_month, ${month("b")} as b_month, ${SCORE} as score`;
   const located = [r.powerToleranceKw, r.maxDistanceKm, r.mileageMinKm, r.mileageShare, r.priceMinEur, r.priceShare];
 
   // 1. Place and month known on both sides.
@@ -156,6 +161,8 @@ async function regroup(client: PoolClient): Promise<DuplicateResult> {
     b: Number(row.b),
     aSource: row.a_source,
     bSource: row.b_source,
+    aMonth: row.a_month,
+    bMonth: row.b_month,
     score: Number(row.score),
     weak: isWeak,
   });
@@ -184,6 +191,9 @@ export interface CandidatePair {
   b: number;
   aSource: string;
   bSource: string;
+  /** Known month of first registration ("2019-03"); null or left out when only the year is known. */
+  aMonth?: string | null;
+  bMonth?: string | null;
   /** Lower is a closer match; closer pairs are joined first. */
   score: number;
   /**
@@ -195,9 +205,9 @@ export interface CandidatePair {
 
 /**
  * Joins candidate pairs into groups, closest pairs first, and never puts two listings of the same
- * source into one group. A weak pair counts only when neither listing has another candidate on
- * the other's portal, and comes after all other pairs. Returns the cluster id (smallest member
- * id) of every grouped listing.
+ * source or two different known months of first registration into one group. A weak pair counts
+ * only when neither listing has another candidate on the other's portal, and comes after all
+ * other pairs. Returns the cluster id (smallest member id) of every grouped listing.
  */
 export function groupCandidates(pairs: CandidatePair[]): Map<number, number> {
   // How many candidates each listing has per portal, over all pairs.
@@ -214,6 +224,8 @@ export function groupCandidates(pairs: CandidatePair[]): Map<number, number> {
 
   const parent = new Map<number, number>();
   const sources = new Map<number, Set<string>>();
+  // The known month of first registration of each group (by root), null while none is known.
+  const months = new Map<number, string | null>();
   const find = (id: number): number => {
     let root = id;
     while (parent.get(root) !== root) root = parent.get(root)!;
@@ -225,28 +237,34 @@ export function groupCandidates(pairs: CandidatePair[]): Map<number, number> {
     }
     return root;
   };
-  const add = (id: number, source: string) => {
+  const add = (id: number, source: string, month: string | null | undefined) => {
     if (!parent.has(id)) {
       parent.set(id, id);
       sources.set(id, new Set([source]));
+      months.set(id, month ?? null);
     }
   };
 
   const rank = (pair: CandidatePair) => (pair.weak ? 1 : 0);
   for (const pair of usable.sort((x, y) => rank(x) - rank(y) || x.score - y.score || x.a - y.a || x.b - y.b)) {
-    add(pair.a, pair.aSource);
-    add(pair.b, pair.bSource);
+    add(pair.a, pair.aSource, pair.aMonth);
+    add(pair.b, pair.bSource, pair.bMonth);
     const rootA = find(pair.a);
     const rootB = find(pair.b);
     if (rootA === rootB) continue;
     const sourcesA = sources.get(rootA)!;
     const sourcesB = sources.get(rootB)!;
     if ([...sourcesB].some((source) => sourcesA.has(source))) continue;
+    const monthA = months.get(rootA)!;
+    const monthB = months.get(rootB)!;
+    if (monthA !== null && monthB !== null && monthA !== monthB) continue;
     // The smaller id becomes the root, so the root is the cluster id.
     const [keep, drop] = rootA < rootB ? [rootA, rootB] : [rootB, rootA];
     parent.set(drop, keep);
     for (const source of sources.get(drop)!) sources.get(keep)!.add(source);
     sources.delete(drop);
+    months.set(keep, monthA ?? monthB);
+    months.delete(drop);
   }
 
   const result = new Map<number, number>();

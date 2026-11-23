@@ -9,10 +9,3 @@ update listings set first_registration_year_only = true
  where source_id in ('autohero', 'quoka', 'autode')
    and first_registration is not null
    and extract(month from first_registration) = 1;
-
--- Candidate pairs are looked up by make, model and registration, then by mileage. With the
--- mileage in the index, a lookup reads only the listings in the mileage window instead of every
--- listing of that model and month or year. It replaces the index without the mileage.
-create index listings_active_vehicle_km_idx on listings (make_slug, model_slug, first_registration, mileage_km)
- where status = 'active';
-drop index listings_active_vehicle_idx;

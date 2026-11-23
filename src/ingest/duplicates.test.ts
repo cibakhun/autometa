@@ -58,4 +58,21 @@ describe("groupCandidates", () => {
     const groups = groupCandidates([pair(1, "a", 2, "b", 0.05), pair(2, "b", 3, "c", 0.05), pair(3, "c", 4, "a", 0, true)]);
     expect(Object.fromEntries(groups)).toEqual({ 1: 1, 2: 1, 3: 1 });
   });
+
+  it("never links two different known months of first registration through a listing with only the year", async () => {
+    // Quoka 1 (2019, year only) fits AutoScout24 2 (03/2019) and Kleinanzeigen 3 (11/2019).
+    const withMonths = (p: CandidatePair, aMonth: string | null, bMonth: string | null) => ({ ...p, aMonth, bMonth });
+    const groups = groupCandidates([
+      withMonths(pair(1, "quoka", 2, "autoscout24", 0.01, true), null, "2019-03"),
+      withMonths(pair(1, "quoka", 3, "kleinanzeigen", 0.02, true), null, "2019-11"),
+    ]);
+    // The closer pair wins; the other car stays on its own.
+    expect(Object.fromEntries(groups)).toEqual({ 1: 1, 2: 1 });
+    // The same month on both is fine.
+    const same = groupCandidates([
+      withMonths(pair(1, "quoka", 2, "autoscout24", 0.01, true), null, "2019-03"),
+      withMonths(pair(1, "quoka", 3, "kleinanzeigen", 0.02, true), null, "2019-03"),
+    ]);
+    expect(Object.fromEntries(same)).toEqual({ 1: 1, 2: 1, 3: 1 });
+  });
 });
