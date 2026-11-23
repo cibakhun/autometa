@@ -55,7 +55,8 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
   const online = onlineSpan({
     listedOn: listing.listedOn,
     firstSeenAt: listing.firstSeenAt,
-    endedAt: listing.status === "gone" ? (listing.goneAt ?? listing.lastSeenAt) : null,
+    // Only a page that said "taken down" dates the end; missed and stale listings were last seen online at lastSeenAt.
+    endedAt: listing.status === "gone" ? (listing.goneReason === "checked" ? (listing.goneAt ?? listing.lastSeenAt) : listing.lastSeenAt) : null,
     asOf: listing.asOf,
   });
   const rows: [string, string | null][] = [
@@ -349,7 +350,7 @@ function PriceHistory({ listing }: { listing: ListingDetail }) {
   const counts = [story.drops > 0 ? `${formatTimes(story.drops)} gesenkt` : null, story.raises > 0 ? `${formatTimes(story.raises)} erhöht` : null]
     .filter(Boolean)
     .join(" und ");
-  const end = listing.status === "gone" ? (listing.goneAt ?? listing.lastSeenAt) : listing.asOf;
+  const end = listing.status === "gone" ? (listing.goneReason === "checked" ? (listing.goneAt ?? listing.lastSeenAt) : listing.lastSeenAt) : listing.asOf;
   return (
     <section className="mt-6 border-t border-line pt-4 text-sm">
       <h2 className="font-semibold">Preisverlauf</h2>

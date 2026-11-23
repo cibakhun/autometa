@@ -374,7 +374,7 @@ async function checkDueListings(client: PoolClient, adapter: SourceAdapter, tota
               segment = case when v.outcome = 'active' and v.price_eur is distinct from l.price_eur and v.price_eur is not null
                              then null else l.segment end,
               -- The earliest day any page named: a later one may be the day it was pushed up again.
-              listed_on = least(l.listed_on, v.listed_on),
+              listed_on = case when v.outcome = 'active' then least(l.listed_on, v.listed_on) else l.listed_on end,
               checked_at = now()
          from unnest($2::text[], $3::text[], $4::int[], $5::date[]) as v (external_id, outcome, price_eur, listed_on)
         where l.source_id = $1 and l.external_id = v.external_id and l.status = 'active'
