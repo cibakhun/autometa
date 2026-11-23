@@ -37,9 +37,14 @@ describe.skipIf(!url)("alerts against Postgres", () => {
   let pool: Pool;
   const sent: { endpoint: string; payload: { title: string; body: string; url: string } }[] = [];
   let failWith: number | null = null;
+  /** Runs while a push goes out, e.g. an import changing a listing in the meantime. */
+  let whileSending: (() => Promise<void>) | null = null;
   const fakeSend: SendToSubscription = async (subscription, payload) => {
     if (failWith !== null) throw Object.assign(new Error("push service says no"), { statusCode: failWith });
     sent.push({ endpoint: subscription.endpoint, payload: JSON.parse(payload) });
+    const during = whileSending;
+    whileSending = null;
+    if (during) await during();
   };
   const run = (now = DAY) => runAlerts(pool, { send: fakeSend, now });
 
@@ -77,6 +82,7 @@ describe.skipIf(!url)("alerts against Postgres", () => {
 
   beforeEach(async () => {
     await pool.query("delete from listings; delete from profiles; delete from app_keys");
+    whileSending = null;
     sent.length = 0;
     failWith = null;
   });
@@ -192,6 +198,19 @@ describe.skipIf(!url)("alerts against Postgres", () => {
       await run();
       expect(sent).toHaveLength(2);
       expect(sent[1].payload.body).toBe("Polo: 2.000 € → 1.900 €");
+    });
+
+    it("reports a price that drops again while a push goes out", async () => {
+      const device = await pushProfile("race");
+      const a = await addCar({ title: "Fiesta", price: 12000 });
+      await setFavorite(pool, device.profileId, a, true);
+      await pool.query("update listings set price_eur = 10000 where id = $1", [a]);
+      whileSending = async () => {
+        await pool.query("update listings set price_eur = 9000 where id = $1", [a]);
+      };
+      await run();
+      await run();
+      expect(sent.map((push) => push.payload.body)).toEqual(["Fiesta: 12.000 € → 10.000 €", "Fiesta: 10.000 € → 9.000 €"]);
     });
 
     it("waits for the morning at night", async () => {

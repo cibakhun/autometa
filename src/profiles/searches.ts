@@ -17,10 +17,18 @@ export const MAX_NAME_LENGTH = 80;
 
 export class TooManySearchesError extends Error {}
 
-/** The query string a search is saved under: its filters and sort, without page and "seit". */
+/**
+ * The query string a search is saved under: its filters and sort, without page and "seit", and
+ * lists (fuel, body, source) in a fixed order, so the same search is saved only once.
+ */
 export function normalizeSearchQuery(raw: string | URLSearchParams): string {
   const params = typeof raw === "string" ? new URLSearchParams(raw.replace(/^\?/, "")) : raw;
-  return filtersToQuery(parseFilters(params), { page: 1, seit: undefined }).replace(/^\?/, "");
+  const filters = parseFilters(params);
+  const sorted = <T extends string>(values: readonly T[]) => [...new Set(values)].sort();
+  return filtersToQuery(
+    { ...filters, fuel: sorted(filters.fuel), body: sorted(filters.body), source: sorted(filters.source) },
+    { page: 1, seit: undefined },
+  ).replace(/^\?/, "");
 }
 
 const nf = (value: number) => formatNumber(value);
@@ -65,6 +73,14 @@ export const describeSort = (filters: SearchFilters) => (filters.sort === "newes
 export async function sourceNames(pool: Pool): Promise<Record<string, string>> {
   const { rows } = await pool.query<{ id: string; name: string }>("select id, name from sources");
   return Object.fromEntries(rows.map((row) => [row.id, row.name]));
+}
+
+/**
+ * New flip settings saved in this browser: the profile's saved searches count and report with
+ * them from now on, so a search opened from its card shows what its pushes report.
+ */
+export async function updateSearchSettings(pool: Pool, profileId: number, settings: FlipSettings): Promise<void> {
+  await pool.query("update saved_searches set flip_settings = $2 where profile_id = $1", [profileId, JSON.stringify(settings)]);
 }
 
 /**

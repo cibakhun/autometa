@@ -12,7 +12,7 @@ export default function SettingsPage({ searchParams }: PageProps<"/einstellungen
     <div className="mx-auto max-w-2xl">
       <h1 className="text-2xl font-bold">Flip-Einstellungen</h1>
       <p className="mt-2 text-sm text-muted">
-        Damit rechnen die Flip-Liste und der Flip-Rechner auf den Angebotsseiten. Die Werte werden nur in diesem Browser gespeichert.
+        Damit rechnen die Flip-Liste, der Flip-Rechner auf den Angebotsseiten und deine Suchaufträge. Die Werte werden in diesem Browser gespeichert.
       </p>
       <Suspense fallback={<div className="mt-6 h-96 animate-pulse rounded-xl bg-surface" />}>
         <SettingsForm searchParams={searchParams} />

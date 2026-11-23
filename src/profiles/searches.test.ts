@@ -12,6 +12,11 @@ describe("normalizeSearchQuery", () => {
     expect(normalizeSearchQuery("model=golf&make=volkswagen")).toBe(normalizeSearchQuery("make=volkswagen&model=golf"));
     expect(normalizeSearchQuery("")).toBe("");
   });
+
+  it("saves lists in one order, whatever order they were picked in", () => {
+    expect(normalizeSearchQuery("fuel=petrol&fuel=diesel&body=suv&body=estate")).toBe(normalizeSearchQuery("body=estate&body=suv&fuel=diesel&fuel=petrol"));
+    expect(normalizeSearchQuery("fuel=petrol")).not.toBe(normalizeSearchQuery("fuel=petrol&fuel=diesel"));
+  });
 });
 
 describe("describeSearch", () => {

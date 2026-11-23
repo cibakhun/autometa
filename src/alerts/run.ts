@@ -35,7 +35,7 @@ export interface AlertRunResult {
 export interface AlertOptions {
   send?: SendToSubscription;
   log?: (message: string) => void;
-  /** For tests: the moment that decides the night rest. Defaults to the database clock. */
+  /** For tests: the moment that decides the night rest. Defaults to the clock at each push. */
   now?: Date;
 }
 
@@ -48,8 +48,8 @@ export async function runAlerts(pool: Pool, options: AlertOptions = {}): Promise
   try {
     locked = (await client.query<{ ok: boolean }>("select pg_try_advisory_lock($1) as ok", [ALERT_LOCK_KEY])).rows[0].ok;
     if (!locked) return { ...result, skipped: true };
-    const now = options.now ?? (await client.query<{ now: Date }>("select now()")).rows[0].now;
-    const quiet = isQuietTime(now);
+    // Asked again before each push: a run that starts at 21:59 sends nothing after 22:00.
+    const quiet = () => isQuietTime(options.now ?? new Date());
 
     await client.query(`delete from saved_search_hits where alerted_at < now() - make_interval(hours => ${HITS_KEEP_HOURS})`);
     await client.query("delete from profile_link_codes where expires_at < now()");
@@ -67,18 +67,19 @@ export async function runAlerts(pool: Pool, options: AlertOptions = {}): Promise
 
 type Push = (profileId: number, payload: PushPayload) => Promise<number>;
 
-async function alertSearches(client: PoolClient, quiet: boolean, push: Push, result: AlertRunResult, log: (message: string) => void) {
+async function alertSearches(client: PoolClient, quiet: () => boolean, push: Push, result: AlertRunResult, log: (message: string) => void) {
   // Only profiles with a push device; the others see "neu" on their list of saved searches.
   const { rows: searches } = await client.query(
-    `select s.id, s.profile_id, s.name, s.query, s.flip_settings,
+    `select s.id, s.profile_id, s.name, s.query, s.flip_settings, p.quiet_nights,
             greatest(s.alerts_from, now() - make_interval(hours => ${LOOKBACK_HOURS})) as since
        from saved_searches s join profiles p on p.id = s.profile_id
       where s.notify and (not $1 or not p.quiet_nights)
         and exists (select 1 from push_subscriptions ps where ps.profile_id = s.profile_id)
       order by s.id`,
-    [quiet],
+    [quiet()],
   );
   for (const search of searches) {
+    if (search.quiet_nights && quiet()) continue;
     result.searchesChecked++;
     // One snapshot for the search and the marking, so a listing stored in between is neither
     // marked unreported nor reported twice.
@@ -118,7 +119,7 @@ async function alertSearches(client: PoolClient, quiet: boolean, push: Push, res
   }
 }
 
-async function alertFavorites(client: PoolClient, quiet: boolean, push: Push, result: AlertRunResult) {
+async function alertFavorites(client: PoolClient, quiet: () => boolean, push: Push, result: AlertRunResult) {
   const { rows } = await client.query(
     `select f.profile_id, f.listing_id, f.notified_price_eur, f.notified_gone, l.title, l.price_eur, l.status = 'gone' as gone,
             p.quiet_nights, exists (select 1 from push_subscriptions ps where ps.profile_id = f.profile_id) as has_push
@@ -146,19 +147,22 @@ async function alertFavorites(client: PoolClient, quiet: boolean, push: Push, re
         previousEur: row.notified_price_eur,
         gone: row.gone,
       }));
-    const canPush = list[0].has_push && !(quiet && list[0].quiet_nights);
+    const canPush = list[0].has_push && !(list[0].quiet_nights && quiet());
     if (changes.length > 0 && canPush) {
       if ((await push(profileId, favoritesAlert(changes))) === 0) continue;
       result.favoritePushes++;
     }
     // Without a push device, changes are only noted; at night, reportable ones wait for the morning.
     const keep = changes.length > 0 && !canPush && list[0].has_push ? new Set(changes.map((change) => change.listingId)) : new Set<number>();
-    const settle = list.filter((row) => !keep.has(Number(row.listing_id))).map((row) => Number(row.listing_id));
+    const settle = list.filter((row) => !keep.has(Number(row.listing_id)));
     if (settle.length === 0) continue;
+    // The state that was read (and reported), not the listing's state now: a price that drops
+    // again in between stays to be reported next time.
     await client.query(
-      `update favorites f set notified_price_eur = l.price_eur, notified_gone = l.status = 'gone'
-         from listings l where l.id = f.listing_id and f.profile_id = $1 and f.listing_id = any($2::int8[])`,
-      [profileId, settle],
+      `update favorites f set notified_price_eur = v.price_eur, notified_gone = v.gone
+         from unnest($2::int8[], $3::int[], $4::bool[]) as v(listing_id, price_eur, gone)
+        where f.profile_id = $1 and f.listing_id = v.listing_id`,
+      [profileId, settle.map((row) => Number(row.listing_id)), settle.map((row) => row.price_eur), settle.map((row) => row.gone)],
     );
   }
 }

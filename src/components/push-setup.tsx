@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { serialFetch } from "@/lib/serial-fetch";
 
 type State =
   | "checking"
@@ -24,7 +25,7 @@ async function register(): Promise<ServiceWorkerRegistration> {
 }
 
 const postSubscription = (subscription: PushSubscription) =>
-  fetch("/api/push", {
+  serialFetch("/api/push", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ subscription: subscription.toJSON() }),
@@ -49,7 +50,8 @@ export function PushSetup({ publicKey, otherDevices }: { publicKey: string; othe
       const registration = await register();
       const subscription = await registration.pushManager.getSubscription();
       // The server may not know it (yet): after joining another profile, for example.
-      if (subscription) await postSubscription(subscription);
+      // Best effort: offline or a server error must not hide the switch.
+      if (subscription) await postSubscription(subscription).catch(() => undefined);
       return { isIos, state: subscription && Notification.permission === "granted" ? ("on" as const) : ("off" as const) };
     }
     check()
@@ -95,14 +97,17 @@ export function PushSetup({ publicKey, otherDevices }: { publicKey: string; othe
       const registration = await navigator.serviceWorker.ready;
       const subscription = await registration.pushManager.getSubscription();
       if (subscription) {
-        await fetch("/api/push", {
+        const response = await fetch("/api/push", {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ endpoint: subscription.endpoint }),
         });
+        if (!response.ok) throw new Error("Der Server hat das Abo nicht entfernt.");
         await subscription.unsubscribe();
       }
       setState("off");
+    } catch (reason) {
+      setMessage(`Hat nicht geklappt: ${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
       setBusy(false);
     }
@@ -113,9 +118,11 @@ export function PushSetup({ publicKey, otherDevices }: { publicKey: string; othe
     setMessage(null);
     try {
       const response = await fetch("/api/push/test", { method: "POST" });
-      const data = (await response.json()) as { sent: number; failed: number };
+      const data = (await response.json()) as { sent: number; failed: number; error?: string };
       setMessage(
-        data.sent > 0
+        data.error
+          ? data.error
+          : data.sent > 0
           ? `Gesendet an ${data.sent} ${data.sent === 1 ? "Gerät" : "Geräte"}${data.failed > 0 ? `, ${data.failed} nicht erreicht` : ""}. Kommt nichts an, prüfe die Mitteilungs-Einstellungen des Geräts.`
           : "Kein Gerät erreicht. Schalte die Benachrichtigungen aus und wieder ein.",
       );

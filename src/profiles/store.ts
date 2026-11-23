@@ -172,6 +172,10 @@ export async function joinWithCode(
 
 async function moveDevice(client: PoolClient, device: Device, target: number) {
   const source = device.profileId;
+  // Two devices of one profile joining at once: the second waits here and then sees the first gone,
+  // so the lists move with the last device instead of staying behind on a profile nobody uses.
+  // (No key update: inserts referencing the profile elsewhere do not wait on it.)
+  await client.query("select id from profiles where id = $1 for no key update", [source]);
   const { rows } = await client.query<{ others: number }>(
     "select count(*)::int as others from profile_devices where profile_id = $1 and id <> $2",
     [source, device.deviceId],

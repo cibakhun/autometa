@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { serialFetch } from "@/lib/serial-fetch";
 
 /**
  * The heart on a listing: puts it on the watch list ("Merkliste") or takes it off. The first
@@ -27,7 +28,7 @@ export function FavoriteButton({
     setError(null);
     setSaved(next);
     try {
-      const response = await fetch("/api/merkliste", {
+      const response = await serialFetch("/api/merkliste", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ listingId, saved: next }),

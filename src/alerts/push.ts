@@ -51,13 +51,35 @@ export async function getVapidKeys(db: Db): Promise<VapidKeys> {
 /** Contact the push services may use; any https URL or mailto: address. */
 const subject = () => process.env.VAPID_SUBJECT?.trim() || "https://autometa.milasstho.de";
 
-/** Push services only accept https endpoints; anything else is not a real subscription. */
-export function parseSubscription(value: unknown): BrowserSubscription | null {
+/**
+ * The push services of the browsers: Chrome, Edge on Android, Opera, Samsung (Google FCM), Firefox
+ * (Mozilla), Safari (Apple), Edge on Windows (WNS). The server sends to a subscription's endpoint,
+ * so only these hosts are accepted; otherwise anyone could make it send requests to any address.
+ */
+export const PUSH_SERVICE_HOSTS = [
+  "fcm.googleapis.com",
+  "android.googleapis.com",
+  "updates.push.services.mozilla.com",
+  ".push.services.mozilla.com",
+  ".push.apple.com",
+  ".notify.windows.com",
+];
+
+/** Whether a host is one of the hosts, or (for an entry starting with ".") below it. */
+export function isPushServiceHost(host: string, hosts: readonly string[] = PUSH_SERVICE_HOSTS): boolean {
+  const name = host.toLowerCase();
+  return hosts.some((entry) => (entry.startsWith(".") ? name.endsWith(entry) && name.length > entry.length : name === entry));
+}
+
+/** A subscription as the browser sends it, with an https endpoint on a known push service; null otherwise. */
+export function parseSubscription(value: unknown, hosts: readonly string[] = PUSH_SERVICE_HOSTS): BrowserSubscription | null {
   if (!value || typeof value !== "object") return null;
   const { endpoint, keys } = value as { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } };
   if (typeof endpoint !== "string" || endpoint.length > 1000) return null;
   try {
-    if (new URL(endpoint).protocol !== "https:") return null;
+    const url = new URL(endpoint);
+    if (url.protocol !== "https:" || url.username || url.password || url.port) return null;
+    if (!isPushServiceHost(url.hostname, hosts)) return null;
   } catch {
     return null;
   }

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { serialFetch } from "@/lib/serial-fetch";
 
 /**
  * "Suche speichern" above the results: keeps the current filters as a saved search. Pushes for
@@ -16,7 +17,7 @@ export function SaveSearchButton({ query, saved }: { query: string; saved: { id:
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch("/api/suchauftraege", {
+      const response = await serialFetch("/api/suchauftraege", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query }),

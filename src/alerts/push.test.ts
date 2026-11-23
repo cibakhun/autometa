@@ -1,7 +1,7 @@
 import { createDecipheriv, createECDH, hkdfSync, randomBytes, type ECDH } from "node:crypto";
 import webpush from "web-push";
 import { describe, expect, it } from "vitest";
-import { parseSubscription, pushOptions } from "./push";
+import { isPushServiceHost, parseSubscription, pushOptions } from "./push";
 
 describe("parseSubscription", () => {
   const keys = { p256dh: "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM", auth: "tBHItJI5svbpez7KI4CCXg" };
@@ -19,6 +19,36 @@ describe("parseSubscription", () => {
     expect(parseSubscription({ endpoint: "not a url", keys })).toBeNull();
     expect(parseSubscription({ endpoint: "https://push.example/x", keys: { p256dh: "a b", auth: "x" } })).toBeNull();
     expect(parseSubscription({ endpoint: "https://push.example/x" })).toBeNull();
+  });
+
+  it("only takes endpoints of the browsers' push services", () => {
+    for (const endpoint of [
+      "https://updates.push.services.mozilla.com/wpush/v2/gAAAA",
+      "https://web.push.apple.com/QGuQyavXutnMH",
+      "https://wns2-par02p.notify.windows.com/w/?token=BQYAAA",
+    ]) {
+      expect(parseSubscription({ endpoint, keys })?.endpoint).toBe(endpoint);
+    }
+    for (const endpoint of [
+      "https://push.example/x",
+      "https://localhost/push",
+      "https://10.0.0.5/push",
+      "https://fcm.googleapis.com.evil.example/x",
+      "https://evilpush.apple.com.example/x",
+      "https://fcm.googleapis.com:8443/fcm/send/abc",
+      "https://user:pw@fcm.googleapis.com/fcm/send/abc",
+    ]) {
+      expect(parseSubscription({ endpoint, keys })).toBeNull();
+    }
+    expect(parseSubscription({ endpoint: "https://push.example/x", keys }, ["push.example"])?.endpoint).toBe("https://push.example/x");
+  });
+
+  it("matches push service hosts exactly or below a domain", () => {
+    expect(isPushServiceHost("FCM.googleapis.com")).toBe(true);
+    expect(isPushServiceHost("web.push.apple.com")).toBe(true);
+    expect(isPushServiceHost("push.apple.com")).toBe(false);
+    expect(isPushServiceHost("xpush.apple.com")).toBe(false);
+    expect(isPushServiceHost("googleapis.com")).toBe(false);
   });
 });
 
