@@ -188,16 +188,19 @@ export function buildWhere(
     const since = params.add(filters.seit);
     where.push(`((l.first_seen_at > ${since}::timestamptz
        and (l.cluster_id is null or not exists (
-         select 1 from listings d where d.cluster_id = l.cluster_id and d.first_seen_at <= ${since}::timestamptz)))
+         select 1 from listings d
+          where d.cluster_id is not null and d.cluster_id = l.cluster_id and d.first_seen_at <= ${since}::timestamptz)))
      or l.price_dropped_at > ${since}::timestamptz)`);
   }
   if (options.notAlertedBy !== undefined) {
     const search = params.add(options.notAlertedBy);
+    const after = "coalesce(l.price_dropped_at, '-infinity'::timestamptz)";
+    // Two lookups instead of one with "or", so each can use an index (hits by key, cluster members).
     where.push(`not exists (
-      select 1 from saved_search_hits h join listings d on d.id = h.listing_id
-       where h.search_id = ${search}
-         and (d.id = l.id or (l.cluster_id is not null and d.cluster_id = l.cluster_id))
-         and h.alerted_at > coalesce(l.price_dropped_at, '-infinity'::timestamptz))`);
+      select 1 from saved_search_hits h where h.search_id = ${search} and h.listing_id = l.id and h.alerted_at > ${after})`);
+    where.push(`(l.cluster_id is null or not exists (
+      select 1 from listings d join saved_search_hits h on h.search_id = ${search} and h.listing_id = d.id
+       where d.cluster_id is not null and d.cluster_id = l.cluster_id and h.alerted_at > ${after}))`);
   }
 
   let distance: string | null = null;
