@@ -18,3 +18,6 @@ cmd = "npm run start"
 [variables]
 SCRAPE_SOURCES = "autoscout24,kleinanzeigen,quoka,autohero,autode"
 SCRAPE_RESPECT_ROBOTS = "true"
+# Shortest pause between two requests to one portal. Only AutoScout24 paces itself down to it
+# (its daily sweep of ~740,000 listings needs about 1 s); the other sources keep their own 3-5 s.
+SCRAPE_MIN_DELAY_MS = "1000"
