@@ -6,6 +6,7 @@ import { refreshDefectProfiles } from "@/ingest/defects/refresh";
 import { intervalMinutes, readBoolean, readList, runMinutes } from "@/ingest/http/config";
 import { ingestSources } from "@/ingest/pipeline";
 import { updateRepairEstimates } from "@/ingest/repairs";
+import { runAlerts } from "@/alerts/run";
 
 /**
  * Background import: runs the sources in SCRAPE_SOURCES (e.g. "autoscout24,kleinanzeigen") right
@@ -19,6 +20,9 @@ import { updateRepairEstimates } from "@/ingest/repairs";
  * Next to it, unless RDW_PROFILES is false, the defect profiles per model are built from RDW open
  * data (src/ingest/defects): a run of at most RDW_MAX_REQUESTS queries, then the next one an hour
  * later while profiles are still due, else a day later.
+ *
+ * And every ALERT_INTERVAL_MINUTES (default 5) the alert job pushes what saved searches found and
+ * what changed on watch lists (src/alerts/run.ts); ALERTS=false switches it off.
  */
 
 const log = (message: string) => console.log(`[worker] ${new Date().toISOString()} ${message}`);
@@ -36,9 +40,11 @@ async function main() {
   const intervalMs = intervalMinutes() * 60_000;
   // Fails here, before the first round, when the run time does not fit the interval.
   const fetchMinutes = runMinutes();
+  const alertMs = alertIntervalMs();
   // Each source holds one connection for its whole run; the defect refresh and the repair
-  // estimates need one each besides, plus one to spare. Otherwise they wait for a source to end.
-  process.env.DATABASE_POOL_MAX ??= String(sources.length + 3);
+  // estimates need one each besides, the alert job two, plus one to spare. Otherwise they wait
+  // for a source to end.
+  process.env.DATABASE_POOL_MAX ??= String(sources.length + 5);
   const pool = getPool();
   let stopping = false;
   const stop = () => {
@@ -50,6 +56,7 @@ async function main() {
 
   log(`importing ${sources.join(", ")} every ${intervalMs / 60_000} minutes, fetching up to ${fetchMinutes} minutes each`);
   const defects = readBoolean("RDW_PROFILES", true) ? defectLoop(pool, () => stopping) : Promise.resolve();
+  const alerts = readBoolean("ALERTS", true) ? alertLoop(pool, alertMs, () => stopping) : Promise.resolve();
   while (!stopping) {
     const started = Date.now();
     try {
@@ -62,7 +69,7 @@ async function main() {
     log(`next round in ${Math.round(wait / 60_000)} minutes`);
     await pause(wait);
   }
-  await defects;
+  await Promise.all([defects, alerts]);
   await pool.end();
 }
 
@@ -97,6 +104,29 @@ async function defectLoop(pool: Pool, stopping: () => boolean) {
     if (stopping()) break;
     log(`defects: next run in ${Math.round(wait / HOUR)} h`);
     await pause(wait);
+  }
+}
+
+/** Minutes between two alert runs, 1 to 60 (default 5). */
+function alertIntervalMs(): number {
+  const raw = Number(process.env.ALERT_INTERVAL_MINUTES ?? 5);
+  if (!Number.isFinite(raw) || raw < 1 || raw > 60) throw new Error("ALERT_INTERVAL_MINUTES must be between 1 and 60");
+  return raw * 60_000;
+}
+
+async function alertLoop(pool: Pool, interval: number, stopping: () => boolean) {
+  while (!stopping()) {
+    const started = Date.now();
+    try {
+      const result = await runAlerts(pool, { log: (message) => log(message) });
+      if (result.searchPushes > 0 || result.favoritePushes > 0) {
+        log(`alerts: ${result.searchPushes} search pushes (${result.vehicles} vehicles), ${result.favoritePushes} watch list pushes`);
+      }
+    } catch (error) {
+      log(`alerts: run failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+    }
+    if (stopping()) break;
+    await pause(Math.max(0, started + interval - Date.now()));
   }
 }
 

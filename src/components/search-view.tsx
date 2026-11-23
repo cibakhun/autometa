@@ -1,21 +1,32 @@
 import Link from "next/link";
 import { getPool } from "@/lib/db";
 import { getFlipSettings } from "@/lib/flip-settings";
-import { formatNumber } from "@/lib/format";
+import { formatDayTime, formatNumber } from "@/lib/format";
+import { currentDevice } from "@/lib/profile";
+import { favoriteIds } from "@/profiles/favorites";
+import { findSavedSearch, normalizeSearchQuery } from "@/profiles/searches";
 import { filtersToQuery, parseFilters, SORT_LABELS, type SearchFilters } from "@/search/filters";
 import { getMakeFacets, getSourceFacets, resolveZip, searchListings, type Origin, type SearchResult } from "@/search/query";
 import { FilterForm } from "./filter-form";
 import { ResultCard } from "./result-card";
+import { SaveSearchButton } from "./save-search-button";
 
 export async function SearchView({ searchParams }: { searchParams: PageProps<"/">["searchParams"] }) {
-  const [filters, settings] = await Promise.all([searchParams.then(parseFilters), getFlipSettings()]);
+  const [filters, settings, device] = await Promise.all([searchParams.then(parseFilters), getFlipSettings(), currentDevice()]);
   const pool = getPool();
   const origin = filters.zip ? await resolveZip(pool, filters.zip) : null;
-  const [facets, sources, result] = await Promise.all([
+  const savedQuery = normalizeSearchQuery(filtersToQuery(filters));
+  const [facets, sources, result, saved] = await Promise.all([
     getMakeFacets(pool),
     getSourceFacets(pool),
     searchListings(pool, filters, origin, settings),
+    findSavedSearch(pool, device?.profileId ?? null, savedQuery),
   ]);
+  const favorites = await favoriteIds(
+    pool,
+    device?.profileId ?? null,
+    result.items.map((item) => item.id),
+  );
 
   return (
     <div className="grid gap-6 md:grid-cols-[18rem_1fr]">
@@ -23,7 +34,8 @@ export async function SearchView({ searchParams }: { searchParams: PageProps<"/"
         <FilterForm key={filtersToQuery(filters, { page: 1 })} facets={facets} sources={sources} filters={filters} />
       </aside>
       <section aria-label="Suchergebnisse" className="min-w-0">
-        <ResultHeader result={result} filters={filters} origin={origin} />
+        <ResultHeader result={result} filters={filters} origin={origin} savedQuery={savedQuery} saved={saved} />
+        {filters.seit && <NewSinceNotice filters={filters} />}
         {result.items.length === 0 ? (
           <div className="rounded-xl border border-line bg-surface p-8 text-center">
             <p className="font-medium">Keine Fahrzeuge gefunden.</p>
@@ -33,7 +45,7 @@ export async function SearchView({ searchParams }: { searchParams: PageProps<"/"
           <ul className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
             {result.items.map((item) => (
               <li key={item.id}>
-                <ResultCard listing={item} minMarginEur={settings.minMarginEur} />
+                <ResultCard listing={item} minMarginEur={settings.minMarginEur} favorite={favorites.has(item.id)} newSince={filters.seit} />
               </li>
             ))}
           </ul>
@@ -44,13 +56,27 @@ export async function SearchView({ searchParams }: { searchParams: PageProps<"/"
   );
 }
 
-function ResultHeader({ result, filters, origin }: { result: SearchResult; filters: SearchFilters; origin: Origin | null }) {
+function ResultHeader({
+  result,
+  filters,
+  origin,
+  savedQuery,
+  saved,
+}: {
+  result: SearchResult;
+  filters: SearchFilters;
+  origin: Origin | null;
+  savedQuery: string;
+  saved: { id: number; name: string } | null;
+}) {
   return (
-    <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
       <h1 className="text-lg font-semibold">
         {formatNumber(result.total)} {result.total === 1 ? "Fahrzeug" : "Fahrzeuge"}
+        {filters.seit && <span className="font-normal text-muted"> neu oder günstiger</span>}
       </h1>
-      <p className="text-sm text-muted">
+      <SaveSearchButton key={savedQuery} query={savedQuery} saved={saved} />
+      <p className="w-full text-sm text-muted">
         {SORT_LABELS[filters.sort]}
         {filters.zip && origin && (
           <>
@@ -61,6 +87,18 @@ function ResultHeader({ result, filters, origin }: { result: SearchResult; filte
         {filters.zip && !origin && <> · PLZ {filters.zip} unbekannt, Umkreis ignoriert</>}
       </p>
     </div>
+  );
+}
+
+/** Above the results of "only new since …" (opened from a saved search or a push). */
+function NewSinceNotice({ filters }: { filters: SearchFilters }) {
+  return (
+    <p className="mb-4 rounded-md border border-line bg-accent-soft px-3 py-2 text-sm text-accent-strong">
+      Nur Fahrzeuge, die seit {formatDayTime(filters.seit!)} neu dazukamen oder günstiger wurden.{" "}
+      <Link href={`/${filtersToQuery(filters, { seit: undefined, page: 1 })}`} className="font-medium underline">
+        Alle Treffer dieser Suche
+      </Link>
+    </p>
   );
 }
 

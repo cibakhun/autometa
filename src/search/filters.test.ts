@@ -31,6 +31,14 @@ describe("parseFilters", () => {
     expect(parseFilters({ schwierigkeit: "6", margeMin: "viel" })).toMatchObject({ schwierigkeit: undefined, margeMin: undefined });
   });
 
+  it("reads 'seit' as a point in time, normalized to UTC", () => {
+    expect(parseFilters({ seit: "2026-11-22T14:00:00.000Z" }).seit).toBe("2026-11-22T14:00:00.000Z");
+    expect(parseFilters({ seit: "2026-11-22T15:00:00+01:00" }).seit).toBe("2026-11-22T14:00:00.000Z");
+    expect(parseFilters({ seit: "gestern" }).seit).toBeUndefined();
+    expect(parseFilters({ seit: "2026-13-45T99:00:00Z" }).seit).toBeUndefined();
+    expect(filtersToQuery(parseFilters({ make: "bmw", seit: "2026-11-22T14:00:00Z" }))).toBe("?make=bmw&seit=2026-11-22T14%3A00%3A00.000Z");
+  });
+
   it("accepts only the offered HU/TÜV choices", () => {
     expect(parseFilters({ hu: "neu" }).hu).toBe("neu");
     expect(parseFilters({ hu: "12" }).hu).toBe("12");
