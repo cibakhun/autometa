@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { boundingBox, distanceSql } from "@/core/geo";
 import type { DamageKind } from "@/core/damage";
 import { calculateFlip, DEFAULT_FLIP_SETTINGS, type FlipResult, type FlipSettings } from "@/core/flip";
@@ -57,6 +57,11 @@ export interface ListingSummary {
   flip: FlipResult | null;
   /** When the listing was last seen in a list or confirmed on its own page (ISO timestamp). */
   checkedAt: string;
+  /** When AutoMeta first saw the listing (ISO timestamp). */
+  firstSeenAt: string;
+  /** When the price last went down, and what it was before; null when it did not or went up again. */
+  priceDroppedAt: string | null;
+  priceBeforeDropEur: number | null;
 }
 
 export interface RepairSummary {
@@ -140,7 +145,18 @@ const ORDER_BY: Record<Exclude<Sort, "flip" | "margin">, string> = {
 const escapeLike = (value: string) => value.replace(/[\\%_]/g, (char) => `\\${char}`);
 
 /** Builds the WHERE clause; returns the SQL and, when a radius applies, the distance expression. */
-export function buildWhere(filters: SearchFilters, origin: Origin | null, params: Params, settings = DEFAULT_FLIP_SETTINGS) {
+export interface WhereOptions {
+  /** Leave out vehicles this saved search already reported (in a push), unless cheaper since. */
+  notAlertedBy?: number;
+}
+
+export function buildWhere(
+  filters: SearchFilters,
+  origin: Origin | null,
+  params: Params,
+  settings = DEFAULT_FLIP_SETTINGS,
+  options: WhereOptions = {},
+) {
   const where = ["l.status = 'active'", "l.source_id in (select id from sources where active)"];
   const add = (sql: (p: (value: unknown) => string) => string) => where.push(sql((value) => params.add(value)));
 
@@ -167,6 +183,22 @@ export function buildWhere(filters: SearchFilters, origin: Origin | null, params
   }
   if (filters.source.length > 0) add((p) => `l.source_id = any(${p(filters.source)}::text[])`);
   if (filters.q) add((p) => `l.title ilike ${p(`%${escapeLike(filters.q!)}%`)}`);
+  if (filters.seit) {
+    // New: first seen after that moment, and no portal had the same vehicle before. Or cheaper since.
+    const since = params.add(filters.seit);
+    where.push(`((l.first_seen_at > ${since}::timestamptz
+       and (l.cluster_id is null or not exists (
+         select 1 from listings d where d.cluster_id = l.cluster_id and d.first_seen_at <= ${since}::timestamptz)))
+     or l.price_dropped_at > ${since}::timestamptz)`);
+  }
+  if (options.notAlertedBy !== undefined) {
+    const search = params.add(options.notAlertedBy);
+    where.push(`not exists (
+      select 1 from saved_search_hits h join listings d on d.id = h.listing_id
+       where h.search_id = ${search}
+         and (d.id = l.id or (l.cluster_id is not null and d.cluster_id = l.cluster_id))
+         and h.alerted_at > coalesce(l.price_dropped_at, '-infinity'::timestamptz))`);
+  }
 
   let distance: string | null = null;
   if (origin) {
@@ -183,17 +215,41 @@ export function buildWhere(filters: SearchFilters, origin: Origin | null, params
   return { where: where.join("\n  and "), distance };
 }
 
+/**
+ * The columns summaryFromRow reads, for a query over listings "l" joined with sources "s".
+ * distanceKm is an SQL expression for the distance to the search origin.
+ */
+export function summaryColumns(distanceKm = "null::float8") {
+  return `l.id, l.title, l.make_slug, l.model_slug, l.price_eur, l.mileage_km,
+           to_char(l.first_registration, 'YYYY-MM-DD') as first_registration,
+           l.fuel, l.transmission, l.power_kw, l.body_type, l.seller_type, l.zip, l.city, l.cluster_id,
+           to_char(l.hu_until, 'YYYY-MM-DD') as hu_until, l.hu_basis,
+           l.damage, l.market_price_eur, l.market_comps,
+           l.vehicle_class, l.repair_parts_min_eur, l.repair_parts_max_eur, l.repair_hours_min, l.repair_hours_max,
+           l.repair_difficulty, l.repair_confidence, l.repair_needs_tow,
+           l.repair_risk_hidden_eur, l.repair_risk_unclear_eur, l.last_seen_at,
+           l.first_seen_at, l.price_dropped_at, l.price_before_drop_eur,
+           s.id as source_id, s.name as source_name,
+           -- The cheapest listing of a duplicate group may come without a photo; another may have one.
+           coalesce(l.image_url, (select d.image_url from listings d
+                                   where l.cluster_id is not null and d.cluster_id = l.cluster_id
+                                     and d.status = 'active' and d.image_url is not null
+                                   order by d.price_eur, d.id limit 1)) as image_url,
+           ${distanceKm} as distance_km`;
+}
+
 /** The listing a group of duplicates is shown with: the cheapest one that matches the filters. */
 const GROUP = "coalesce(l.cluster_id, l.id)";
 
 export async function searchListings(
-  pool: Pool,
+  pool: Pool | PoolClient,
   filters: SearchFilters,
   origin: Origin | null,
   settings: FlipSettings = DEFAULT_FLIP_SETTINGS,
+  options: WhereOptions = {},
 ): Promise<SearchResult> {
   const params = new Params();
-  const { where, distance } = buildWhere(filters, origin, params, settings);
+  const { where, distance } = buildWhere(filters, origin, params, settings, options);
   // The count query takes only the filter parameters; Postgres rejects parameters a query does not use.
   const whereParams = params.values.slice();
   const sort: Sort = filters.sort === "distance" && !distance ? "newest" : filters.sort;
@@ -209,21 +265,7 @@ export async function searchListings(
   // A vehicle listed on several portals counts once.
   const countSql = `select count(distinct ${GROUP})::int as total from listings l where ${where}`;
   const itemsSql = `
-    select l.id, l.title, l.make_slug, l.model_slug, l.price_eur, l.mileage_km,
-           to_char(l.first_registration, 'YYYY-MM-DD') as first_registration,
-           l.fuel, l.transmission, l.power_kw, l.body_type, l.seller_type, l.zip, l.city, l.cluster_id,
-           to_char(l.hu_until, 'YYYY-MM-DD') as hu_until, l.hu_basis,
-           l.damage, l.market_price_eur, l.market_comps,
-           l.vehicle_class, l.repair_parts_min_eur, l.repair_parts_max_eur, l.repair_hours_min, l.repair_hours_max,
-           l.repair_difficulty, l.repair_confidence, l.repair_needs_tow,
-           l.repair_risk_hidden_eur, l.repair_risk_unclear_eur, l.last_seen_at,
-           s.id as source_id, s.name as source_name,
-           -- The cheapest listing of a duplicate group may come without a photo; another may have one.
-           coalesce(l.image_url, (select d.image_url from listings d
-                                   where l.cluster_id is not null and d.cluster_id = l.cluster_id
-                                     and d.status = 'active' and d.image_url is not null
-                                   order by d.price_eur, d.id limit 1)) as image_url,
-           ${distance ? `round(${distance}::numeric, 1)::float8` : "null::float8"} as distance_km
+    select ${summaryColumns(distance ? `round(${distance}::numeric, 1)::float8` : "null::float8")}
       from (
         select l.*, row_number() over (partition by ${GROUP} order by l.price_eur asc, l.id asc) as group_rank
           from listings l
@@ -249,44 +291,67 @@ export async function searchListings(
     page: filters.page,
     pageSize: PAGE_SIZE,
     pageCount: Math.max(1, Math.ceil(total / PAGE_SIZE)),
-    items: items.rows.map((row) => {
-      const id = Number(row.id);
-      const repair = repairFromRow(row);
-      return {
-        id,
-        title: row.title,
-        makeSlug: row.make_slug,
-        modelSlug: row.model_slug,
-        priceEur: row.price_eur,
-        mileageKm: row.mileage_km,
-        firstRegistration: row.first_registration,
-        fuel: row.fuel,
-        transmission: row.transmission,
-        powerKw: row.power_kw,
-        bodyType: row.body_type,
-        sellerType: row.seller_type,
-        zip: row.zip,
-        city: row.city,
-        sourceId: row.source_id,
-        sourceName: row.source_name,
-        distanceKm: row.distance_km,
-        otherOffers: (offers.get(Number(row.cluster_id)) ?? []).filter((offer) => offer.id !== id),
-        imageUrl: row.image_url,
-        huUntil: row.hu_until,
-        huBasis: row.hu_basis,
-        damage: row.damage ?? [],
-        marketPriceEur: row.market_price_eur,
-        marketComps: row.market_comps,
-        repair,
-        flip: flipFromRow(row.price_eur, row.market_price_eur, repair, settings),
-        checkedAt: new Date(row.last_seen_at).toISOString(),
-      };
-    }),
+    items: items.rows.map((row) => summaryFromRow(row, offers, settings)),
   };
 }
 
+/** A search row (columns as in searchListings) as a ListingSummary. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- a pg row
+export function summaryFromRow(row: Record<string, any>, offers: Map<number, Offer[]>, settings: FlipSettings): ListingSummary {
+  const id = Number(row.id);
+  const repair = repairFromRow(row);
+  return {
+    id,
+    title: row.title,
+    makeSlug: row.make_slug,
+    modelSlug: row.model_slug,
+    priceEur: row.price_eur,
+    mileageKm: row.mileage_km,
+    firstRegistration: row.first_registration,
+    fuel: row.fuel,
+    transmission: row.transmission,
+    powerKw: row.power_kw,
+    bodyType: row.body_type,
+    sellerType: row.seller_type,
+    zip: row.zip,
+    city: row.city,
+    sourceId: row.source_id,
+    sourceName: row.source_name,
+    distanceKm: row.distance_km,
+    otherOffers: (offers.get(Number(row.cluster_id)) ?? []).filter((offer) => offer.id !== id),
+    imageUrl: row.image_url,
+    huUntil: row.hu_until,
+    huBasis: row.hu_basis,
+    damage: row.damage ?? [],
+    marketPriceEur: row.market_price_eur,
+    marketComps: row.market_comps,
+    repair,
+    flip: flipFromRow(row.price_eur, row.market_price_eur, repair, settings),
+    checkedAt: new Date(row.last_seen_at).toISOString(),
+    firstSeenAt: new Date(row.first_seen_at).toISOString(),
+    priceDroppedAt: row.price_dropped_at ? new Date(row.price_dropped_at).toISOString() : null,
+    priceBeforeDropEur: row.price_before_drop_eur ?? null,
+  };
+}
+
+/** How many vehicles match, each duplicate group once; the count searchListings reports as total. */
+export async function countListings(
+  pool: Pool | PoolClient,
+  filters: SearchFilters,
+  origin: Origin | null,
+  settings: FlipSettings = DEFAULT_FLIP_SETTINGS,
+): Promise<number> {
+  const params = new Params();
+  const { where } = buildWhere(filters, origin, params, settings);
+  const { rows } = await pool.query<{ total: number }>(
+    `select count(distinct ${GROUP})::int as total from listings l where ${where}`,
+    params.values,
+  );
+  return rows[0]?.total ?? 0;
+}
+
 /** Active listings of the given duplicate groups, cheapest first, by cluster id. */
-async function getOffers(pool: Pool, clusterIds: number[]): Promise<Map<number, Offer[]>> {
+export async function getOffers(pool: Pool | PoolClient, clusterIds: number[]): Promise<Map<number, Offer[]>> {
   const offers = new Map<number, Offer[]>();
   if (clusterIds.length === 0) return offers;
   const { rows } = await pool.query(
@@ -305,7 +370,7 @@ async function getOffers(pool: Pool, clusterIds: number[]): Promise<Map<number, 
 }
 
 /** Exact postal code, or the numerically closest known one in the same region (first two digits). */
-export async function resolveZip(pool: Pool, zip: string): Promise<Origin | null> {
+export async function resolveZip(pool: Pool | PoolClient, zip: string): Promise<Origin | null> {
   const exact = await pool.query("select zip, city, lat, lng from postal_codes where zip = $1", [zip]);
   if (exact.rows[0]) return { ...exact.rows[0], exact: true };
   const near = await pool.query(
@@ -485,6 +550,8 @@ export async function getListing(pool: Pool, id: number, settings = DEFAULT_FLIP
     firstSeenAt: new Date(row.first_seen_at).toISOString(),
     lastSeenAt: new Date(row.last_seen_at).toISOString(),
     checkedAt: new Date(row.last_seen_at).toISOString(),
+    priceDroppedAt: row.price_dropped_at ? new Date(row.price_dropped_at).toISOString() : null,
+    priceBeforeDropEur: row.price_before_drop_eur ?? null,
   };
 }
 

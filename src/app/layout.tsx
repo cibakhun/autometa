@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
 import { DataNotice } from "@/components/data-notice";
@@ -7,7 +7,11 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "AutoMeta – Gebrauchtwagen aus allen Börsen",
   description: "Einmal suchen, Angebote aus vielen Fahrzeugbörsen vergleichen und direkt zur Originalanzeige springen.",
+  // Added to an iPhone's home screen, AutoMeta opens like an app and can receive pushes.
+  appleWebApp: { capable: true, title: "AutoMeta", statusBarStyle: "default" },
 };
+
+export const viewport: Viewport = { themeColor: "#1d5bd8" };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
@@ -19,11 +23,17 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
               Auto<span className="text-accent">Meta</span>
             </Link>
             <span className="hidden text-sm text-muted lg:inline">Alle Gebrauchtwagen-Börsen, eine Suche</span>
-            <nav aria-label="Flippen" className="ml-auto flex flex-wrap gap-x-4 gap-y-1 text-sm">
+            <nav aria-label="Hauptmenü" className="ml-auto flex flex-wrap gap-x-4 gap-y-1 text-sm">
               {/* A route handler that redirects to the search with the visitor's settings, so a plain link. */}
               <a href="/flip" className="font-medium text-accent hover:underline">
                 Flip-Liste
               </a>
+              <Link href="/suchauftraege" className="hover:text-accent">
+                Suchaufträge
+              </Link>
+              <Link href="/merkliste" className="hover:text-accent">
+                Merkliste
+              </Link>
               <Link href="/reparaturen" className="hover:text-accent">
                 Reparaturkatalog
               </Link>
