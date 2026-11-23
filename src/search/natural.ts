@@ -467,9 +467,11 @@ export async function parseNaturalSearch(input: string, findPlace: PlaceLookup |
   );
 
   // Postal code: "PLZ 80331", "in 80331", "um 10115"
-  text.scan(`${B0}(?:(${alt("plz", "postleitzahl", "in", "bei", "um", "nahe", "nähe", "raum", "umgebung", "aus", "rund um", "nähe von", "im raum")})\\s+)?(\\d{5})(?![\\d.,]\\d)${B1}(?!\\s*(?:${EUR}|km|kilometer|ps|kw|k${B1}|tsd|(?:-|bis|und)\\s*\\d))`, (m) => {
+  text.scan(`${B0}(?:(${alt("plz", "postleitzahl", "in", "bei", "um", "nahe", "nähe", "raum", "umgebung", "aus", "rund um", "nähe von", "im raum")})\\s+)?(\\d{5})(?![\\d.,]\\d)${B1}(?!\\s*(?:${EUR}|km|kilometer|ps|kw|k${B1}|tsd))`, (m) => {
     const before = text.norm.slice(0, m.index).trimEnd();
     if (!m[1] && new RegExp(`(?:${MAXQ}|${MINQ}|${APPROXQ})\\.?$`).test(before)) return false;
+    // A bare number that starts a range ("10000-15000 €") is a price; "PLZ 80331 bis 8.000 €" keeps its postal code.
+    if (!m[1] && /^\s*(?:-|bis|und)\s*\d/.test(text.norm.slice(m.index + m[0].length))) return false;
     q.zip = m[2];
     q.radius ??= 50;
     return understood(m, `PLZ ${m[2]}`);
@@ -763,7 +765,7 @@ function finish(draft: Draft, year: number): NaturalQuery {
   q.fuel = draft.fuel.size > 0 ? [...draft.fuel] : draft.fuelOut.size > 0 ? FUELS.filter((f) => !draft.fuelOut.has(f) && f !== "other") : [];
   const familyBodies: BodyType[] = ["estate", "van", "suv"];
   if (draft.body.size > 0) q.body = [...draft.body];
-  else if (draft.family) q.body = familyBodies.filter((b) => !draft.bodyOut.has(b));
+  else if (draft.family && familyBodies.some((b) => !draft.bodyOut.has(b))) q.body = familyBodies.filter((b) => !draft.bodyOut.has(b));
   else if (draft.bodyOut.size > 0) q.body = BODY_TYPES.filter((b) => !draft.bodyOut.has(b));
   if (draft.q.length > 0) q.q = draft.q.join(" ");
   if (draft.flip) q.zustand = "defekt";

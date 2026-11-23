@@ -173,6 +173,13 @@ describe("parseNaturalSearch", () => {
     expect(upkeep.ignored.map((item) => item.text)).toEqual(["günstig im Unterhalt"]);
     expect(await query("ab 150 Pferdestärken")).toMatchObject({ psMin: 150 });
     expect(await query("Golf 8.000 €")).toMatchObject({ model: "golf", priceMax: 8000 });
+    expect(await query("VW Golf 8.000 €")).toMatchObject({ make: "volkswagen", model: "golf", priceMax: 8000 });
+    expect((await query("VW Golf 7 Diesel")).priceMax).toBeUndefined();
+    expect(await query("PLZ 80331 bis 8.000 €")).toMatchObject({ zip: "80331", priceMax: 8000 });
+    expect((await query("PLZ 80331 bis 8.000 €")).priceMin).toBeUndefined();
+    expect(await query("Familie, kein Kombi, kein Van, kein SUV")).toMatchObject({
+      body: ["small", "sedan", "coupe", "convertible", "other"],
+    });
     const radius = await parse("im Umkreis von 30 km");
     expect(radius.understood).toEqual([]);
     expect(radius.ignored.map((item) => item.text)).toEqual(["im Umkreis von 30 km"]);
