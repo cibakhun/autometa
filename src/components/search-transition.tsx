@@ -4,6 +4,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createContext, use, useCallback, useEffect, useMemo, useState, useTransition, type ComponentProps, type ReactNode } from "react";
 
+/** A page load slower than this is taken as stopped by the user; a real one replaces the page first. */
+const LEAVING_TIMEOUT_MS = 20_000;
+
 /** What started a navigation, so only that control shows a spinner ("form", "ki", "sort", …). */
 type Origin = string | null;
 
@@ -42,8 +45,18 @@ export function SearchTransition({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("pageshow", reset);
   }, []);
 
+  // A document navigation the user stops (Esc, stop button) fires no event: the page simply stays.
+  // Without a sign of the next page after a while, the pending state ends, so it can't hang forever.
+  useEffect(() => {
+    if (!leaving) return;
+    const timer = window.setTimeout(() => setLeaving(false), LEAVING_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [leaving]);
+
   const navigate = useCallback(
     (href: string, from: Origin = null) => {
+      // A client navigation never inherits a document navigation that did not happen.
+      setLeaving(false);
       setOrigin(from);
       startTransition(() => router.push(href));
     },

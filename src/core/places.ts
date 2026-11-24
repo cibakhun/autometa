@@ -84,7 +84,7 @@ export function cleanCity(city: string | null | undefined, placeName?: string | 
   if (!name) return place;
   if (place) {
     if (placeKey(name) === placeKey(place)) return place;
-    if (looksCut(name) && placeKey(firstWord(name)) === placeKey(firstWord(place))) return place;
+    if (looksCut(name) && placeKey(firstWord(name)) === placeKey(firstWord(place)) && sameRest(name, place)) return place;
   }
   return /\p{Ll}/u.test(name) && /\p{Lu}/u.test(name) ? name : capitalize(name);
 }
@@ -101,6 +101,26 @@ function placeKey(name: string): string {
 }
 
 const firstWord = (name: string) => name.split(/[\s(/.,-]/)[0];
+
+/** Small words and abbreviations in place names that say nothing about which place it is. */
+const PLACE_FILLERS = new Set(["a", "an", "am", "d", "der", "die", "den", "dem", "des", "i", "im", "in", "b", "bei", "o", "ob", "u", "und", "v", "vor", "st", "stadt", "ot"]);
+
+const restWords = (name: string) =>
+  name
+    .slice(firstWord(name).length)
+    .split(/[^\p{L}\d]+/u)
+    .map(placeKey)
+    .filter((word) => word && !PLACE_FILLERS.has(word));
+
+/**
+ * Whether the rest of a cut or abbreviated name fits the postal name: "Vohburg a.d.Donau" fits
+ * "Vohburg an der Donau", "Frankfurt a.Main" does not fit "Frankfurt (Oder)". An unclosed bracket
+ * is dropped first ("Pfaffenhofen (bei Münche"), since it was cut off and may only describe the place.
+ */
+function sameRest(name: string, place: string): boolean {
+  const placeRest = restWords(place);
+  return restWords(name.replace(/\([^)]*$/, "")).every((word) => placeRest.some((other) => other.startsWith(word)));
+}
 
 /** An opened bracket that is never closed, or abbreviations like "a.d.", "a.Main", "i. OB". */
 function looksCut(name: string): boolean {

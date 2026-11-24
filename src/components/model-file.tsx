@@ -73,7 +73,7 @@ export function ModelFileSection({ makeName, modelName, file, jobs, risk }: Mode
                   <th scope="col" className="py-1.5 pr-3 font-medium">
                     Mängel an
                   </th>
-                  <th scope="col" className="w-px whitespace-nowrap py-1.5 pr-3 text-right font-medium">
+                  <th scope="col" className="w-px py-1.5 pr-3 text-right font-medium">
                     {modelName}
                   </th>
                   <th scope="col" className="w-px whitespace-nowrap py-1.5 text-right font-medium">

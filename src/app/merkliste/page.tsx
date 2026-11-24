@@ -74,7 +74,7 @@ const GONE_TEXT = {
   checked: "laut Anzeige verkauft oder gelöscht",
   missed: "nicht mehr in der Liste der Börse",
   stale: "länger nicht mehr bestätigt",
-  filtered: "kein Auto zum Kaufen, aussortiert",
+  filtered: "aussortiert, etwa als Gesuch, Tausch oder wegen eines unplausiblen Preises",
 } as const;
 
 /** Since when the car is on the list, and how its price moved since then, or that it is gone. */

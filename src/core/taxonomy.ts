@@ -717,9 +717,11 @@ export interface GenerationDef {
   until: number | null;
 }
 
-const NOT_AN_AMOUNT = String.raw`(?![.,]\d)(?!\s*(?:(?:km|kilometer|tkm|ps|kw|ccm|cm|nm|eur|euro)\b|€|,-))`;
-/** A code standing alone: "997", "e46", "w 124"; not part of "1.997" or "997 km". */
-const code = (body: string) => new RegExp(String.raw`(?<![\d.,])\b(?:${body})\b${NOT_AN_AMOUNT}`);
+const NOT_AN_AMOUNT = String.raw`(?![.,]\d)(?!\s*(?:(?:km|kilometer|tkm|ps|kw|ccm|cm|nm|eur|euro|mtl|monatl\w*|mon)\b|€|,-|/))`;
+/** A currency before the number: "ab € 993 monatlich", "EUR 993". */
+const NO_CURRENCY_BEFORE = String.raw`(?<!(?:€|\$|\beur|\beuro|\bchf)\s{0,3})`;
+/** A code standing alone: "997", "e46", "w 124"; not part of "1.997", "997 km" or "€ 993". */
+const code = (body: string) => new RegExp(String.raw`(?<![\d.,])${NO_CURRENCY_BEFORE}\b(?:${body})\b${NOT_AN_AMOUNT}`);
 /** Words after a number that make it something else than a generation: "5-Türer", "7-Sitzer", "1. Hand". */
 const NOT_A_GENERATION = String.raw`(?:t|tur(?:er|ig)?|tuer(?:er|ig)?|sitzer|sitzig|gang|zoll|zylinder|zyl|hand|jahre?|monate?|km|tkm|ps|kw|personen)\b|motion`;
 /** "Golf 4", "Golf IV", "Golf-4"; not "Golf 2.0", "Golf 5-Türer", "Golf 4 Motion" or "Golf 1. Hand". */

@@ -250,6 +250,8 @@ describe("isNotForSale", () => {
     "iphone 18 pro max weschel gegen eine transporter",
     "Tausche PS5 gegen Auto",
     "Rolex Submariner Tausch gegen Porsche",
+    "Xbox One Tausch gegen Auto",
+    "Samsung Galaxy S24 Tausch gegen Auto",
   ])("skips the wanted or swap ad %s", (title) => expect(isNotForSale(title)).toBe(true));
 
   it.each([
@@ -267,6 +269,10 @@ describe("isNotForSale", () => {
     "Golf 7 GTI, Tausch suche",
     "VW Golf 1.6, Zahnriemen Wechsel gegen Aufpreis",
     "Audi A4 Avant, Ölwechsel neu",
+    "E46 320d Tausch gegen Golf",
+    "320d touring Tausch gegen Bulli",
+    "Ford Galaxy Tausch gegen Kombi",
+    "Mini One Tausch gegen Cabrio",
   ])("keeps the sale ad %s", (title) => expect(isNotForSale(title)).toBe(false));
 });
 

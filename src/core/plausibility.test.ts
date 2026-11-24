@@ -138,6 +138,13 @@ describe("builtUntil", () => {
     expect(builtUntil("porsche", "911", "Porsche 911 992 GT3")).toBeNull();
     expect(builtUntil(null, null, "E46")).toBeNull();
   });
+
+  it("does not take an amount for a generation", () => {
+    expect(builtUntil("porsche", "911", "Porsche 911 Carrera, Finanzierung ab € 993 monatlich")).toBeNull();
+    expect(builtUntil("porsche", "911", "Porsche 911 Carrera ab EUR 993")).toBeNull();
+    expect(builtUntil("porsche", "911", "Porsche 911 Carrera 993 mtl.")).toBeNull();
+    expect(builtUntil("porsche", "911", "Porsche 911 993 Carrera")).toBe(1998);
+  });
 });
 
 describe("plausibleMileage", () => {

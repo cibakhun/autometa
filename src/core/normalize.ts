@@ -1,4 +1,4 @@
-import { MAKES, type MakeDef } from "./taxonomy";
+import { GENERATIONS, MAKES, type MakeDef } from "./taxonomy";
 import type { BodyType, Fuel, Transmission } from "./types";
 
 /** Lowercase, strip accents, turn every non-alphanumeric run into one space. */
@@ -302,23 +302,46 @@ function offersNoCarInSwap(text: string): boolean {
   return offered.length > 0 && !mentionsCar(offered.join(" "));
 }
 
-let carKeys: string[][] | null = null;
+let carKeys: { makes: string[][]; models: string[][] } | null = null;
 
 /**
- * Whether a text names a car anywhere: a make, a model of any make or a word like "Auto". Model
- * names of one letter or of one or two digits do not count, they say nothing on their own.
+ * Things offered in a swap that are no car, whose names a model shares: "Xbox One" (MINI One),
+ * "Samsung Galaxy S24" (Ford Galaxy). Next to one of them only a make or a word like "Auto" counts.
  */
-export function mentionsCar(text: string): boolean {
-  const words = normalizeText(text).split(" ").filter(Boolean);
-  if (CAR_WORDS.test(words.join(" "))) return true;
-  carKeys ??= MAKES.flatMap((make) => [
-    ...[make.slug, make.name, ...(make.aliases ?? [])],
-    ...make.models.flatMap((model) => [model.slug, model.name, ...(model.aliases ?? [])]),
-  ])
+const NON_CAR_PRODUCTS =
+  /\b(?:iphone|ipad|macbook|apple|samsung|galaxy s\d+|xbox|playstation|ps[2-5]|nintendo|konsole|handy|smartphone|laptop|notebook|tablet|fernseher|rolex|uhr|fahrrad|e ?bike|pedelec|motorrad|roller|quad)\b/;
+
+const toKeys = (keys: string[]) =>
+  keys
     .map((key) => normalizeText(key))
     .filter((key) => key.length >= 2 && !/^\d{1,2}$/.test(key))
     .map((key) => key.split(" "));
-  return carKeys.some((key) => words.some((_, start) => key.every((word, i) => words[start + i] === word)));
+
+/**
+ * Whether a text names a car anywhere: a make, a model of any make, a model code like "320d", a
+ * generation code like "E46" or a word like "Auto". Model names of one letter or of one or two
+ * digits do not count, they say nothing on their own; nor do model names next to a product that
+ * is no car ("Xbox One").
+ */
+export function mentionsCar(text: string): boolean {
+  const words = normalizeText(text).split(" ").filter(Boolean);
+  const joined = words.join(" ");
+  if (CAR_WORDS.test(joined)) return true;
+  carKeys ??= {
+    makes: toKeys(MAKES.flatMap((make) => [make.slug, make.name, ...(make.aliases ?? [])])),
+    models: toKeys(MAKES.flatMap((make) => make.models.flatMap((model) => [model.slug, model.name, ...(model.aliases ?? [])]))),
+  };
+  const found = (keys: string[][]) => keys.some((key) => words.some((_, start) => key.every((word, i) => words[start + i] === word)));
+  if (found(carKeys.makes)) return true;
+  if (NON_CAR_PRODUCTS.test(joined)) return false;
+  if (found(carKeys.models)) return true;
+  // "320d", "a180": model codes (with a digit, so a lone "e" or "s" says nothing); "E46", "W124".
+  const coded = MAKES.some((make) =>
+    make.models.some((model) => model.firstWord && words.some((word) => /\d/.test(word) && word.length >= 3 && model.firstWord!.test(word))),
+  );
+  if (coded) return true;
+  const lower = text.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return GENERATIONS.some((generation) => generation.pattern.test(lower));
 }
 
 /** Model names portals use for "not in their list": AutoScout24's "Sonstige", "Others", "ANDERE". */

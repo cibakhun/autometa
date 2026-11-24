@@ -312,13 +312,13 @@ const isGroupHead = (whereOther: string) => `not exists (
 
 /**
  * How many vehicles match, each duplicate group once: the listings without duplicates plus the
- * groups with at least one matching listing. Two queries that run at the same time: the large
- * first one reads in parallel, the second reads only grouped listings.
+ * groups with at least one matching listing. One statement, so both parts see the same snapshot
+ * even while the duplicate groups are being rebuilt.
  */
-const countSqls = (where: string) => [
-  `select count(*) as total from listings l where ${where} and l.cluster_id is null`,
-  `select count(distinct l.cluster_id) as total from listings l where ${where} and l.cluster_id is not null`,
-];
+const countSql = (where: string) => `select sum(total)::int8 as total from (
+    select count(*) as total from listings l where ${where} and l.cluster_id is null
+    union all
+    select count(distinct l.cluster_id) from listings l where ${where} and l.cluster_id is not null) parts`;
 
 /**
  * Results of broad queries (counts over many listings, the facets of the filter form) are kept
@@ -585,14 +585,9 @@ function countMatches(
   filters: SearchFilters,
   options: WhereOptions = {},
 ): Promise<number> {
-  const sqls = countSqls(where);
   const count = async () => {
-    const [first, second] = await together(
-      pool,
-      () => pool.query<{ total: string }>(sqls[0], values),
-      () => pool.query<{ total: string }>(sqls[1], values),
-    );
-    return Number(first.rows[0]?.total ?? 0) + Number(second.rows[0]?.total ?? 0);
+    const { rows } = await pool.query<{ total: string | null }>(countSql(where), values);
+    return Number(rows[0]?.total ?? 0);
   };
   // "New since" and alert counts are always counted anew.
   if (filters.seit !== undefined || options.notAlertedBy !== undefined) return count();

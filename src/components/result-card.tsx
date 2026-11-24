@@ -110,7 +110,7 @@ export function ResultCard({
         </p>
         {place.length > 0 && (
           <p className="mt-1 text-sm text-muted">
-            <Joined parts={place} />
+            <Joined parts={place} wrap />
           </p>
         )}
         {damaged && (
@@ -160,13 +160,14 @@ export function ResultCard({
 
 /**
  * "EZ 06/2025 · 41.959 km · 142 kW (193 PS)": a line breaks only after a dot, never inside a
- * value, and no line starts with a dot.
+ * value (unless `wrap`), and no line starts with a dot.
  */
-function Joined({ parts }: { parts: (string | null | false)[] }) {
+function Joined({ parts, wrap = false }: { parts: (string | null | false)[]; wrap?: boolean }) {
   const values = parts.filter(Boolean);
   return values.map((part, i) => (
     <span key={i}>
-      <span className="whitespace-nowrap">
+      {/* A place ("10623 Berlin Charlottenburg-Wilmersdorf") may wrap between its words. */}
+      <span className={wrap ? undefined : "whitespace-nowrap"}>
         {part}
         {i < values.length - 1 && "\u00a0·"}
       </span>

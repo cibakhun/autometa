@@ -570,7 +570,7 @@ function GoneNotice({ listing }: { listing: ListingDetail }) {
       break;
     case "filtered":
       heading = "Aus der Suche aussortiert";
-      text = `Die Anzeige sieht nicht nach einem Auto zum Kaufen aus (etwa ein Gesuch, ein Tausch oder ein Platzhalterpreis), deshalb steht sie nicht mehr in der Suche.`;
+      text = `Die Anzeige hat eine Prüfregel von AutoMeta nicht bestanden, etwa als Gesuch, Tausch gegen etwas anderes oder wegen eines Platzhalter- oder Tippfehlerpreises. Deshalb steht sie nicht mehr in der Suche.`;
       break;
     case "stale":
       heading = `Seit ${formatDate(listing.checkedAt)} nicht mehr bestätigt`;

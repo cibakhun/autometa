@@ -4,6 +4,7 @@ import {
   detectFuel,
   detectTransmission,
   findMakeInTitle,
+  isNotForSale,
   isYearOnlyRegistration,
   parseFirstRegistration,
   parsePowerKw,
@@ -174,6 +175,8 @@ export interface CardNormalizeOptions {
 export function normalizeCard(item: CardItem, options: CardNormalizeOptions): NormalizedListing | null {
   if (item.price === null || item.price < (options.minPrice ?? 300)) return null;
   if (options.requireVehicleFacts && item.mileageKm === null && item.firstRegistration === null) return null;
+  // On the whole title: a "Leasingübernahme" past the 200 characters stored would be cut off below.
+  if (isNotForSale(item.title)) return null;
 
   const fromTitle = findMakeInTitle(item.title);
   const listMake = item.listMake ? resolveMake(item.listMake) : null;

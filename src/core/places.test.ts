@@ -18,6 +18,9 @@ describe("cleanCity", () => {
     ["Frankfurt (Oder)", "Frankfurt (Oder)", "Frankfurt (Oder)"],
     ["St. Ingbert", "Sankt Ingbert", "St. Ingbert"],
     ["Aschaffenburg", "Aschaffenburg", "Aschaffenburg"],
+    // Same first word, different place: the portal's name stays.
+    ["Frankfurt a.Main", "Frankfurt (Oder)", "Frankfurt a.Main"],
+    ["Frankfurt a.Main", "Frankfurt am Main", "Frankfurt am Main"],
   ])("%s at %s -> %s", (city, place, clean) => expect(cleanCity(city, place)).toBe(clean));
 
   it("cleans names without a known postal code as well", () => {
