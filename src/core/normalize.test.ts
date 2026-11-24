@@ -7,6 +7,7 @@ import {
   isNotForSale,
   isYearOnlyRegistration,
   kwToPs,
+  mentionsCar,
   normalizeBodyType,
   normalizeFuel,
   normalizeTransmission,
@@ -232,6 +233,49 @@ describe("isNotForSale", () => {
   it.each(["VW Golf 7, neuer Besitzer gesucht", "BMW 320d Inzahlungnahme und Ankauf möglich", "Verkaufe Polo R-Line"])("keeps %s", (title) =>
     expect(isNotForSale(title)).toBe(false),
   );
+
+  // Wanted and swap ads that were still active on the live site.
+  it.each([
+    "Suchen Golf 3 1,8 75PS /90PS für Bastler",
+    "Suchen Opel Astra F oder G als Teilespender",
+    "AMG GT Coupe 2 Türer ab 2015 *Suche*",
+    // The same as AutoScout24 stored it: the title loses the stars.
+    "Mercedes-Benz AMG GT Coupe 2 Türer ab 2015 Suche",
+    "Suche VW/Audi (Diesel)",
+    "Suche älteres Mittelklasse-Auto gerne von Rentner",
+    "Gesucht: VW Bus T4",
+    "VW Bus T3 (SUCHE)",
+    "iphone 18 pro max weschel gegen eine transporter",
+    "Tausche PS5 gegen Auto",
+    "Rolex Submariner Tausch gegen Porsche",
+  ])("skips the wanted or swap ad %s", (title) => expect(isNotForSale(title)).toBe(true));
+
+  it.each([
+    "VW Golf 7 Tausch möglich",
+    "BMW 320d Tausch oder VB",
+    "Golf 4 Tausch gegen Transporter",
+    "Opel Corsa, Tausch gegen Wohnwagen möglich",
+    "Tausch gegen Golf",
+    "Biete Tausch gegen Bulli",
+    "1.500 € oder Tausch gegen Bulli",
+    "Mein Auto tausche gegen Transporter",
+    "Wohnmobil Tausch gegen PKW",
+    "Suchen Sie einen Kombi? Skoda Octavia Combi",
+    "VW Polo 1.2, Käufer suche",
+    "Golf 7 GTI, Tausch suche",
+    "VW Golf 1.6, Zahnriemen Wechsel gegen Aufpreis",
+    "Audi A4 Avant, Ölwechsel neu",
+  ])("keeps the sale ad %s", (title) => expect(isNotForSale(title)).toBe(false));
+});
+
+describe("mentionsCar", () => {
+  it("finds makes, models and car words anywhere", () => {
+    expect(mentionsCar("mein schöner golf 4")).toBe(true);
+    expect(mentionsCar("Opel Corsa")).toBe(true);
+    expect(mentionsCar("mein auto")).toBe(true);
+    expect(mentionsCar("iphone 18 pro max")).toBe(false);
+    expect(mentionsCar("ps5")).toBe(false);
+  });
 });
 
 describe("models sellers write in their own way", () => {

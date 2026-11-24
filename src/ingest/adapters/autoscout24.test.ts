@@ -165,6 +165,33 @@ describe("normalizeAutoScout24", () => {
     expect(normalize({ price: { priceFormatted: "€ 1,-" } })).toBeNull();
   });
 
+  // Live listings that topped "Preis absteigend".
+  it("skips placeholder prices and millions for new everyday cars", () => {
+    const details = (power: string, mileage: string, calendar?: string) => [
+      { iconName: "mileage_odometer", data: mileage },
+      { iconName: "speedometer", data: power },
+      ...(calendar ? [{ iconName: "calendar", data: calendar }] : []),
+    ];
+    const car = (make: string, model: string, version: string, price: number, power: string, mileage: string, calendar?: string) =>
+      normalize({
+        vehicle: { make, model, modelGroup: model, modelVersionInput: version, mileageInKm: mileage },
+        price: { priceRaw: price },
+        vehicleDetails: details(power, mileage, calendar),
+        tracking: {},
+      });
+    expect(car("Porsche", "962", "962 C", 9_999_999, "470 kW (639 PS)", "9.999 km")).toBeNull();
+    expect(car("Ford", "Puma", "1.0 EcoBoost Hybrid ST-Line", 2_992_661, "124 kW (169 PS)", "0 km")).toBeNull();
+    expect(car("Hyundai", "BAYON", "1.0 T-GDI Trend", 2_499_000, "66 kW (90 PS)", "15 km")).toBeNull();
+    expect(car("Mercedes-Benz", "AMG GT", "Coupe 2 Türer ab 2015 *Suche*", 1234, "350 kW (476 PS)", "10.000 km", "01/2016")).toBeNull();
+    expect(car("Mercedes-Benz", "AMG GT", "Coupe ab 2015 *Suche*", 45_000, "350 kW (476 PS)", "10.000 km", "01/2016")).toBeNull();
+    expect(car("Porsche", "918", "Spyder Weissach", 2_950_000, "652 kW (887 PS)", "3.000 km", "03/2015")).toMatchObject({ priceEur: 2_950_000, modelSlug: "918" });
+    expect(car("BMW", "507", "Roadster", 2_190_000, "110 kW (150 PS)", "1.200 km", "05/1959")).toMatchObject({ priceEur: 2_190_000 });
+  });
+
+  it("leaves a first registration after next month unknown", () => {
+    expect(normalize({ vehicleDetails: [{ iconName: "calendar", data: "01/2099" }], tracking: {} })?.firstRegistration).toBeNull();
+  });
+
   it("drops postal codes of other countries", () => {
     expect(normalize({ location: { zip: "1010", city: "Wien", countryCode: "AT" } })).toMatchObject({ zip: null, city: "Wien" });
   });

@@ -177,6 +177,8 @@ const NUMBER = String.raw`(?:\d{1,3}(?:[.\s  ]\d{3})+|\d+)(?:[.,]\d{1,2})?`;
 const PRICE = new RegExp(String.raw`^(${NUMBER})\s*(?:€|EUR|Euro)(?:\s*\(?VB\)?)?$`, "i");
 const MILEAGE = new RegExp(String.raw`^(${NUMBER})\s*km$`, "i");
 const REGISTRATION = /^(?:EZ:?\s*)?((?:0?[1-9]|1[0-2])[./](?:19|20)\d{2})$/i;
+/** A label right before a month that makes it the HU date, not the first registration: "HU", "TÜV bis:". */
+const INSPECTION_LABEL = /^(?:hu|tüv|tuv|tuev|hu\s*\/\s*au|hu-au)(?:\s+(?:neu|bis|gültig bis))?\s*:?$/i;
 const YEAR = /^(?:EZ:?\s*|Bj\.?:?\s*|Baujahr:?\s*)?((?:19|20)\d{2})$/i;
 const POWER = /^\d{2,4}(?:[.,]\d)?\s*(?:kW|PS)\b/i;
 const PLACE = /^(\d{5})\s+([^\d,|/()]{2,60}?)(?:\s*[,(].*)?$/;
@@ -246,7 +248,9 @@ export function cardFacts(pieces: TextPiece[], now = new Date()): CardFacts {
     const mileage = text.match(MILEAGE);
     if (mileage && facts.mileageKm === null) facts.mileageKm = parseAmount(mileage[1]);
     const registration = text.match(REGISTRATION);
-    if (registration && facts.firstRegistration === null) facts.firstRegistration = registration[1].replace(".", "/");
+    if (registration && facts.firstRegistration === null && !INSPECTION_LABEL.test(list[i - 1]?.text ?? "")) {
+      facts.firstRegistration = registration[1].replace(".", "/");
+    }
     const yearMatch = text.match(YEAR);
     if (yearMatch && year === null && Number(yearMatch[1]) >= 1950 && Number(yearMatch[1]) <= latestYear) year = yearMatch[1];
     if (POWER.test(text) && facts.powerKw === null) {

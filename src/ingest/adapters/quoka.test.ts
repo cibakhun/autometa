@@ -97,6 +97,7 @@ describe("Quoka result pages", () => {
     });
     expect(normalizeQuoka({ externalId: accessory.id, payload: { ...accessory } })).toBeNull();
     expect(normalizeQuoka({ externalId: "w1", payload: { ...car, title: "Suche VW Tiguan bis 20.000 €" } })).toBeNull();
+    expect(normalizeQuoka({ externalId: "w2", payload: { ...car, title: "Suche älteres Mittelklasse-Auto gerne von Rentner", price: 999 } })).toBeNull();
   });
 
   it("finds make and model behind leading words", () => {

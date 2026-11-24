@@ -178,6 +178,42 @@ describe("normalizeKleinanzeigen", () => {
   it("judges only giveaways by the part words", () => {
     expect(normalize({ title: "Opel Corsa D mit neuen Winterreifen", price: "2.500 €" })).toMatchObject({ priceEur: 2500 });
   });
+
+  // Live listings that offered no car for sale.
+  it.each<[string, string, string]>([
+    ["Suchen Golf 3 1,8 75PS /90PS für Bastler", "200 €", "volkswagen"],
+    ["Suchen Opel Astra F oder G als Teilespender", "250 €", "opel"],
+    ["AMG GT Coupe 2 Türer ab 2015 *Suche*", "1.234 €", "mercedes-benz"],
+    ["iphone 18 pro max weschel gegen eine transporter", "100 €", "mercedes-benz"],
+  ])("drops %s", (title, price, listMake) => expect(normalize({ title, price, mileage: "0 km", registration: "EZ 01/2026" }, listMake)).toBeNull());
+
+  it("leaves a first registration that cannot be right unknown", () => {
+    // 997.1 was built until 2008; the seller typed a later registration.
+    expect(normalize({ title: "Porsche 911 Carrera 4s 997.1", price: "42.900 €", registration: "EZ 08/2025" }, "porsche")).toMatchObject({
+      modelSlug: "911",
+      firstRegistration: null,
+      firstRegistrationYearOnly: false,
+    });
+    expect(normalize({ title: "Renault 19 – Bastlerfahrzeug / Ersatzteilspender", price: "350 €", registration: "EZ 08/2019" }, "renault")).toMatchObject({
+      modelSlug: "19",
+      firstRegistration: null,
+    });
+    expect(normalize({ title: "VW Golf", registration: "EZ 01/2099" })?.firstRegistration).toBeNull();
+  });
+
+  it("reads 0 km on an old car as unknown", () => {
+    expect(normalize({ title: "Opel Corsa A GSI", price: "6.500 €", mileage: "0 km", registration: "EZ 05/1984" }, "opel")).toMatchObject({
+      mileageKm: null,
+      firstRegistration: "1984-05-01",
+    });
+  });
+
+  it("knows the MINI One apart from the Cooper", () => {
+    expect(normalize({ title: "Mini One Bj.2003 zum Schlachten", price: "700 €", registration: "EZ 06/2003" })).toMatchObject({
+      makeSlug: "mini",
+      modelSlug: "one",
+    });
+  });
 });
 
 describe("Kleinanzeigen URLs", () => {

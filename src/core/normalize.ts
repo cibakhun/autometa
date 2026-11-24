@@ -248,16 +248,77 @@ export function resolveModelInTitle(makeName: string, title: string): ResolvedMa
 }
 
 /**
- * Ads that offer no car for sale: wanted ads ("Suche Golf 7"), dealers buying up cars
- * ("Ankauf aller Fahrzeuge") and lease takeovers, whose price is a monthly rate.
+ * Ads that offer no car for sale: wanted ads ("Suche Golf 7", "Suchen Golf 3 für Bastler",
+ * "AMG GT ab 2015 *Suche*"), dealers buying up cars ("Ankauf aller Fahrzeuge"), lease takeovers,
+ * whose price is a monthly rate, and swaps of something else for a car ("iPhone tausche gegen
+ * Transporter"). Sale ads that also take a swap ("Tausch möglich", "Golf 4, Tausch gegen Bus")
+ * stay: dropping a real offer is worse than keeping a wanted ad.
  */
 export function isNotForSale(title: string): boolean {
   const text = normalizeText(title);
   return (
     // At the start only: sale ads may say "neuer Besitzer gesucht" or "Ankauf möglich" later on.
     /^(?:\S+ )?(?:suche|ich suche|wir suchen|kaufe|wir kaufen|kaufgesuch|ankauf)\b/.test(text) ||
-    /\b(?:leasingubernahme|leasing ubernahme)\b/.test(text)
+    // "Suchen Sie einen Kombi?" is a dealer's sale ad.
+    /^(?:suchen|gesucht)\b(?! sie\b)/.test(text) ||
+    /\b(?:leasingubernahme|leasing ubernahme)\b/.test(text) ||
+    hasWantedMarker(title) ||
+    endsWithSuche(text) ||
+    offersNoCarInSwap(text)
   );
+}
+
+/** "*Suche*", "(Suche)", "[SUCHE]", "!!Suche!!": sellers mark wanted ads like this anywhere in the title. */
+export function hasWantedMarker(text: string): boolean {
+  return /[*#!([{<]+\s*such(?:e|en)\s*[*#!)\]}>]+/i.test(text);
+}
+
+/** Words before a final "suche" that look for a buyer or a swap, not for a car: "Käufer suche", "Tausch suche". */
+const SEEKS_BUYER = /(?:^| )(?:besitzer|eigentumer|liebhaber|bastler|schrauber|abholer|zuhause|heim|kaufer|kaeufer|abnehmer|interessent\w*|nachfolger|halter|tausch\w*) suche$/;
+
+function endsWithSuche(text: string): boolean {
+  return / suche$/.test(text) && !SEEKS_BUYER.test(text);
+}
+
+const SWAP = /^(.*?)\b(?:tausch|tausche|tauschen|wechsel|wechsle|wechseln|weschel|weschle)\b((?: \S+){0,4}?) gegen\b/;
+/** Words around a swap that say nothing about what is offered: "Biete Tausch gegen …", "1.500 € oder Tausch gegen …". */
+const SWAP_FILLERS = new Set(
+  `biete bieten ich wir mein meine meinen meinem ein eine einen einem der die das den dem verkauf verkaufe verkaufen oder und auch
+   nur evtl eventuell moglich gerne gern zum zur im in mit vb festpreis preis euro eur suche`.split(/\s+/),
+);
+/** Words that name a car without its make: "Auto tausche gegen Transporter" offers a car. */
+const CAR_WORDS =
+  /\b(?:auto|autos|pkw|kfz|fahrzeug|wagen|kombi|limousine|cabrio|cabriolet|coupe|suv|transporter|bus|bulli|van|kastenwagen|wohnmobil|camper|oldtimer|youngtimer|sportwagen|kleinwagen|gelandewagen|pickup|jeep)\b/;
+
+/**
+ * A swap whose offered side names no car: "iphone 18 pro max weschel gegen eine transporter".
+ * The offered side is what stands before the swap word and between it and "gegen". Without any
+ * offered word ("Tausch gegen Golf") nothing is known, so the ad stays.
+ */
+function offersNoCarInSwap(text: string): boolean {
+  const swap = text.match(SWAP);
+  if (!swap) return false;
+  const offered = `${swap[1]} ${swap[2]}`.split(" ").filter((word) => word && !SWAP_FILLERS.has(word) && !/^\d+$/.test(word));
+  return offered.length > 0 && !mentionsCar(offered.join(" "));
+}
+
+let carKeys: string[][] | null = null;
+
+/**
+ * Whether a text names a car anywhere: a make, a model of any make or a word like "Auto". Model
+ * names of one letter or of one or two digits do not count, they say nothing on their own.
+ */
+export function mentionsCar(text: string): boolean {
+  const words = normalizeText(text).split(" ").filter(Boolean);
+  if (CAR_WORDS.test(words.join(" "))) return true;
+  carKeys ??= MAKES.flatMap((make) => [
+    ...[make.slug, make.name, ...(make.aliases ?? [])],
+    ...make.models.flatMap((model) => [model.slug, model.name, ...(model.aliases ?? [])]),
+  ])
+    .map((key) => normalizeText(key))
+    .filter((key) => key.length >= 2 && !/^\d{1,2}$/.test(key))
+    .map((key) => key.split(" "));
+  return carKeys.some((key) => words.some((_, start) => key.every((word, i) => words[start + i] === word)));
 }
 
 export interface ResolvedMakeModel {

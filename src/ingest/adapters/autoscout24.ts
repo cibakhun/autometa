@@ -1,5 +1,6 @@
 import {
   detectBodyType,
+  hasWantedMarker,
   normalizeFuel,
   normalizeTransmission,
   isYearOnlyRegistration,
@@ -9,6 +10,7 @@ import {
   resolveMakeModel,
   sourceImageUrl,
 } from "@/core/normalize";
+import { plausibleListing } from "@/core/plausibility";
 import { MAKES } from "@/core/taxonomy";
 import type { NormalizedListing, SellerType } from "@/core/types";
 import type { FetchContext, RawListing, SourceAdapter, SourceInfo } from "../adapter";
@@ -235,6 +237,8 @@ const cleanText = (value: string | null) => (value ? value.replace(/[*|]+/g, " "
 export function normalizeAutoScout24(raw: RawListing): NormalizedListing | null {
   const item = raw.payload as unknown as AutoScout24Item;
   if (item.price === null || item.price < 100) return null;
+  // The title loses the stars of "*Suche*"; the seller's own text still has them.
+  if (hasWantedMarker(item.version ?? "")) return null;
 
   const resolved = resolveMakeModel(item.make, item.modelGroup ?? item.model);
   const byModel = resolved.modelSlug ? resolved : resolveMakeModel(item.make, item.model);
@@ -243,7 +247,7 @@ export function normalizeAutoScout24(raw: RawListing): NormalizedListing | null 
   const title = [item.make, item.model, variant].filter(Boolean).join(" ").slice(0, 200);
   const sellerType: SellerType | null = item.sellerType === "Dealer" ? "dealer" : item.sellerType === "Private" ? "private" : null;
 
-  return {
+  return plausibleListing({
     sourceId: AUTOSCOUT24.id,
     externalId: item.id,
     url: item.url,
@@ -269,7 +273,7 @@ export function normalizeAutoScout24(raw: RawListing): NormalizedListing | null 
     lat: null,
     lng: null,
     imageUrl: sourceImageUrl(item.image, "autoscout24.net"),
-  };
+  });
 }
 
 /** The result list URL for a make, newest first, optionally limited to a price range. */

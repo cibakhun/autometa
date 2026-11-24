@@ -4,7 +4,6 @@ import {
   detectFuel,
   detectTransmission,
   findMakeInTitle,
-  isNotForSale,
   isYearOnlyRegistration,
   parseFirstRegistration,
   parsePowerKw,
@@ -12,6 +11,7 @@ import {
   resolveModelInTitle,
   sourceImageUrl,
 } from "@/core/normalize";
+import { plausibleListing } from "@/core/plausibility";
 import type { NormalizedListing, SellerType } from "@/core/types";
 import type { RawListing } from "../adapter";
 import type { CardFacts } from "../http/cards";
@@ -174,7 +174,6 @@ export interface CardNormalizeOptions {
 export function normalizeCard(item: CardItem, options: CardNormalizeOptions): NormalizedListing | null {
   if (item.price === null || item.price < (options.minPrice ?? 300)) return null;
   if (options.requireVehicleFacts && item.mileageKm === null && item.firstRegistration === null) return null;
-  if (isNotForSale(item.title)) return null;
 
   const fromTitle = findMakeInTitle(item.title);
   const listMake = item.listMake ? resolveMake(item.listMake) : null;
@@ -183,7 +182,7 @@ export function normalizeCard(item: CardItem, options: CardNormalizeOptions): No
   const resolved = make ? resolveModelInTitle(make.name, rest) : { makeSlug: null, modelSlug: null, variant: null };
   const titlePower = parsePowerKw(item.title);
 
-  return {
+  return plausibleListing({
     sourceId: options.sourceId,
     externalId: item.id,
     url: item.url,
@@ -209,7 +208,7 @@ export function normalizeCard(item: CardItem, options: CardNormalizeOptions): No
     lat: null,
     lng: null,
     imageUrl: sourceImageUrl(item.image, options.imageHost),
-  };
+  });
 }
 
 /** The page URLs listed in a sitemap (<loc> entries), entities decoded. */
