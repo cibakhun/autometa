@@ -48,7 +48,7 @@ export function NaturalSearchBox({ text, search, sort }: { text?: string; search
           type="search"
           maxLength={200}
           defaultValue={text}
-          placeholder="z. B. zuverlässiger Kombi für Familie bis 8.000 €"
+          placeholder="zuverlässiger Kombi bis 8.000 €"
           className="min-w-0 flex-1 rounded-md border border-line bg-background px-3 py-2 text-base outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
         />
         <button
@@ -62,12 +62,13 @@ export function NaturalSearchBox({ text, search, sort }: { text?: string; search
       {search ? (
         <Understood search={search} sort={sort} />
       ) : (
-        <p className="mt-2 text-xs text-muted">
+        <p className="mt-2 text-xs leading-relaxed text-muted">
           Zum Beispiel:{" "}
           {EXAMPLES.map((example, i) => (
-            <span key={example}>
+            // Phones get two examples; each stays in one piece.
+            <span key={example} className={i >= 2 ? "hidden sm:inline" : undefined}>
               {i > 0 && " · "}
-              <a href={kiHref(example)} onClick={onExample} className="text-accent hover:underline">
+              <a href={kiHref(example)} onClick={onExample} className="whitespace-nowrap text-accent hover:underline">
                 {example}
               </a>
             </span>
@@ -90,7 +91,7 @@ function Understood({ search, sort }: { search: NaturalSearch; sort: Sort }) {
               <li
                 key={item.label}
                 title={`„${item.text}“`}
-                className="mb-1 mr-1 inline-block rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong"
+                className="mb-1 mr-1 inline-block rounded-2xl bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong"
               >
                 {item.label}
               </li>
@@ -117,10 +118,14 @@ function Understood({ search, sort }: { search: NaturalSearch; sort: Sort }) {
       )}
       {search.unknown.length > 0 && (
         <p className="text-muted">
-          Nicht verstanden: {search.unknown.map((word) => `„${word}“`).join(", ")}
+          <span className="text-warn-text">Nicht verstanden:</span> {search.unknown.map((word) => `„${word}“`).join(", ")}
         </p>
       )}
-      <p className="text-xs text-muted">Links kannst du jeden Filter noch ändern.</p>
+      <p className="text-xs text-muted">
+        {/* The filter form sits to the left on wide screens, folded away above the results on phones. */}
+        <span className="md:hidden">Unter „Filter anzeigen“</span>
+        <span className="hidden md:inline">Links</span> kannst du jeden Filter noch ändern.
+      </p>
     </div>
   );
 }
