@@ -67,7 +67,7 @@ export function ResultCard({
       : allDrops || Date.parse(listing.priceDroppedAt) > Date.parse(listing.checkedAt) - RECENT_DROP_MS);
 
   return (
-    <article className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-sm">
+    <article className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-sm transition-shadow hover:shadow-md">
       <div className="relative">
         <Link href={`/angebot/${listing.id}`} tabIndex={-1} aria-hidden="true">
           <ListingPhoto src={listing.imageUrl} alt="" className="aspect-[4/3] w-full" />
@@ -90,22 +90,29 @@ export function ResultCard({
       <div className="flex flex-1 flex-col p-4">
         {note}
         <div className="flex items-start justify-between gap-3">
-          <h2 className="min-w-0 font-semibold leading-snug [overflow-wrap:anywhere]">
+          {/* At most two lines, so cards in a row stay about equally tall; the full title is on hover and the detail page. */}
+          <h2 className="line-clamp-2 min-w-0 font-semibold leading-snug [overflow-wrap:anywhere]" title={listing.title}>
             <Link href={`/angebot/${listing.id}`} className="hover:text-accent">
               {listing.title}
             </Link>
           </h2>
           <div className="shrink-0 text-right">
-            <p className="text-lg font-bold">{formatPrice(listing.priceEur)}</p>
+            <p className="whitespace-nowrap text-lg font-bold leading-snug">{formatPrice(listing.priceEur)}</p>
             {dropped && (
-              <p className="text-xs font-medium text-good-text" title={`Preis gesenkt am ${formatDayTime(listing.priceDroppedAt!)}`}>
+              <p className="whitespace-nowrap text-xs font-medium text-good-text" title={`Preis gesenkt am ${formatDayTime(listing.priceDroppedAt!)}`}>
                 vorher <s>{formatPrice(listing.priceBeforeDropEur!)}</s>
               </p>
             )}
           </div>
         </div>
-        <p className="mt-2 text-sm text-muted">{facts.join(" · ")}</p>
-        {place.length > 0 && <p className="mt-1 text-sm text-muted">{place.join(" · ")}</p>}
+        <p className="mt-2 text-sm text-muted">
+          <Joined parts={facts} />
+        </p>
+        {place.length > 0 && (
+          <p className="mt-1 text-sm text-muted">
+            <Joined parts={place} />
+          </p>
+        )}
         {damaged && (
           <ul className="mt-2 flex flex-wrap gap-1" aria-label="Schadenshinweise im Titel">
             {listing.damage.map((kind) => (
@@ -117,8 +124,10 @@ export function ResultCard({
         )}
         {gap && listing.marketPriceEur !== null && (
           <p className="mt-2 text-sm">
-            <span className="text-muted">{damaged ? "Intakt" : "Marktwert"} ca. {formatPrice(listing.marketPriceEur)} · </span>
-            <span className={gap.below ? "font-medium text-good-text" : "text-muted"}>{gap.text}</span>
+            <span className="whitespace-nowrap text-muted">
+              {damaged ? "Intakt" : "Marktwert"} ca. {formatPrice(listing.marketPriceEur)}&nbsp;·
+            </span>{" "}
+            <span className={`whitespace-nowrap ${gap.below ? "font-medium text-good-text" : "text-muted"}`}>{gap.text}</span>
           </p>
         )}
         {listing.flip && listing.repair && <FlipLine flip={listing.flip} repair={listing.repair} minMarginEur={minMarginEur} />}
@@ -126,8 +135,8 @@ export function ResultCard({
         {listing.otherOffers.length > 0 && <OtherOffers listing={listing} />}
         <div className="mt-auto flex items-center justify-between gap-2 pt-4">
           <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong">{listing.sourceName}</span>
-            <span className="text-xs text-muted" title="Zuletzt in der Liste der Börse gesehen oder auf der Anzeige selbst bestätigt">
+            <span className="whitespace-nowrap rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong">{listing.sourceName}</span>
+            <span className="whitespace-nowrap text-xs text-muted" title="Zuletzt in der Liste der Börse gesehen oder auf der Anzeige selbst bestätigt">
               geprüft {formatDayTime(listing.checkedAt)}
             </span>
           </span>
@@ -135,14 +144,35 @@ export function ResultCard({
             href={`/go/${listing.id}`}
             target="_blank"
             rel="noopener nofollow"
-            className="shrink-0 whitespace-nowrap rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-on-accent hover:bg-accent-strong"
+            aria-label={`Zum Angebot bei ${listing.sourceName} (neuer Tab)`}
+            className="inline-flex min-h-10 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md bg-accent px-3 text-sm font-medium text-on-accent hover:bg-accent-strong sm:min-h-9"
           >
             Zum Angebot
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+            </svg>
           </a>
         </div>
       </div>
     </article>
   );
+}
+
+/**
+ * "EZ 06/2025 · 41.959 km · 142 kW (193 PS)": a line breaks only after a dot, never inside a
+ * value, and no line starts with a dot.
+ */
+function Joined({ parts }: { parts: (string | null | false)[] }) {
+  const values = parts.filter(Boolean);
+  return values.map((part, i) => (
+    <span key={i}>
+      <span className="whitespace-nowrap">
+        {part}
+        {i < values.length - 1 && "\u00a0·"}
+      </span>
+      {i < values.length - 1 && " "}
+    </span>
+  ));
 }
 
 /** "Modell-Akte: 23 % weniger HU-Mängel als gleich alte Autos" (shown when sorted by recommendation). */
@@ -170,11 +200,16 @@ function FlipLine({ flip, repair, minMarginEur }: { flip: FlipResult; repair: Re
   ].filter(Boolean);
   return (
     <p className="mt-2 text-sm">
-      <span className="text-muted">Flip ca. </span>
-      <span className={good ? "font-medium text-good-text" : flip.marginEur < 0 ? "font-medium text-warn-text" : "font-medium"}>
-        {formatSignedPrice(flip.marginEur)}
+      <span className="whitespace-nowrap">
+        <span className="text-muted">Flip ca. </span>
+        <span className={good ? "font-medium text-good-text" : flip.marginEur < 0 ? "font-medium text-warn-text" : "font-medium"}>
+          {formatSignedPrice(flip.marginEur)}
+        </span>
+        <span className="text-muted">&nbsp;·</span>
+      </span>{" "}
+      <span className="text-muted">
+        <Joined parts={parts} />
       </span>
-      <span className="text-muted"> · {parts.join(" · ")}</span>
     </p>
   );
 }
@@ -200,14 +235,16 @@ function OtherOffers({ listing }: { listing: ListingSummary }) {
       {listing.otherOffers.map((offer, i) => (
         <span key={offer.id}>
           {i > 0 && ", "}
-          <a href={`/go/${offer.id}`} target="_blank" rel="noopener nofollow" className="font-medium text-accent hover:underline">
-            {offer.sourceName} {formatPrice(offer.priceEur)}
-          </a>
-          {offer.priceEur !== listing.priceEur && (
-            <span className={offer.priceEur < listing.priceEur ? "text-good-text" : "text-muted"}>
-              {" "}({formatSignedPrice(offer.priceEur - listing.priceEur)})
-            </span>
-          )}
+          <span className="whitespace-nowrap">
+            <a href={`/go/${offer.id}`} target="_blank" rel="noopener nofollow" className="font-medium text-accent hover:underline">
+              {offer.sourceName} {formatPrice(offer.priceEur)}
+            </a>
+            {offer.priceEur !== listing.priceEur && (
+              <span className={offer.priceEur < listing.priceEur ? "text-good-text" : "text-muted"}>
+                {" "}({formatSignedPrice(offer.priceEur - listing.priceEur)})
+              </span>
+            )}
+          </span>
         </span>
       ))}
     </p>
