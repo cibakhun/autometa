@@ -11,6 +11,7 @@ import {
   findJob,
   JOB_GROUPS,
   REPAIR_JOBS,
+  LABOR_AND_HASSLE_EUR,
   SEVERE_CASES,
   SEVERE_CERTAIN,
   SEVERE_FROM,
@@ -167,6 +168,12 @@ function RiskSection() {
         meist einen größeren Schaden. Ab {pct(SEVERE_FROM)} unter Marktwert steigt die angenommene Wahrscheinlichkeit des schlimmeren
         Falls gleichmäßig an, ab {pct(SEVERE_CERTAIN)} gilt er als sicher. Puffer = Wahrscheinlichkeit × Mehrkosten des schlimmeren
         Falls; bei mehreren Hinweisen zählt der teuerste.
+      </p>
+      <p className="mt-2">
+        Der schlimmere Fall kostet mindestens die Teile aus der Liste unten. Bei teuren Autos ist er so teuer wie der Preisnachlass:
+        Marktwert minus Preis, minus {formatEuro(LABOR_AND_HASSLE_EUR)} für Werkstattarbeit und Aufwand, minus die schon gerechneten
+        Teile. Wer ein Auto für 34.000 € für 6.000 € anbietet, kennt meist einen Schaden in dieser Höhe. Das gilt für jeden Hinweis im
+        Titel, auch für Motorschaden oder Kupplung.
       </p>
       <ul className="mt-2 space-y-1">
         {(Object.entries(SEVERE_CASES) as [DamageKind, { jobs: string[]; label: string }][]).map(([kind, severe]) => (

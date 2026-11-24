@@ -94,15 +94,16 @@ const RULES: Rule[] = [
   },
   {
     kind: "project",
-    pattern: /\b(?:bastler|bastlerfahrzeug|bastlerauto|bastlerwagen|teiletrager|teilespender|ersatzteilspender|schlachtfahrzeug|ausschlachten|schlachten|export)\b/g,
+    // "Export T1" is a customs transit document a dealer exports new cars with, not a parts car.
+    pattern: /\b(?:bastler|bastlerfahrzeug|bastlerauto|bastlerwagen|teiletrager|teilespender|ersatzteilspender|schlachtfahrzeug|ausschlachten|schlachten|export(?! t[12]\b))\b/g,
   },
 ];
 
 /** Generic words, used only when no specific kind matched. */
 const GENERIC: RegExp = /\b(?:defekt|defekte|defekter|defektes|kaputt|schaden|mangel|mangeln)\b/g;
 
-/** Words right before a match that turn it around: "kein Unfall", "ohne Rost", "nichts defekt". */
-const NEGATIONS = new Set(["kein", "keine", "keinen", "keinerlei", "ohne", "nicht", "nichts"]);
+/** Words right before a match that turn it around: "kein Unfall", "ohne Rost", "nichts defekt", "oh. Schäden". */
+const NEGATIONS = new Set(["kein", "keine", "keinen", "keinerlei", "ohne", "o", "oh", "nicht", "nichts"]);
 /** A word right after a match that turns it around: "rost frei", "unfall frei" (spelt apart). */
 const FREE = /^ frei\b/;
 /** Words that may stand between a negation and the match: "ohne jeden Rost", "kein sichtbarer Rost". */
@@ -111,8 +112,11 @@ const FILLERS = new Set([
   "sichtbare", "sichtbaren", "sichtbarer", "nennenswerte", "nennenswerten", "nennenswerter",
   "bekannte", "bekannten", "bekannter",
 ]);
-/** Punctuation that ends a phrase, so "ohne Rost, Motorschaden" does not negate the engine damage. */
-const PHRASE_BREAK = /[,;:!?|/()[\]+]|\.(?=\s|$)|\s[-–—]+\s/;
+/**
+ * Punctuation that ends a phrase, so "ohne Rost, Motorschaden" does not negate the engine damage.
+ * The dot of "o." or "oh." (ohne, short for a title's few characters) does not.
+ */
+const PHRASE_BREAK = /[,;:!?|/()[\]+]|(?<!\b[Oo][Hh]?)\.(?=\s|$)|\s[-–—]+\s/;
 /** Words right after a match that say it is fixed: "Unfallschaden repariert", "Motorschaden behoben". */
 const FIXED = /^(?: (?:wurde|wurden|ist|sind|fachgerecht|professionell|komplett|alles))* (?:repariert|behoben|instandgesetzt|beseitigt|erneuert|getauscht|gewechselt|gemacht)\b/;
 

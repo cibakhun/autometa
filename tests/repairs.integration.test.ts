@@ -96,7 +96,9 @@ describe.skipIf(!url)("repair estimates and flip list against Postgres", () => {
     // Market 6000 × 0.93 = 5580; side costs 140 + 60 + 150 (drivable) or 300 (towed).
     const clutch = await addCar({ price: 3000, damage: ["clutch"] }); // 5580 − 3000 − 350 − 380 = 1850 in 11.5 h
     const turbo = await addCar({ price: 2500, damage: ["turbo"] }); // 5580 − 2500 − 350 − 855 = 1875 in 9.5 h
-    const engine = await addCar({ price: 500, damage: ["engine"] }); // 5580 − 500 − 500 − 1755 = 2825 in 22.5 h
+    // 92 % below market: the discount beyond 3000 for labor and hassle and the 1755 in parts (745) is
+    // the risk of a worse damage than the title names.
+    const engine = await addCar({ price: 500, damage: ["engine"] }); // 5580 − 500 − 500 − 1755 − 750 = 2075 in 22.5 h
     const unvalued = await addCar({ price: 1000, damage: ["clutch"], market: null });
     await addCar({ price: 4000 });
     await updateRepairEstimates(pool);
@@ -117,9 +119,9 @@ describe.skipIf(!url)("repair estimates and flip list against Postgres", () => {
     expect((await search("sort=flip&margeMin=1880")).items.map((item) => item.id)).toEqual([turbo, engine]);
 
     // The visitor's settings change the margin: a 20 % discount sells for 4800, so the clutch job
-    // (4800 − 3000 − 350 − 380 = 1070) drops below 1080 while turbo (1095) and engine (2045) stay.
+    // (4800 − 3000 − 350 − 380 = 1070) drops below 1080 while turbo (1095) and engine (1295) stay.
     const strict = await searchListings(pool, parseFilters({ sort: "flip", margeMin: "1080" }), null, { ...DEFAULT_FLIP_SETTINGS, discountPct: 20 });
     expect(strict.items.map((item) => item.id)).toEqual([turbo, engine]);
-    expect((await getListing(pool, engine, { ...DEFAULT_FLIP_SETTINGS, discountPct: 20 }))?.flip?.marginEur).toBe(2050);
+    expect((await getListing(pool, engine, { ...DEFAULT_FLIP_SETTINGS, discountPct: 20 }))?.flip?.marginEur).toBe(1300);
   });
 });

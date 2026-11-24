@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { backfillDamage, updateMarketValues } from "@/ingest/market";
@@ -167,5 +169,26 @@ describe.skipIf(!url)("market values against Postgres", () => {
     const { rows } = await pool.query("select id, damage from listings where id = any($1) order by id", [[old, fine]]);
     expect(rows.map((row) => row.damage)).toEqual([["gearbox"], []]);
     expect(await backfillDamage(pool)).toBe(0);
+  });
+
+  it("rechecks the titles the old detector misread for \"ohne\" and \"Export T1\"", async () => {
+    // Damage as the detector stored it before; the migration marks only these titles unchecked.
+    const titles: [string, string[]][] = [
+      ["Toyota Land Cruiser 300+PREMIUM+EXPORT_T1+READY", ["project"]],
+      ["Toyota Land Cruiser HYBRID_EXPORT_T1_READY", ["project"]],
+      ["VW Crafter Kasten NAV AHK oh.Schäden 5J.Gar", ["defect"]],
+      ["VW Golf o Unfall", ["accident"]],
+      ["VW Golf nur Export", ["project"]],
+      ["VW Golf 6 Getriebeschaden", ["gearbox"]],
+    ];
+    const ids: number[] = [];
+    for (const [title, damage] of titles) ids.push(await addCar({ title, price: 5000, damage }));
+    const sql = readFileSync(join(process.cwd(), "supabase/migrations/20261124020000_damage_recheck_ohne_export.sql"), "utf8");
+    await pool.query(sql);
+    const unchecked = async () =>
+      (await pool.query("select id, damage from listings where id = any($1) order by id", [ids])).rows.map((row) => row.damage);
+    expect(await unchecked()).toEqual([null, null, null, null, ["project"], ["gearbox"]]);
+    expect(await backfillDamage(pool)).toBe(4);
+    expect(await unchecked()).toEqual([[], [], [], [], ["project"], ["gearbox"]]);
   });
 });
