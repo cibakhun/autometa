@@ -107,6 +107,68 @@ describe.skipIf(!url)("search against Postgres", () => {
     expect(first.total).toBe(600);
   });
 
+  it("shows a vehicle on several portals once, with its cheapest matching listing, in every sort", async () => {
+    // Fixtures and searches in one transaction that is rolled back, so the shared listings stay as they were.
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      // Three listings of the most common model, searched by that model.
+      const { rows } = await client.query<{ id: string; make_slug: string; model_slug: string }>(
+        `select id, make_slug, model_slug from listings
+          where status = 'active' and (make_slug, model_slug) = (
+           select make_slug, model_slug from listings where status = 'active' and model_slug is not null
+            group by make_slug, model_slug order by count(*) desc, make_slug, model_slug limit 1)
+          order by id limit 3`,
+      );
+      const [a, b, c] = rows.map((row) => Number(row.id));
+      const model = { make: rows[0].make_slug, model: rows[0].model_slug };
+      // One vehicle: b is the cheapest, c costs the same as a. Repair estimates and a market value
+      // give it a flip margin, so the flip sorts place it too.
+      await client.query(
+        `update listings set cluster_id = $1, market_price_eur = 9000, damage = '{engine}', vehicle_class = 'compact',
+                repair_parts_min_eur = 500, repair_parts_max_eur = 900, repair_hours_min = 4, repair_hours_max = 8,
+                repair_difficulty = 2, repair_confidence = 'medium', repair_needs_tow = false,
+                price_eur = case id when $1 then 5000 when $2 then 4000 else 5000 end
+          where id = any($3::int8[])`,
+        [a, b, [a, b, c]],
+      );
+
+      const { rows: count } = await client.query<{ n: number }>(
+        `select count(distinct coalesce(cluster_id, id))::int as n from listings
+          where status = 'active' and make_slug = $1 and model_slug = $2`,
+        [model.make, model.model],
+      );
+      // The listings of the group shown over all pages of the model's search.
+      const shown = async (query: Record<string, string>) => {
+        const ids: number[] = [];
+        const first = await searchListings(client, parseFilters({ ...model, ...query }), null);
+        for (let page = 1; page <= first.pageCount; page++) {
+          const result = page === 1 ? first : await searchListings(client, parseFilters({ ...model, ...query, page: String(page) }), null);
+          ids.push(...result.items.map((item) => item.id));
+        }
+        // Every vehicle once over all pages, and as many as the total says.
+        expect(new Set(ids).size).toBe(ids.length);
+        expect(ids.length).toBe(first.total);
+        if (Object.keys(query).every((key) => key === "sort")) expect(first.total).toBe(count[0].n);
+        return ids.filter((id) => [a, b, c].includes(id));
+      };
+
+      for (const sort of ["newest", "price_asc", "price_desc", "km_asc", "year_desc", "below_market", "price_drop", "flip", "margin", "empfehlung"]) {
+        expect(await shown({ sort }), sort).toEqual([b]);
+      }
+      // Above b's price: the cheaper of the other two, a and c at the same price by id.
+      expect(await shown({ priceMin: "4500", sort: "price_asc" })).toEqual([Math.min(a, c)]);
+      // The group is counted once.
+      const all = await searchListings(client, parseFilters({}), null);
+      expect(all.total).toBe(598);
+      const item = (await searchListings(client, parseFilters({ priceMax: "4000", sort: "price_desc" }), null)).items.find((i) => i.id === b)!;
+      expect(item.otherOffers.map((offer) => offer.id).sort()).toEqual([a, c].sort());
+    } finally {
+      await client.query("rollback");
+      client.release();
+    }
+  }, 30_000);
+
   it("keeps radius results inside the radius and sorts by distance", async () => {
     const filters = parseFilters({ zip: "10115", radius: "100", sort: "distance" });
     const origin = await resolveZip(pool, "10115");

@@ -79,7 +79,7 @@ export function FavoriteButton({
       aria-label={label}
       title={error ?? label}
       disabled={busy}
-      className={`absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-full bg-surface/90 shadow-sm backdrop-blur hover:text-accent ${
+      className={`absolute right-2 top-2 flex h-10 w-10 items-center justify-center rounded-full bg-surface/90 shadow-sm backdrop-blur hover:text-accent ${
         saved ? "text-accent" : "text-muted"
       } ${error ? "ring-2 ring-warn-line" : ""}`}
     >

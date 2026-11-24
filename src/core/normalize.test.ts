@@ -5,8 +5,11 @@ import {
   detectTransmission,
   findMakeInTitle,
   isNotForSale,
+  isPlaceholderModel,
   isYearOnlyRegistration,
+  joinWithoutRepeats,
   kwToPs,
+  mentionsCar,
   normalizeBodyType,
   normalizeFuel,
   normalizeTransmission,
@@ -232,6 +235,84 @@ describe("isNotForSale", () => {
   it.each(["VW Golf 7, neuer Besitzer gesucht", "BMW 320d Inzahlungnahme und Ankauf möglich", "Verkaufe Polo R-Line"])("keeps %s", (title) =>
     expect(isNotForSale(title)).toBe(false),
   );
+
+  // Wanted and swap ads that were still active on the live site.
+  it.each([
+    "Suchen Golf 3 1,8 75PS /90PS für Bastler",
+    "Suchen Opel Astra F oder G als Teilespender",
+    "AMG GT Coupe 2 Türer ab 2015 *Suche*",
+    // The same as AutoScout24 stored it: the title loses the stars.
+    "Mercedes-Benz AMG GT Coupe 2 Türer ab 2015 Suche",
+    "Suche VW/Audi (Diesel)",
+    "Suche älteres Mittelklasse-Auto gerne von Rentner",
+    "Gesucht: VW Bus T4",
+    "VW Bus T3 (SUCHE)",
+    "iphone 18 pro max weschel gegen eine transporter",
+    "Tausche PS5 gegen Auto",
+    "Rolex Submariner Tausch gegen Porsche",
+    "Xbox One Tausch gegen Auto",
+    "Samsung Galaxy S24 Tausch gegen Auto",
+    "Samsung Galaxy Note 10 Tausch gegen Auto",
+    "iPhone 15 Pro Max Tausch gegen Auto",
+  ])("skips the wanted or swap ad %s", (title) => expect(isNotForSale(title)).toBe(true));
+
+  it.each([
+    "VW Golf 7 Tausch möglich",
+    "BMW 320d Tausch oder VB",
+    "Golf 4 Tausch gegen Transporter",
+    "Opel Corsa, Tausch gegen Wohnwagen möglich",
+    "Tausch gegen Golf",
+    "Biete Tausch gegen Bulli",
+    "1.500 € oder Tausch gegen Bulli",
+    "Mein Auto tausche gegen Transporter",
+    "Wohnmobil Tausch gegen PKW",
+    "Suchen Sie einen Kombi? Skoda Octavia Combi",
+    "VW Polo 1.2, Käufer suche",
+    "Golf 7 GTI, Tausch suche",
+    "VW Golf 1.6, Zahnriemen Wechsel gegen Aufpreis",
+    "Audi A4 Avant, Ölwechsel neu",
+    "E46 320d Tausch gegen Golf",
+    "320d touring Tausch gegen Bulli",
+    "Ford Galaxy Tausch gegen Kombi",
+    "Mini One Tausch gegen Cabrio",
+    "911 Turbo Tausch gegen Golf",
+    "Golf 4 mit E-Bike Tausch gegen Transporter",
+    "E-Bike und Golf 4 Tausch gegen Transporter",
+    "iPhone 15 Pro und Golf 4 Tausch gegen Bulli",
+  ])("keeps the sale ad %s", (title) => expect(isNotForSale(title)).toBe(false));
+});
+
+describe("mentionsCar", () => {
+  it("finds makes, models and car words anywhere", () => {
+    expect(mentionsCar("mein schöner golf 4")).toBe(true);
+    expect(mentionsCar("Opel Corsa")).toBe(true);
+    expect(mentionsCar("mein auto")).toBe(true);
+    expect(mentionsCar("iphone 18 pro max")).toBe(false);
+    expect(mentionsCar("ps5")).toBe(false);
+  });
+});
+
+describe("titles of AutoScout24's parts", () => {
+  it.each<[(string | null)[], string]>([
+    [["Audi", "Q3", "35 TFSI", "Sportback S-Line 35 TFSI"], "Audi Q3 35 TFSI Sportback S-Line"],
+    [["Mercedes-Benz", "V 300", null, "V 300 d kompakt 4Matic"], "Mercedes-Benz V 300 d kompakt 4Matic"],
+    [["Mercedes-Benz", "G 63 AMG", null, "G 63 AMG Bodykit"], "Mercedes-Benz G 63 AMG Bodykit"],
+    [["Volkswagen", "Polo", "1.2", "1.2"], "Volkswagen Polo 1.2"],
+    [["Ford", "Focus", null, "Focus"], "Ford Focus"],
+    [["Mercedes-Benz", "E 220", "E 220 d", "T-Modell E 220 d Avantgarde"], "Mercedes-Benz E 220 d T-Modell Avantgarde"],
+    [["Volkswagen", "Golf", "1.5 TSI", "Life Navi LED ACC"], "Volkswagen Golf 1.5 TSI Life Navi LED ACC"],
+    [["Mercedes-Benz", "AMG GT", null, "AMG GT - Garantie"], "Mercedes-Benz AMG GT Garantie"],
+  ])("%j -> %s", (parts, title) => expect(joinWithoutRepeats(parts)).toBe(title));
+
+  it("keeps repeats inside one part and lone letters", () => {
+    expect(joinWithoutRepeats(["VW", "Golf", "ohne Rost ohne Unfall"])).toBe("VW Golf ohne Rost ohne Unfall");
+    expect(joinWithoutRepeats(["BMW", "320d", "d Touring"])).toBe("BMW 320d d Touring");
+  });
+
+  it("knows the portals' words for a model not in their list", () => {
+    for (const model of ["Sonstige", "Andere", "ANDERE", "Others", "other"]) expect(isPlaceholderModel(model), model).toBe(true);
+    for (const model of ["Golf", "One", null]) expect(isPlaceholderModel(model), String(model)).toBe(false);
+  });
 });
 
 describe("models sellers write in their own way", () => {
@@ -247,6 +328,18 @@ describe("models sellers write in their own way", () => {
     ["smart", "451 Cabrio", "fortwo"],
     ["Abarth", "595C Competizione", "500"],
     ["Kia", "K4 Spirit 1.6T", "k4"],
+    ["MINI", "One Bj.2003 zum Schlachten", "one"],
+    ["MINI", "One D Countryman", "countryman"],
+    ["MINI", "Cooper S", "cooper"],
+    ["Renault", "19 – Bastlerfahrzeug", "19"],
+    ["Porsche", "962 C", "962"],
+    ["Porsche", "918 Spyder", "918"],
+    ["Porsche", "959", "959"],
+    ["Porsche", "935", "935"],
+    ["Porsche", "Carrera GT", "carrera-gt"],
+    ["Porsche", "Carrera GTS", "911"],
+    ["Lexus", "LF-A", "lfa"],
+    ["Mercedes-Benz", "AMG ONE", "amg-one"],
   ])("%s %s", (make, model, slug) => {
     expect(resolveMakeModel(make, model).modelSlug).toBe(slug);
   });

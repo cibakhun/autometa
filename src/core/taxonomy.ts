@@ -10,6 +10,11 @@ export interface ModelDef {
   aliases?: string[];
   /** Pattern for the first word of the raw model, e.g. BMW "320d" -> 3er. */
   firstWord?: RegExp;
+  /**
+   * The last year the model was built, for models no longer made. A first registration years
+   * later is a typo or the date of a later registration (see plausibleRegistration).
+   */
+  until?: number;
 }
 
 export interface MakeDef {
@@ -122,6 +127,9 @@ export const MAKES: MakeDef[] = [
       m("glk", "GLK"),
       m("gl", "GL"),
       m("amg-gt", "AMG GT", { aliases: ["amg gt"] }),
+      m("amg-one", "AMG ONE", { aliases: ["amg one"] }),
+      m("sls", "SLS AMG", { aliases: ["sls amg"], until: 2014 }),
+      m("slr", "SLR McLaren", { aliases: ["slr mclaren", "mclaren slr"], until: 2010 }),
       m("marco-polo", "Marco Polo", { aliases: ["marco polo"] }),
     ],
   },
@@ -292,6 +300,7 @@ export const MAKES: MakeDef[] = [
       m("fluence", "Fluence"),
       m("wind", "Wind"),
       m("5", "R5", { aliases: ["r5"] }),
+      m("19", "R19", { aliases: ["r19"], until: 2000 }),
     ],
   },
   {
@@ -368,7 +377,7 @@ export const MAKES: MakeDef[] = [
   {
     slug: "lexus",
     name: "Lexus",
-    models: [...["CT", "IS", "ES", "NX", "RX", "UX", "GS", "LS", "LC", "RC", "RZ"].map(lexus), m("lbx", "LBX")],
+    models: [...["CT", "IS", "ES", "NX", "RX", "UX", "GS", "LS", "LC", "RC", "RZ"].map(lexus), m("lbx", "LBX"), m("lfa", "LFA", { aliases: ["lf a"], until: 2012 })],
   },
   {
     slug: "hyundai",
@@ -605,16 +614,29 @@ export const MAKES: MakeDef[] = [
       m("taycan", "Taycan"),
       m("boxster", "Boxster", { aliases: ["718 boxster"] }),
       m("cayman", "Cayman", { aliases: ["718 cayman"] }),
-      ...codes("356", "914", "924", "928", "944", "968"),
+      m("356", "356", { until: 1965 }),
+      m("914", "914", { until: 1976 }),
+      m("924", "924", { until: 1988 }),
+      m("928", "928", { until: 1995 }),
+      m("944", "944", { until: 1991 }),
+      m("968", "968", { until: 1995 }),
+      // A longer match than "carrera", which names the 911.
+      m("carrera-gt", "Carrera GT", { aliases: ["carrera gt"], until: 2006 }),
+      m("918", "918 Spyder", { aliases: ["918 spyder"], until: 2015 }),
+      m("959", "959", { until: 1993 }),
+      m("962", "962"),
+      m("935", "935"),
     ],
   },
   {
     slug: "mini",
     name: "MINI",
     models: [
-      m("cooper", "Cooper", { aliases: ["one", "cooper s", "cooper se", "cooper d", "john cooper works"] }),
-      m("countryman", "Countryman", { aliases: ["cooper countryman", "cooper s countryman", "one countryman", "cooper d countryman"] }),
-      m("clubman", "Clubman", { aliases: ["cooper clubman", "cooper s clubman", "one clubman"] }),
+      m("cooper", "Cooper", { aliases: ["cooper s", "cooper se", "cooper d", "john cooper works"] }),
+      // The portals list the One as a model of its own, below the Cooper.
+      m("one", "One", { aliases: ["one d", "one first"] }),
+      m("countryman", "Countryman", { aliases: ["cooper countryman", "cooper s countryman", "one countryman", "one d countryman", "cooper d countryman"] }),
+      m("clubman", "Clubman", { aliases: ["cooper clubman", "cooper s clubman", "one clubman", "one d clubman"] }),
       m("cabrio", "Cabrio", { aliases: ["cooper cabrio", "cooper s cabrio", "one cabrio"] }),
       m("paceman", "Paceman"),
       m("aceman", "Aceman"),
@@ -676,3 +698,84 @@ export function findMake(slug: string): MakeDef | undefined {
 export function findModel(makeSlug: string, modelSlug: string): ModelDef | undefined {
   return findMake(makeSlug)?.models.find((model) => model.slug === modelSlug);
 }
+
+/**
+ * Generation codes sellers write in titles ("997.1", "E46", "W124", "Golf 4", "Astra G"), with the
+ * last year the generation was built in any body style, or null while it is still built. Matched
+ * on the lower-case title without accents and with its punctuation (see plausibleRegistration).
+ * Codes that only one generation of one make uses; a code shared with an engine size ("Golf 2.0"),
+ * a door count ("Golf 5-Türer"), a mileage or a price ("997 km", "993 €") does not count.
+ */
+export interface GenerationDef {
+  make: string;
+  /** Only listings of this model, where the code alone means something else elsewhere ("B6"). */
+  model?: string;
+  /** Codes of one family may match together ("997" and "997.1"); the earliest end counts. */
+  family: string;
+  pattern: RegExp;
+  /** Last year built; null while still built (it then only tells another generation apart). */
+  until: number | null;
+}
+
+const NOT_AN_AMOUNT = String.raw`(?![.,]\d)(?!\s*(?:(?:km|kilometer|tkm|ps|kw|ccm|cm|nm|eur|euro|mtl|monatl\w*|mon)\b|€|,-|/))`;
+/** A currency before the number: "ab € 993 monatlich", "EUR 993". */
+const NO_CURRENCY_BEFORE = String.raw`(?<!(?:€|\$|\beur|\beuro|\bchf)\s{0,3})`;
+/** A code standing alone: "997", "e46", "w 124"; not part of "1.997", "997 km" or "€ 993". */
+const code = (body: string) => new RegExp(String.raw`(?<![\d.,])${NO_CURRENCY_BEFORE}\b(?:${body})\b${NOT_AN_AMOUNT}`);
+/** Words after a number that make it something else than a generation: "5-Türer", "7-Sitzer", "1. Hand". */
+const NOT_A_GENERATION = String.raw`(?:t|tur(?:er|ig)?|tuer(?:er|ig)?|sitzer|sitzig|gang|zoll|zylinder|zyl|hand|jahre?|monate?|km|tkm|ps|kw|personen)\b|motion`;
+/** "Golf 4", "Golf IV", "Golf-4"; not "Golf 2.0", "Golf 5-Türer", "Golf 4 Motion" or "Golf 1. Hand". */
+const named = (model: string, codes: string) =>
+  new RegExp(String.raw`\b${model}[ -]?(?:${codes})\b(?![.,]\d)(?![.,]?\s*-?\s*(?:${NOT_A_GENERATION}))`);
+const gen = (make: string, family: string, pattern: RegExp, until: number | null, model?: string): GenerationDef =>
+  model ? { make, model, family, pattern, until } : { make, family, pattern, until };
+
+const PORSCHE: [string, number | null][] = [
+  ["930", 1989], ["964", 1994], ["993", 1998], ["996", 2006], ["991", 2019], ["992", null],
+  ["986", 2004], ["987", 2013], ["981", 2016], ["982", null], ["955", 2007], ["957", 2010], ["958", 2018], ["970", 2016], ["971", null],
+];
+const BMW: [string, number | null][] = [
+  ["e3", 1977], ["e9", 1975], ["e12", 1981], ["e21", 1983], ["e24", 1989], ["e28", 1988], ["e30", 1994], ["e31", 1999], ["e34", 1997],
+  ["e36", 2002], ["e38", 2001], ["e39", 2004], ["e46", 2006], ["e53", 2006], ["e60|e61", 2010], ["e63|e64", 2010], ["e65|e66", 2008],
+  ["e70", 2013], ["e71", 2014], ["e81|e87", 2011], ["e82|e88", 2013], ["e83", 2010], ["e84", 2015], ["e85|e86", 2008], ["e89", 2016],
+  ["e90|e91|e92|e93", 2013], ["f01|f02", 2015], ["f06|f12|f13", 2018], ["f07|f10|f11", 2017], ["f15", 2018], ["f16", 2019],
+  ["f20|f21", 2019], ["f22|f23", 2021], ["f25", 2017], ["f26", 2018], ["f30|f31", 2019], ["f32|f33|f36", 2020], ["f34", 2020],
+  ["f45|f46", 2022], ["f48", 2022], ["f80", 2018], ["f82|f83", 2020], ["f87", 2021], [String.raw`g\d{2}`, null],
+];
+/** Mercedes-Benz chassis codes, with the letters sellers put before them (W saloon, S estate, C coupé, A cabrio, R roadster). */
+const MERCEDES: [string, string, number | null][] = [
+  ["w ?", "108|109", 1972], ["w ?", "110", 1968], ["w ?", "111|113", 1971], ["w ?", "114|115", 1976], ["w ?", "116", 1980],
+  ["w ?|s|c", "123", 1986], ["w ?|s|c|a", "124", 1997], ["w ?|c", "126", 1991], ["w ?|c", "140", 1998], ["w ?", "201", 1993],
+  ["w ?|s", "202", 2001], ["w ?|s", "203", 2008], ["w ?|s|c", "204", 2015], ["w ?|s|c|a", "205", 2023], ["w ?|s|c|a", "206", null],
+  ["w ?|s", "210", 2003], ["w ?|s", "211", 2009], ["w ?|s|c|a", "212", 2016], ["w ?|s", "213", 2024], ["w ?|s", "214", null],
+  ["w ?", "220", 2005], ["w ?", "221", 2013], ["w ?", "222", 2020], ["w ?", "223", null], ["w ?", "168", 2004], ["w ?", "169", 2012],
+  ["w ?", "176", 2018], ["w ?", "177", null], ["w ?", "245", 2011], ["w ?", "246", 2018], ["w ?", "247", null], ["w ?", "163", 2005],
+  ["w ?", "164", 2011], ["w ?", "639", 2014], ["c|a", "208", 2003], ["c|a", "209", 2010], ["r ?", "107", 1989], ["r ?", "129", 2001],
+  ["r ?", "170", 2004], ["r ?", "171", 2011], ["r ?", "230", 2012],
+];
+const GOLF = [["1|i", 1993], ["2|ii", 1992], ["3|iii", 2002], ["4|iv", 2006], ["5|v", 2009], ["6|vi", 2016], ["7|vii", 2021], ["8|viii", null]] as const;
+const POLO = [["86c?", 1994], ["6n[12]?", 2002], ["9n[23]?", 2009], ["6r", 2014], ["6c", 2017], ["aw", null]] as const;
+const PASSAT = [["b3", 1993], ["b4", 1997], [String.raw`b5(?:[.,]5)?`, 2005], ["b6", 2012], ["b7", 2015], ["b8", 2024], ["b9", null]] as const;
+const AUDI_A3 = [["8l", 2003], ["8pa?", 2013], ["8va?", 2020], ["8y", null]] as const;
+const AUDI_A4 = [["b5", 2001], ["b6", 2005], ["b7", 2009], ["b8", 2016], ["b9", null]] as const;
+const AUDI_A6 = [["c4", 1997], ["c5", 2006], ["c6", 2011], ["c7", 2018], ["c8", null]] as const;
+const ASTRA = [["f", 2000], ["g", 2009], ["h", 2014], ["j", 2018], ["k", 2022], ["l", null]] as const;
+// No Corsa E: "Corsa-e" is the electric Corsa F.
+const CORSA = [["a", 1993], ["b", 2001], ["c", 2007], ["d", 2015], ["f", null]] as const;
+
+export const GENERATIONS: GenerationDef[] = [
+  ...PORSCHE.map(([c, until]) => gen("porsche", c, code(c), until)),
+  gen("porsche", "997", code("997"), 2013),
+  gen("porsche", "997", code(String.raw`997[.,]1`), 2009),
+  gen("porsche", "991", code(String.raw`991[.,]1`), 2016),
+  ...BMW.map(([c, until]) => gen("bmw", c, code(c), until)),
+  ...MERCEDES.map(([letters, c, until]) => gen("mercedes-benz", c, code(`(?:${letters})(?:${c})`), until)),
+  ...GOLF.map(([c, until]) => gen("volkswagen", `golf-${c}`, named("golf", c), until)),
+  ...POLO.map(([c, until]) => gen("volkswagen", `polo-${c}`, code(c), until, "polo")),
+  ...PASSAT.map(([c, until]) => gen("volkswagen", `passat-${c}`, code(c), until, "passat")),
+  ...AUDI_A3.map(([c, until]) => gen("audi", `a3-${c}`, code(c), until, "a3")),
+  ...AUDI_A4.map(([c, until]) => gen("audi", `a4-${c}`, code(c), until, "a4")),
+  ...AUDI_A6.map(([c, until]) => gen("audi", `a6-${c}`, code(c), until, "a6")),
+  ...ASTRA.map(([c, until]) => gen("opel", `astra-${c}`, named("astra", c), until)),
+  ...CORSA.map(([c, until]) => gen("opel", `corsa-${c}`, named("corsa", c), until)),
+];

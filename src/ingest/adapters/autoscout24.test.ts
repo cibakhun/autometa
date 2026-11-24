@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   type AutoScout24Item,
+  autoScout24SellerType,
   listUrl,
   normalizeAutoScout24,
   paceDelayMs,
@@ -158,11 +159,83 @@ describe("normalizeAutoScout24", () => {
 
   it("knows private sellers but not their names", () => {
     expect(normalize({ seller: { type: "Private" } })).toMatchObject({ sellerType: "private", sellerName: null });
+    expect(normalize({ seller: { type: "PrivateSeller", companyName: "Erika Mustermann" } })).toMatchObject({ sellerType: "private", sellerName: null });
+  });
+
+  it("reads the seller type however it is written", () => {
+    for (const type of ["Dealer", "dealer", "DEALER", "D", "Händler"]) expect(autoScout24SellerType(type), type).toBe("dealer");
+    for (const type of ["Private", "private", "P", "PrivateSeller", "private_seller", "Privat"]) expect(autoScout24SellerType(type), type).toBe("private");
+    for (const type of [null, "", "Unknown"]) expect(autoScout24SellerType(type), String(type)).toBeNull();
+    expect(normalize({ seller: { type: "dealer", companyName: "Autohaus Beispiel GmbH" } })).toMatchObject({
+      sellerType: "dealer",
+      sellerName: "Autohaus Beispiel GmbH",
+    });
+    // A name is stored only when the seller is known to be a dealer.
+    expect(normalize({ seller: { type: "Unknown", companyName: "Erika Mustermann" } })).toMatchObject({ sellerType: null, sellerName: null });
   });
 
   it("skips listings without a real price", () => {
     expect(normalize({ price: { priceFormatted: "Preis auf Anfrage" } })).toBeNull();
     expect(normalize({ price: { priceFormatted: "€ 1,-" } })).toBeNull();
+  });
+
+  // Live listings that topped "Preis absteigend".
+  it("skips placeholder prices and millions for new everyday cars", () => {
+    const details = (power: string, mileage: string, calendar?: string) => [
+      { iconName: "mileage_odometer", data: mileage },
+      { iconName: "speedometer", data: power },
+      ...(calendar ? [{ iconName: "calendar", data: calendar }] : []),
+    ];
+    const car = (make: string, model: string, version: string, price: number, power: string, mileage: string, calendar?: string) =>
+      normalize({
+        vehicle: { make, model, modelGroup: model, modelVersionInput: version, mileageInKm: mileage },
+        price: { priceRaw: price },
+        vehicleDetails: details(power, mileage, calendar),
+        tracking: {},
+      });
+    expect(car("Porsche", "962", "962 C", 9_999_999, "470 kW (639 PS)", "9.999 km")).toBeNull();
+    expect(car("Ford", "Puma", "1.0 EcoBoost Hybrid ST-Line", 2_992_661, "124 kW (169 PS)", "0 km")).toBeNull();
+    expect(car("Hyundai", "BAYON", "1.0 T-GDI Trend", 2_499_000, "66 kW (90 PS)", "15 km")).toBeNull();
+    expect(car("Mercedes-Benz", "AMG GT", "Coupe 2 Türer ab 2015 *Suche*", 1234, "350 kW (476 PS)", "10.000 km", "01/2016")).toBeNull();
+    expect(car("Mercedes-Benz", "AMG GT", "Coupe ab 2015 *Suche*", 45_000, "350 kW (476 PS)", "10.000 km", "01/2016")).toBeNull();
+    expect(car("Porsche", "918", "Spyder Weissach", 2_950_000, "652 kW (887 PS)", "3.000 km", "03/2015")).toMatchObject({ priceEur: 2_950_000, modelSlug: "918" });
+    expect(car("BMW", "507", "Roadster", 2_190_000, "110 kW (150 PS)", "1.200 km", "05/1959")).toMatchObject({ priceEur: 2_190_000 });
+  });
+
+  // Live titles that said the model or engine twice.
+  it("says each part of the title once", () => {
+    const named = (model: string, motor: string | null, version: string, make = "Volkswagen") =>
+      normalize({ vehicle: { make, model, modelGroup: model, motorTypeName: motor, modelVersionInput: version } });
+    expect(named("Q3", "35 TFSI", "Sportback S-Line 35 TFSI", "Audi")).toMatchObject({
+      title: "Audi Q3 35 TFSI Sportback S-Line",
+      variant: "35 TFSI Sportback S-Line",
+      modelSlug: "q3",
+    });
+    expect(named("V 300", null, "V 300 d kompakt 4Matic", "Mercedes-Benz")).toMatchObject({
+      title: "Mercedes-Benz V 300 d kompakt 4Matic",
+      variant: "d kompakt 4Matic",
+    });
+    expect(named("G 63 AMG", null, "G 63 AMG Bodykit", "Mercedes-Benz")).toMatchObject({ title: "Mercedes-Benz G 63 AMG Bodykit" });
+    expect(named("Polo", "1.2", "1.2")).toMatchObject({ title: "Volkswagen Polo 1.2", variant: "1.2" });
+    expect(named("Focus", null, "Focus", "Ford")).toMatchObject({ title: "Ford Focus", variant: null, modelSlug: "focus" });
+  });
+
+  it("takes the model from the seller's text when the portal has none in its list", () => {
+    const other = (make: string, model: string, version: string) =>
+      normalize({ vehicle: { make, model, modelGroup: null, motorTypeName: null, modelVersionInput: version } });
+    expect(other("Kia", "ANDERE", "Ceed Sportswagon 1.6 CRDi")).toMatchObject({
+      title: "Kia Ceed Sportswagon 1.6 CRDi",
+      modelSlug: "ceed",
+      modelRaw: "ANDERE",
+    });
+    expect(other("Mercedes-Benz", "Sonstige", "AMG ONE")).toMatchObject({ title: "Mercedes-Benz AMG ONE", modelSlug: "amg-one" });
+    expect(other("Lexus", "Others", "LF-A")).toMatchObject({ title: "Lexus LF-A", modelSlug: "lfa" });
+    expect(other("Ford", "Sonstige", "Transit Custom Kasten")).toMatchObject({ modelSlug: "transit" });
+    expect(other("Kia", "Andere", "Bastlerfahrzeug")).toMatchObject({ title: "Kia Bastlerfahrzeug", modelSlug: null });
+  });
+
+  it("leaves a first registration after next month unknown", () => {
+    expect(normalize({ vehicleDetails: [{ iconName: "calendar", data: "01/2099" }], tracking: {} })?.firstRegistration).toBeNull();
   });
 
   it("drops postal codes of other countries", () => {

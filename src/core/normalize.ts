@@ -1,4 +1,4 @@
-import { MAKES, type MakeDef } from "./taxonomy";
+import { GENERATIONS, MAKES, type MakeDef } from "./taxonomy";
 import type { BodyType, Fuel, Transmission } from "./types";
 
 /** Lowercase, strip accents, turn every non-alphanumeric run into one space. */
@@ -248,16 +248,159 @@ export function resolveModelInTitle(makeName: string, title: string): ResolvedMa
 }
 
 /**
- * Ads that offer no car for sale: wanted ads ("Suche Golf 7"), dealers buying up cars
- * ("Ankauf aller Fahrzeuge") and lease takeovers, whose price is a monthly rate.
+ * Ads that offer no car for sale: wanted ads ("Suche Golf 7", "Suchen Golf 3 für Bastler",
+ * "AMG GT ab 2015 *Suche*"), dealers buying up cars ("Ankauf aller Fahrzeuge"), lease takeovers,
+ * whose price is a monthly rate, and swaps of something else for a car ("iPhone tausche gegen
+ * Transporter"). Sale ads that also take a swap ("Tausch möglich", "Golf 4, Tausch gegen Bus")
+ * stay: dropping a real offer is worse than keeping a wanted ad.
  */
 export function isNotForSale(title: string): boolean {
   const text = normalizeText(title);
   return (
     // At the start only: sale ads may say "neuer Besitzer gesucht" or "Ankauf möglich" later on.
     /^(?:\S+ )?(?:suche|ich suche|wir suchen|kaufe|wir kaufen|kaufgesuch|ankauf)\b/.test(text) ||
-    /\b(?:leasingubernahme|leasing ubernahme)\b/.test(text)
+    // "Suchen Sie einen Kombi?" is a dealer's sale ad.
+    /^(?:suchen|gesucht)\b(?! sie\b)/.test(text) ||
+    /\b(?:leasingubernahme|leasing ubernahme)\b/.test(text) ||
+    hasWantedMarker(title) ||
+    endsWithSuche(text) ||
+    offersNoCarInSwap(text)
   );
+}
+
+/** "*Suche*", "(Suche)", "[SUCHE]", "!!Suche!!": sellers mark wanted ads like this anywhere in the title. */
+export function hasWantedMarker(text: string): boolean {
+  return /[*#!([{<]+\s*such(?:e|en)\s*[*#!)\]}>]+/i.test(text);
+}
+
+/** Words before a final "suche" that look for a buyer or a swap, not for a car: "Käufer suche", "Tausch suche". */
+const SEEKS_BUYER = /(?:^| )(?:besitzer|eigentumer|liebhaber|bastler|schrauber|abholer|zuhause|heim|kaufer|kaeufer|abnehmer|interessent\w*|nachfolger|halter|tausch\w*) suche$/;
+
+function endsWithSuche(text: string): boolean {
+  return / suche$/.test(text) && !SEEKS_BUYER.test(text);
+}
+
+const SWAP = /^(.*?)\b(?:tausch|tausche|tauschen|wechsel|wechsle|wechseln|weschel|weschle)\b((?: \S+){0,4}?) gegen\b/;
+/** Words around a swap that say nothing about what is offered: "Biete Tausch gegen …", "1.500 € oder Tausch gegen …". */
+const SWAP_FILLERS = new Set(
+  `biete bieten ich wir mein meine meinen meinem ein eine einen einem der die das den dem verkauf verkaufe verkaufen oder und auch
+   nur evtl eventuell moglich gerne gern zum zur im in mit vb festpreis preis euro eur suche`.split(/\s+/),
+);
+/** Words that name a car without its make: "Auto tausche gegen Transporter" offers a car. */
+const CAR_WORDS =
+  /\b(?:auto|autos|pkw|kfz|fahrzeug|wagen|kombi|limousine|cabrio|cabriolet|coupe|suv|transporter|bus|bulli|van|kastenwagen|wohnmobil|camper|oldtimer|youngtimer|sportwagen|kleinwagen|gelandewagen|pickup|jeep)\b/;
+
+/**
+ * A swap whose offered side names no car: "iphone 18 pro max weschel gegen eine transporter".
+ * The offered side is what stands before the swap word and between it and "gegen". Without any
+ * offered word ("Tausch gegen Golf") nothing is known, so the ad stays.
+ */
+function offersNoCarInSwap(text: string): boolean {
+  const swap = text.match(SWAP);
+  if (!swap) return false;
+  const offered = `${swap[1]} ${swap[2]}`.split(" ").filter((word) => word && !SWAP_FILLERS.has(word));
+  // Only numbers ("1.500 € oder Tausch gegen …") offer nothing known; numbers next to words may
+  // be a model ("911 Turbo Tausch gegen Golf").
+  if (offered.every((word) => /^\d+$/.test(word))) return false;
+  return !mentionsCar(offered.join(" "));
+}
+
+let carKeys: { makes: string[][]; models: string[][] } | null = null;
+
+/**
+ * Things offered in a swap that are no car, whose names a model shares: "Xbox One" (MINI One),
+ * "Samsung Galaxy S24" (Ford Galaxy). Next to one of them only a make or a word like "Auto" counts.
+ */
+const NON_CAR_PRODUCTS =
+  /\b(?:iphone|ipad|macbook|apple|samsung|galaxy s\d+|xbox|playstation|ps[2-5]|nintendo|konsole|handy|smartphone|laptop|notebook|tablet|fernseher|rolex|uhr|fahrrad|e ?bike|pedelec|motorrad|roller|quad)\b/;
+
+/** Words that follow a product's name as its model ("15 pro max", "one", "galaxy note"), never a car's name. */
+const PRODUCT_MODEL_WORDS = String.raw`(?: (?:\S*\d\S*|pro|max|mini|plus|ultra|air|one|series|lite|slim|switch|watch|edge|note|fold|flip|galaxy|tab))*`;
+
+const toKeys = (keys: string[]) =>
+  keys
+    .map((key) => normalizeText(key))
+    .filter((key) => key.length >= 2 && !/^\d{1,2}$/.test(key))
+    .map((key) => key.split(" "));
+
+/**
+ * Whether a text names a car anywhere: a make, a model of any make, a model code like "320d", a
+ * generation code like "E46" or a word like "Auto". Model names of one letter or of one or two
+ * digits do not count, they say nothing on their own; nor do model names next to a product that
+ * is no car ("Xbox One").
+ */
+export function mentionsCar(text: string): boolean {
+  const words = normalizeText(text).split(" ").filter(Boolean);
+  const joined = words.join(" ");
+  if (CAR_WORDS.test(joined)) return true;
+  carKeys ??= {
+    makes: toKeys(MAKES.flatMap((make) => [make.slug, make.name, ...(make.aliases ?? [])])),
+    models: toKeys(MAKES.flatMap((make) => make.models.flatMap((model) => [model.slug, model.name, ...(model.aliases ?? [])]))),
+  };
+  const found = (keys: string[][], within: string[]) =>
+    keys.some((key) => within.some((_, start) => key.every((word, i) => within[start + i] === word)));
+  if (found(carKeys.makes, words)) return true;
+  // A product and its model words after it ("xbox one", "samsung galaxy note 10") are no model;
+  // the rest still is, before or after the product ("golf 4 mit e bike", "e bike und golf 4").
+  const rest = joined.replace(new RegExp(String.raw`${NON_CAR_PRODUCTS.source}${PRODUCT_MODEL_WORDS}`, "g"), " ");
+  const restWords = rest.split(" ").filter(Boolean);
+  if (found(carKeys.models, restWords)) return true;
+  // "320d", "a180": model codes (with a digit, so a lone "e" or "s" says nothing); "E46", "W124".
+  const coded = MAKES.some((make) =>
+    make.models.some((model) => model.firstWord && restWords.some((word) => /\d/.test(word) && word.length >= 3 && model.firstWord!.test(word))),
+  );
+  if (coded) return true;
+  // Generation codes on the title as written ("997.1", "€ 993"), or on the rest beside a product.
+  const target = NON_CAR_PRODUCTS.test(joined) ? rest : text.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return GENERATIONS.some((generation) => generation.pattern.test(target));
+}
+
+/** Model names portals use for "not in their list": AutoScout24's "Sonstige", "Others", "ANDERE". */
+export function isPlaceholderModel(model: string | null | undefined): boolean {
+  return /^(?:sonstige|sonstiges|andere|anderes|other|others|diverse|weitere|unbekannt|unknown)$/.test(normalizeText(model ?? ""));
+}
+
+/**
+ * Joins the parts of a title, leaving out words a part repeats from the parts before it: "Ford",
+ * "Focus", "Focus" gives "Ford Focus"; "Mercedes-Benz", "V 300", "V 300 d kompakt" gives
+ * "Mercedes-Benz V 300 d kompakt". A repeated run counts when it has two words or more, or one of
+ * at least two letters or digits, so a lone "d" stays. Repeats inside one part stay as well:
+ * "ohne Rost ohne Unfall" says two things.
+ */
+export function joinWithoutRepeats(parts: (string | null | undefined)[]): string {
+  const said: string[] = [];
+  const out: string[] = [];
+  for (const part of parts) {
+    const words = (part ?? "").trim().split(/\s+/).filter(Boolean);
+    const keys = words.map((word) => normalizeText(word).replace(/ /g, ""));
+    const kept: number[] = [];
+    for (let i = 0; i < words.length; ) {
+      const run = repeatedRun(keys, i, said);
+      if (run > 0) {
+        i += run;
+        continue;
+      }
+      kept.push(i);
+      i += 1;
+    }
+    // Punctuation left at the edges of what remains ("- Bodykit") goes as well.
+    while (kept.length > 0 && keys[kept[0]] === "") kept.shift();
+    while (kept.length > 0 && keys[kept[kept.length - 1]] === "") kept.pop();
+    out.push(...kept.map((i) => words[i]));
+    said.push(...kept.map((i) => keys[i]));
+  }
+  return out.join(" ");
+}
+
+/** Length of the longest run of words from keys[start] on that stands in `said` as well, if it counts. */
+function repeatedRun(keys: string[], start: number, said: string[]): number {
+  let longest = 0;
+  for (let from = 0; from < said.length; from += 1) {
+    let length = 0;
+    while (start + length < keys.length && keys[start + length] !== "" && said[from + length] === keys[start + length]) length += 1;
+    longest = Math.max(longest, length);
+  }
+  return longest >= 2 || (longest === 1 && keys[start].length >= 2) ? longest : 0;
 }
 
 export interface ResolvedMakeModel {

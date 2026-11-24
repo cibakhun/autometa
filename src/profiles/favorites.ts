@@ -39,7 +39,7 @@ export async function favoriteIds(pool: Pool, profileId: number | null, listingI
 
 export interface WatchedListing extends ListingSummary {
   status: "active" | "gone";
-  goneReason: "missed" | "checked" | "stale" | null;
+  goneReason: "missed" | "checked" | "stale" | "filtered" | null;
   goneAt: string | null;
   savedPriceEur: number;
   savedAt: string;

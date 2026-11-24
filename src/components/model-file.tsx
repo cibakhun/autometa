@@ -42,8 +42,10 @@ export function ModelFileSection({ makeName, modelName, file, jobs, risk }: Mode
   const videoJobs = jobs.filter((job) => !NO_VIDEO_JOBS.has(job.id));
 
   return (
-    <section className="mt-6 border-t border-line pt-4 text-sm">
-      <h2 className="font-semibold">Modell-Akte: {name}, {ageBucketLabel(file.bucket)}</h2>
+    <section className="mt-6 border-t border-line pt-5 text-sm">
+      <h2 className="text-base font-semibold">
+        Modell-Akte: {name}, {ageBucketLabel(file.bucket)}
+      </h2>
       {file.profile ? (
         <>
           <p className="mt-1">
@@ -61,29 +63,41 @@ export function ModelFileSection({ makeName, modelName, file, jobs, risk }: Mode
             file.average && <p className="mt-1 text-muted">Keine Baugruppe fällt deutlich häufiger auf als beim Durchschnitt.</p>
           )}
           {rows.length > 0 && (
-            <div className="mt-2 overflow-x-auto">
-              <table className="w-full min-w-[28rem] text-left text-sm">
-                <thead className="text-xs text-muted">
-                  <tr className="border-b border-line">
-                    <th className="py-1.5 pr-3 font-medium">Mängel an</th>
-                    <th className="py-1.5 pr-3 text-right font-medium">{modelName}</th>
-                    <th className="py-1.5 text-right font-medium">Durchschnitt</th>
+            // Narrow enough for a phone: the labels wrap, the shares stay in their columns.
+            <table className="mt-2 w-full text-left text-sm">
+              <caption className="sr-only">
+                Anteil mit Mängeln je Baugruppe: {name} und alle gleich alten Autos
+              </caption>
+              <thead className="text-xs text-muted">
+                <tr className="border-b border-line">
+                  <th scope="col" className="py-1.5 pr-3 font-medium">
+                    Mängel an
+                  </th>
+                  <th scope="col" className="w-px py-1.5 pr-3 text-right font-medium">
+                    {modelName}
+                  </th>
+                  <th scope="col" className="w-px whitespace-nowrap py-1.5 text-right font-medium">
+                    Durchschnitt
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.component} className="border-b border-line last:border-0">
+                    <th scope="row" className="py-1.5 pr-3 font-normal">
+                      {COMPONENT_INFO[row.component].label}
+                      {row.weak && (
+                        <span className="ml-1.5 inline-block rounded-full border border-warn-line bg-warn-bg px-1.5 text-xs text-warn-text">
+                          Schwachstelle
+                        </span>
+                      )}
+                    </th>
+                    <td className="whitespace-nowrap py-1.5 pr-3 text-right font-medium">{percent(row.rate)}</td>
+                    <td className="whitespace-nowrap py-1.5 text-right text-muted">{row.averageRate === null ? "–" : percent(row.averageRate)}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => (
-                    <tr key={row.component} className="border-b border-line last:border-0">
-                      <td className="py-1.5 pr-3">
-                        {COMPONENT_INFO[row.component].label}
-                        {row.weak && <span className="ml-1.5 rounded-full border border-warn-line bg-warn-bg px-1.5 text-xs text-warn-text">Schwachstelle</span>}
-                      </td>
-                      <td className="py-1.5 pr-3 text-right font-medium">{percent(row.rate)}</td>
-                      <td className="py-1.5 text-right text-muted">{row.averageRate === null ? "–" : percent(row.averageRate)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           )}
         </>
       ) : (

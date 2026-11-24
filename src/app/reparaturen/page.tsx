@@ -66,28 +66,37 @@ export default function RepairCatalogPage() {
 
       <section className="rounded-xl border border-line bg-surface p-5">
         <h2 className="font-semibold">Was ein Schadenshinweis im Titel bedeutet</h2>
-        <div className="mt-2 overflow-x-auto">
-          <table className="w-full min-w-[36rem] text-left text-sm">
-            <thead className="text-xs text-muted">
-              <tr className="border-b border-line">
-                <th className="py-2 pr-3 font-medium">Hinweis</th>
-                <th className="py-2 pr-3 font-medium">Gerechnet wird mit</th>
-                <th className="py-2 pr-3 font-medium">Sicherheit</th>
-                <th className="py-2 font-medium">Abholen</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(Object.entries(DAMAGE_JOBS) as [DamageKind, (typeof DAMAGE_JOBS)[DamageKind]][]).map(([kind, rule]) => (
-                <tr key={kind} className="border-b border-line last:border-0">
-                  <td className="py-2 pr-3 font-medium">{DAMAGE_LABELS[kind]}</td>
-                  <td className="py-2 pr-3">{rule.jobs.map((id) => findJob(id)?.label ?? id).join(", ")}</td>
-                  <td className="py-2 pr-3">{CONFIDENCE_LABELS[rule.confidence]}</td>
-                  <td className="py-2">{rule.drivable ? "fahrbereit" : "Anhänger"}</td>
+        {/* On a phone the other columns fold into a line under the hint, so nothing scrolls sideways. */}
+        <table className="mt-2 w-full text-left text-sm">
+          <thead className="hidden text-xs text-muted sm:table-header-group">
+            <tr className="border-b border-line">
+              <th className="py-2 pr-3 font-medium">Hinweis</th>
+              <th className="py-2 pr-3 font-medium">Gerechnet wird mit</th>
+              <th className="py-2 pr-3 font-medium">Sicherheit</th>
+              <th className="py-2 font-medium">Abholen</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(Object.entries(DAMAGE_JOBS) as [DamageKind, (typeof DAMAGE_JOBS)[DamageKind]][]).map(([kind, rule]) => {
+              const jobs = rule.jobs.map((id) => findJob(id)?.label ?? id).join(", ");
+              const drivable = rule.drivable ? "fahrbereit" : "Anhänger";
+              return (
+                <tr key={kind} className="border-b border-line align-top last:border-0">
+                  <td className="py-2 pr-3">
+                    <span className="font-medium">{DAMAGE_LABELS[kind]}</span>
+                    <span className="mt-0.5 block text-muted sm:hidden">
+                      {jobs} · <span className="whitespace-nowrap">Sicherheit {CONFIDENCE_LABELS[rule.confidence]}</span> ·{" "}
+                      <span className="whitespace-nowrap">{drivable}</span>
+                    </span>
+                  </td>
+                  <td className="hidden py-2 pr-3 sm:table-cell">{jobs}</td>
+                  <td className="hidden py-2 pr-3 sm:table-cell">{CONFIDENCE_LABELS[rule.confidence]}</td>
+                  <td className="hidden py-2 sm:table-cell">{drivable}</td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              );
+            })}
+          </tbody>
+        </table>
         <p className="mt-2 text-xs text-muted">
           Jedes Auto bekommt dazu „Aufbereitung, Fotos und Verkauf“, eines mit abgelaufener HU die HU-Vorbereitung. Bei Elektroautos
           zählt ein Motor- oder Getriebeschaden als Hochvolt-Fehler.
@@ -102,31 +111,34 @@ export default function RepairCatalogPage() {
         return (
           <section key={group} className="rounded-xl border border-line bg-surface p-5">
             <h2 className="font-semibold">{group}</h2>
-            <div className="mt-2 overflow-x-auto">
-              <table className="w-full min-w-[36rem] text-left text-sm">
-                <thead className="text-xs text-muted">
-                  <tr className="border-b border-line">
-                    <th className="py-2 pr-3 font-medium">Arbeit</th>
-                    <th className="py-2 pr-3 font-medium">Stunden</th>
-                    <th className="py-2 pr-3 font-medium">Schwierigkeit</th>
-                    <th className="py-2 font-medium">Teile (Kompaktklasse)</th>
+            <table className="mt-2 w-full text-left text-sm">
+              <thead className="hidden text-xs text-muted sm:table-header-group">
+                <tr className="border-b border-line">
+                  <th className="py-2 pr-3 font-medium">Arbeit</th>
+                  <th className="py-2 pr-3 font-medium">Stunden</th>
+                  <th className="py-2 pr-3 font-medium">Schwierigkeit</th>
+                  <th className="py-2 font-medium">Teile (Kompaktklasse)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {jobs.map((job) => (
+                  <tr key={job.id} className="border-b border-line align-top last:border-0">
+                    <td className="py-2 pr-3">
+                      <span className="font-medium">{job.label}</span>
+                      <span className="mt-0.5 block sm:hidden">
+                        <span className="whitespace-nowrap">{hours(job.hours)}</span> ·{" "}
+                        <span className="whitespace-nowrap">Schwierigkeit {job.difficulty}</span> ·{" "}
+                        <span className="whitespace-nowrap">Teile {euros(job.partsEur)}</span>
+                      </span>
+                      {job.tools && <span className="block text-xs text-muted">Braucht: {job.tools}</span>}
+                    </td>
+                    <td className="hidden whitespace-nowrap py-2 pr-3 sm:table-cell">{hours(job.hours)}</td>
+                    <td className="hidden whitespace-nowrap py-2 pr-3 sm:table-cell">{job.difficulty} von 5</td>
+                    <td className="hidden whitespace-nowrap py-2 sm:table-cell">{euros(job.partsEur)}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {jobs.map((job) => (
-                    <tr key={job.id} className="border-b border-line align-top last:border-0">
-                      <td className="py-2 pr-3">
-                        <span className="font-medium">{job.label}</span>
-                        {job.tools && <span className="block text-xs text-muted">Braucht: {job.tools}</span>}
-                      </td>
-                      <td className="whitespace-nowrap py-2 pr-3">{hours(job.hours)}</td>
-                      <td className="py-2 pr-3">{job.difficulty} von 5</td>
-                      <td className="whitespace-nowrap py-2">{euros(job.partsEur)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </section>
         );
       })}
@@ -172,7 +184,7 @@ function RiskSection() {
       <p className="mt-2">
         Der schlimmere Fall kostet mindestens die Teile aus der Liste unten. Bei teuren Autos ist er so teuer wie der Preisnachlass:
         Marktwert minus Preis, minus {formatEuro(LABOR_AND_HASSLE_EUR)} für Werkstattarbeit und Aufwand, minus die schon gerechneten
-        Teile. Wer ein Auto für 34.000 € für 6.000 € anbietet, kennt meist einen Schaden in dieser Höhe. Das gilt für jeden Hinweis im
+        Teile. Wer ein Auto, das intakt 34.000 € kostet, für 6.000 € anbietet, kennt meist einen Schaden in dieser Höhe. Das gilt für jeden Hinweis im
         Titel, auch für Motorschaden oder Kupplung.
       </p>
       <ul className="mt-2 space-y-1">
