@@ -8,6 +8,8 @@ import {
   findJob,
   REPAIR_JOBS,
   scaledParts,
+  LABOR_AND_HASSLE_EUR,
+  PRICE_SEVERE_LABEL,
   SEVERE_CASES,
   unclearDamageRisk,
   vehicleClass,
@@ -126,11 +128,33 @@ describe("unclearDamageRisk", () => {
     expect(risk(["accident"], compact, 1000, null)).toBeNull();
   });
 
-  it("has no worse case for damage the estimate already assumes at its worst", () => {
-    expect(risk(["engine"], compact, 500, 6000)).toBeNull();
-    expect(risk(["clutch"], compact, 500, 6000)).toBeNull();
+  it("has no worse case for damage the estimate already assumes at its worst while labor and hassle explain the price", () => {
+    expect(risk(["engine"], compact, 3000, 6000)).toBeNull();
+    expect(risk(["clutch"], compact, 3000, 6000)).toBeNull();
     // "Motorschaden, springt nicht an": the replacement engine is in the estimate already.
-    expect(risk(["engine", "not_running"], compact, 600, 6000)).toBeNull();
+    expect(risk(["engine", "not_running"], compact, 600, 4000)).toBeNull();
+    // A cheap car sold for scrap money: the discount is mostly the work, not hidden damage.
+    expect(risk(["rust"], compact, 600, 2500)).toBeNull();
+  });
+
+  it("lets the worse case grow with the discount on an expensive car", () => {
+    // A 34,000 euro car for 6,000 with an accident: the damage eats the discount beyond labor and hassle.
+    const counted = countedJobs(estimateRepairs(["accident"], golf));
+    const countedEur = counted.reduce((sum, job) => sum + job.partsEur, 0);
+    const found = unclearDamageRisk(["accident"], compact, 6000, 34000, counted)!;
+    expect(found).toMatchObject({ kind: "accident", basis: "price", probability: 1, label: SEVERE_CASES.accident!.label });
+    expect(found.eur).toBe(Math.round((34000 - 6000 - LABOR_AND_HASSLE_EUR - countedEur) / 10) * 10);
+    // Halfway between: half the probability of that worse case.
+    const half = unclearDamageRisk(["accident"], compact, 17000, 34000, counted)!;
+    expect(half.probability).toBeCloseTo(0.5);
+    expect(half.eur).toBe(Math.round((0.5 * (34000 - 17000 - LABOR_AND_HASSLE_EUR - countedEur)) / 10) * 10);
+  });
+
+  it("points to more than the title names on any damage when the price is far too low", () => {
+    const found = risk(["engine", "not_running"], compact, 4000, 40000)!;
+    expect(found).toMatchObject({ kind: "not_running", basis: "price" });
+    const clutch = risk(["clutch"], compact, 8000, 25000)!;
+    expect(clutch).toMatchObject({ kind: "clutch", basis: "price", label: PRICE_SEVERE_LABEL });
   });
 
   it("counts nothing extra for a worse case picked by hand", () => {
@@ -145,12 +169,12 @@ describe("unclearDamageRisk", () => {
       { id: "no_start", partsEur: mid("no_start") },
       { id: "timing_chain", partsEur: 100 },
     ];
-    const found = unclearDamageRisk(["not_running"], compact, 600, 6000, rows)!;
+    const found = unclearDamageRisk(["not_running"], compact, 600, 4000, rows)!;
     expect(found.eur).toBe(Math.round((mid("engine_used") - mid("no_start") - 100) / 10) * 10);
   });
 
   it("takes the most expensive worse case of several hints", () => {
-    const found = risk(["electrics", "not_running"], compact, 600, 6000)!;
+    const found = risk(["electrics", "not_running"], compact, 600, 4000)!;
     expect(found.kind).toBe("not_running");
     expect(found.eur).toBe(Math.round((mid("engine_used") - mid("no_start")) / 10) * 10);
   });

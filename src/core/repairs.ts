@@ -291,7 +291,8 @@ export function estimateRepairs(
  * Damage whose extent a title does not tell, and the much worse case it can turn out to be: an
  * "Unfallwagen" may need new panels or a straightened frame, a car that "springt nicht an" a new
  * battery or a new engine. Kinds that already assume the worse case (Motorschaden counts as a
- * replacement engine) or that name the part (Kupplung) have none.
+ * replacement engine) or that name the part (Kupplung) have none here; for them only a price far
+ * below market points to more (LABOR_AND_HASSLE_EUR).
  */
 export const SEVERE_CASES: Partial<Record<DamageKind, { jobs: string[]; label: string }>> = {
   accident: { jobs: ["accident_heavy"], label: "schwerer Unfallschaden (Airbags, Träger, Rahmen)" },
@@ -311,6 +312,17 @@ export const SEVERE_CASES: Partial<Record<DamageKind, { jobs: string[]; label: s
 export const SEVERE_FROM = 0.3;
 export const SEVERE_CERTAIN = 0.7;
 
+/**
+ * The part of a damaged car's discount that labor at a workshop and the hassle of selling it
+ * explain. What the discount goes beyond this and the parts already counted can be damage the
+ * title does not name, so the worse case costs at least that much: a 34,000 euro car offered
+ * for 6,000 has damage of about that size, whatever the catalog's worse case costs on average.
+ */
+export const LABOR_AND_HASSLE_EUR = 3000;
+
+/** The worse case of a damage kind without one in SEVERE_CASES, when only the price points to it. */
+export const PRICE_SEVERE_LABEL = "größerer Schaden, als der Titel nennt";
+
 export interface UnclearRisk {
   kind: DamageKind;
   label: string;
@@ -320,6 +332,8 @@ export interface UnclearRisk {
   probability: number;
   /** What the worse case costs in parts on top of the estimate. */
   extraEur: number;
+  /** Catalog: the worse case's jobs. Price: the discount beyond labor, hassle and counted parts. */
+  basis: "catalog" | "price";
   /** probability × extra, rounded to 10 euros. */
   eur: number;
 }
@@ -343,13 +357,15 @@ const partsMid = (id: string, cls: VehicleClass) => {
 };
 
 /**
- * The extra parts cost to expect because a damage's extent is unclear: for each damage kind with
- * a worse case, that case's cost beyond the jobs it replaces, times how likely the price makes it.
- * The biggest of these counts (one car has one worst case). counted are the jobs already counted
- * with their parts cost: the whole estimate, or the rows in the calculator as typed. A worse case
- * among them, or replaced by one of them, costs nothing extra; the jobs it replaces are credited
- * at their counted cost. Null when nothing applies or there is no market value to compare the
- * price with.
+ * The extra parts cost to expect because a damage's extent is unclear, times how likely the price
+ * makes the worse case. The worse case costs the more of two: the catalog's (SEVERE_CASES, beyond
+ * the jobs it replaces) and the price's (the discount on the market value beyond
+ * LABOR_AND_HASSLE_EUR and all counted parts), so it grows with the car's value. The biggest of
+ * the damage kinds counts (one car has one worst case). counted are the jobs already counted with
+ * their parts cost: the whole estimate, or the rows in the calculator as typed. A catalog worse
+ * case among them, or replaced by one of them, costs nothing extra; the jobs it replaces are
+ * credited at their counted cost. Null when nothing applies or there is no market value to
+ * compare the price with.
  */
 export function unclearDamageRisk(
   damage: readonly DamageKind[],
@@ -363,24 +379,32 @@ export function unclearDamageRisk(
   const probability = Math.max(0, Math.min(1, (belowMarket - SEVERE_FROM) / (SEVERE_CERTAIN - SEVERE_FROM)));
   if (probability === 0) return null;
   const covered = new Set(counted.flatMap(({ id }) => [id, ...(findJob(id)?.replaces ?? [])]));
+  const countedEur = counted.reduce((sum, job) => sum + job.partsEur, 0);
+  const priceExtraEur = Math.max(0, marketEur - priceEur - LABOR_AND_HASSLE_EUR - countedEur);
   let worst: UnclearRisk | null = null;
   for (const kind of damage) {
     const severe = SEVERE_CASES[kind];
-    if (!severe) continue;
-    const severeJobs = severe.jobs.map((id) => (facts.fuel === "electric" && id === "engine_used" ? "high_voltage" : id));
-    // Another hint already brought the worse case into the estimate (engine and not running).
+    const severeJobs = (severe?.jobs ?? []).map((id) => (facts.fuel === "electric" && id === "engine_used" ? "high_voltage" : id));
+    // Another hint can have brought the catalog's worse case into the estimate (engine and not running).
     const missing = severeJobs.filter((id) => !covered.has(id));
-    if (missing.length === 0) continue;
     // An electric car's high-voltage fault stands in for the replacement engine, with what that replaces.
-    const replaced = new Set([...severe.jobs, ...severeJobs].flatMap((id) => [id, ...(findJob(id)?.replaces ?? [])]));
-    const extraEur = Math.max(
-      0,
-      missing.reduce((sum, id) => sum + partsMid(id, facts.vehicleClass), 0) -
-        counted.filter(({ id }) => replaced.has(id)).reduce((sum, job) => sum + job.partsEur, 0),
-    );
+    const replaced = new Set([...(severe?.jobs ?? []), ...severeJobs].flatMap((id) => [id, ...(findJob(id)?.replaces ?? [])]));
+    const catalogExtraEur =
+      missing.length === 0
+        ? 0
+        : Math.max(
+            0,
+            missing.reduce((sum, id) => sum + partsMid(id, facts.vehicleClass), 0) -
+              counted.filter(({ id }) => replaced.has(id)).reduce((sum, job) => sum + job.partsEur, 0),
+          );
+    const basis = priceExtraEur > catalogExtraEur ? "price" : "catalog";
+    const extraEur = Math.max(catalogExtraEur, priceExtraEur);
     const eur = round10(probability * extraEur);
-    if (eur > 0 && (!worst || eur > worst.eur)) {
-      worst = { kind, label: severe.label, belowMarket, probability, extraEur: round10(extraEur), eur };
+    // On a tie, a kind with its own worse case names it better than the generic label.
+    const better = !worst || eur > worst.eur || (eur === worst.eur && severe !== undefined && SEVERE_CASES[worst.kind] === undefined);
+    if (eur > 0 && better) {
+      const label = severe?.label ?? PRICE_SEVERE_LABEL;
+      worst = { kind, label, belowMarket, probability, extraEur: round10(extraEur), basis, eur };
     }
   }
   return worst;

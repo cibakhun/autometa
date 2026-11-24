@@ -129,7 +129,7 @@ export function FlipCalculator({ priceEur, marketEur, damage, facts, settings, p
   const riskHint = [
     hidden && `versteckte Mängel ${formatEuro(hidden.eur)} (${profileBasis === "model" ? "Modell-Akte" : "Durchschnitt gleich alter Autos"})`,
     unclear &&
-      `unklarer Schaden ${formatEuro(unclear.eur)} (Preis ${Math.round(unclear.belowMarket * 100)} % unter Marktwert, schlimmerer Fall zu ${Math.round(unclear.probability * 100)} % angenommen: ${unclear.label})`,
+      `unklarer Schaden ${formatEuro(unclear.eur)} (Preis ${Math.round(unclear.belowMarket * 100)} % unter Marktwert, schlimmerer Fall zu ${Math.round(unclear.probability * 100)} % angenommen: ${unclear.label}${unclear.basis === "price" ? `, so teuer wie der Preisnachlass abzüglich Arbeit, Aufwand und Teilen: ${formatEuro(unclear.extraEur)}` : ""})`,
   ]
     .filter(Boolean)
     .join("; ");
