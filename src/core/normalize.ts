@@ -298,8 +298,11 @@ const CAR_WORDS =
 function offersNoCarInSwap(text: string): boolean {
   const swap = text.match(SWAP);
   if (!swap) return false;
-  const offered = `${swap[1]} ${swap[2]}`.split(" ").filter((word) => word && !SWAP_FILLERS.has(word) && !/^\d+$/.test(word));
-  return offered.length > 0 && !mentionsCar(offered.join(" "));
+  const offered = `${swap[1]} ${swap[2]}`.split(" ").filter((word) => word && !SWAP_FILLERS.has(word));
+  // Only numbers ("1.500 € oder Tausch gegen …") offer nothing known; numbers next to words may
+  // be a model ("911 Turbo Tausch gegen Golf").
+  if (offered.every((word) => /^\d+$/.test(word))) return false;
+  return !mentionsCar(offered.join(" "));
 }
 
 let carKeys: { makes: string[][]; models: string[][] } | null = null;
@@ -331,17 +334,22 @@ export function mentionsCar(text: string): boolean {
     makes: toKeys(MAKES.flatMap((make) => [make.slug, make.name, ...(make.aliases ?? [])])),
     models: toKeys(MAKES.flatMap((make) => make.models.flatMap((model) => [model.slug, model.name, ...(model.aliases ?? [])]))),
   };
-  const found = (keys: string[][]) => keys.some((key) => words.some((_, start) => key.every((word, i) => words[start + i] === word)));
-  if (found(carKeys.makes)) return true;
-  if (NON_CAR_PRODUCTS.test(joined)) return false;
-  if (found(carKeys.models)) return true;
+  const found = (keys: string[][], within: string[]) =>
+    keys.some((key) => within.some((_, start) => key.every((word, i) => within[start + i] === word)));
+  if (found(carKeys.makes, words)) return true;
+  // A product and the two words after it ("xbox one", "samsung galaxy s24") are no model; the
+  // rest still is ("golf 4 mit e bike").
+  const rest = joined.replace(new RegExp(String.raw`${NON_CAR_PRODUCTS.source}(?: \S+){0,2}`, "g"), " ");
+  const restWords = rest.split(" ").filter(Boolean);
+  if (found(carKeys.models, restWords)) return true;
   // "320d", "a180": model codes (with a digit, so a lone "e" or "s" says nothing); "E46", "W124".
   const coded = MAKES.some((make) =>
-    make.models.some((model) => model.firstWord && words.some((word) => /\d/.test(word) && word.length >= 3 && model.firstWord!.test(word))),
+    make.models.some((model) => model.firstWord && restWords.some((word) => /\d/.test(word) && word.length >= 3 && model.firstWord!.test(word))),
   );
   if (coded) return true;
-  const lower = text.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  return GENERATIONS.some((generation) => generation.pattern.test(lower));
+  // Generation codes on the title as written ("997.1", "€ 993"), or on the rest beside a product.
+  const target = NON_CAR_PRODUCTS.test(joined) ? rest : text.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return GENERATIONS.some((generation) => generation.pattern.test(target));
 }
 
 /** Model names portals use for "not in their list": AutoScout24's "Sonstige", "Others", "ANDERE". */

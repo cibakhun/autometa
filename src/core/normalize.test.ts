@@ -273,6 +273,8 @@ describe("isNotForSale", () => {
     "320d touring Tausch gegen Bulli",
     "Ford Galaxy Tausch gegen Kombi",
     "Mini One Tausch gegen Cabrio",
+    "911 Turbo Tausch gegen Golf",
+    "Golf 4 mit E-Bike Tausch gegen Transporter",
   ])("keeps the sale ad %s", (title) => expect(isNotForSale(title)).toBe(false));
 });
 
