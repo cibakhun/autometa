@@ -27,7 +27,8 @@ const withCurrent = (options: number[], current: number | undefined, descending 
     : [...options, current].sort((a, b) => (descending ? b - a : a - b));
 const PS_STEPS = [60, 75, 100, 125, 150, 200, 250, 300];
 const CURRENT_YEAR = 2026;
-const YEARS = Array.from({ length: 27 }, (_, i) => CURRENT_YEAR - i);
+/** Every year back to 1990, older cars (Bastler, classics) in coarser steps down to the parser's 1950. */
+const YEARS = [...Array.from({ length: CURRENT_YEAR - 1990 + 1 }, (_, i) => CURRENT_YEAR - i), 1985, 1980, 1975, 1970, 1960, 1950];
 const nf = new Intl.NumberFormat("de-DE");
 const DIFFICULTIES = [1, 2, 3, 4, 5] as const satisfies readonly Difficulty[];
 
