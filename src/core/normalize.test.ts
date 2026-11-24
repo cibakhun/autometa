@@ -5,7 +5,9 @@ import {
   detectTransmission,
   findMakeInTitle,
   isNotForSale,
+  isPlaceholderModel,
   isYearOnlyRegistration,
+  joinWithoutRepeats,
   kwToPs,
   mentionsCar,
   normalizeBodyType,
@@ -275,6 +277,29 @@ describe("mentionsCar", () => {
     expect(mentionsCar("mein auto")).toBe(true);
     expect(mentionsCar("iphone 18 pro max")).toBe(false);
     expect(mentionsCar("ps5")).toBe(false);
+  });
+});
+
+describe("titles of AutoScout24's parts", () => {
+  it.each<[(string | null)[], string]>([
+    [["Audi", "Q3", "35 TFSI", "Sportback S-Line 35 TFSI"], "Audi Q3 35 TFSI Sportback S-Line"],
+    [["Mercedes-Benz", "V 300", null, "V 300 d kompakt 4Matic"], "Mercedes-Benz V 300 d kompakt 4Matic"],
+    [["Mercedes-Benz", "G 63 AMG", null, "G 63 AMG Bodykit"], "Mercedes-Benz G 63 AMG Bodykit"],
+    [["Volkswagen", "Polo", "1.2", "1.2"], "Volkswagen Polo 1.2"],
+    [["Ford", "Focus", null, "Focus"], "Ford Focus"],
+    [["Mercedes-Benz", "E 220", "E 220 d", "T-Modell E 220 d Avantgarde"], "Mercedes-Benz E 220 d T-Modell Avantgarde"],
+    [["Volkswagen", "Golf", "1.5 TSI", "Life Navi LED ACC"], "Volkswagen Golf 1.5 TSI Life Navi LED ACC"],
+    [["Mercedes-Benz", "AMG GT", null, "AMG GT - Garantie"], "Mercedes-Benz AMG GT Garantie"],
+  ])("%j -> %s", (parts, title) => expect(joinWithoutRepeats(parts)).toBe(title));
+
+  it("keeps repeats inside one part and lone letters", () => {
+    expect(joinWithoutRepeats(["VW", "Golf", "ohne Rost ohne Unfall"])).toBe("VW Golf ohne Rost ohne Unfall");
+    expect(joinWithoutRepeats(["BMW", "320d", "d Touring"])).toBe("BMW 320d d Touring");
+  });
+
+  it("knows the portals' words for a model not in their list", () => {
+    for (const model of ["Sonstige", "Andere", "ANDERE", "Others", "other"]) expect(isPlaceholderModel(model), model).toBe(true);
+    for (const model of ["Golf", "One", null]) expect(isPlaceholderModel(model), String(model)).toBe(false);
   });
 });
 

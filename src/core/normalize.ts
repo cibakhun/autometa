@@ -321,6 +321,54 @@ export function mentionsCar(text: string): boolean {
   return carKeys.some((key) => words.some((_, start) => key.every((word, i) => words[start + i] === word)));
 }
 
+/** Model names portals use for "not in their list": AutoScout24's "Sonstige", "Others", "ANDERE". */
+export function isPlaceholderModel(model: string | null | undefined): boolean {
+  return /^(?:sonstige|sonstiges|andere|anderes|other|others|diverse|weitere|unbekannt|unknown)$/.test(normalizeText(model ?? ""));
+}
+
+/**
+ * Joins the parts of a title, leaving out words a part repeats from the parts before it: "Ford",
+ * "Focus", "Focus" gives "Ford Focus"; "Mercedes-Benz", "V 300", "V 300 d kompakt" gives
+ * "Mercedes-Benz V 300 d kompakt". A repeated run counts when it has two words or more, or one of
+ * at least two letters or digits, so a lone "d" stays. Repeats inside one part stay as well:
+ * "ohne Rost ohne Unfall" says two things.
+ */
+export function joinWithoutRepeats(parts: (string | null | undefined)[]): string {
+  const said: string[] = [];
+  const out: string[] = [];
+  for (const part of parts) {
+    const words = (part ?? "").trim().split(/\s+/).filter(Boolean);
+    const keys = words.map((word) => normalizeText(word).replace(/ /g, ""));
+    const kept: number[] = [];
+    for (let i = 0; i < words.length; ) {
+      const run = repeatedRun(keys, i, said);
+      if (run > 0) {
+        i += run;
+        continue;
+      }
+      kept.push(i);
+      i += 1;
+    }
+    // Punctuation left at the edges of what remains ("- Bodykit") goes as well.
+    while (kept.length > 0 && keys[kept[0]] === "") kept.shift();
+    while (kept.length > 0 && keys[kept[kept.length - 1]] === "") kept.pop();
+    out.push(...kept.map((i) => words[i]));
+    said.push(...kept.map((i) => keys[i]));
+  }
+  return out.join(" ");
+}
+
+/** Length of the longest run of words from keys[start] on that stands in `said` as well, if it counts. */
+function repeatedRun(keys: string[], start: number, said: string[]): number {
+  let longest = 0;
+  for (let from = 0; from < said.length; from += 1) {
+    let length = 0;
+    while (start + length < keys.length && keys[start + length] !== "" && said[from + length] === keys[start + length]) length += 1;
+    longest = Math.max(longest, length);
+  }
+  return longest >= 2 || (longest === 1 && keys[start].length >= 2) ? longest : 0;
+}
+
 export interface ResolvedMakeModel {
   makeSlug: string | null;
   modelSlug: string | null;

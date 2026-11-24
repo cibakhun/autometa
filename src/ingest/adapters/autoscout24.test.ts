@@ -188,6 +188,38 @@ describe("normalizeAutoScout24", () => {
     expect(car("BMW", "507", "Roadster", 2_190_000, "110 kW (150 PS)", "1.200 km", "05/1959")).toMatchObject({ priceEur: 2_190_000 });
   });
 
+  // Live titles that said the model or engine twice.
+  it("says each part of the title once", () => {
+    const named = (model: string, motor: string | null, version: string, make = "Volkswagen") =>
+      normalize({ vehicle: { make, model, modelGroup: model, motorTypeName: motor, modelVersionInput: version } });
+    expect(named("Q3", "35 TFSI", "Sportback S-Line 35 TFSI", "Audi")).toMatchObject({
+      title: "Audi Q3 35 TFSI Sportback S-Line",
+      variant: "35 TFSI Sportback S-Line",
+      modelSlug: "q3",
+    });
+    expect(named("V 300", null, "V 300 d kompakt 4Matic", "Mercedes-Benz")).toMatchObject({
+      title: "Mercedes-Benz V 300 d kompakt 4Matic",
+      variant: "d kompakt 4Matic",
+    });
+    expect(named("G 63 AMG", null, "G 63 AMG Bodykit", "Mercedes-Benz")).toMatchObject({ title: "Mercedes-Benz G 63 AMG Bodykit" });
+    expect(named("Polo", "1.2", "1.2")).toMatchObject({ title: "Volkswagen Polo 1.2", variant: "1.2" });
+    expect(named("Focus", null, "Focus", "Ford")).toMatchObject({ title: "Ford Focus", variant: null, modelSlug: "focus" });
+  });
+
+  it("takes the model from the seller's text when the portal has none in its list", () => {
+    const other = (make: string, model: string, version: string) =>
+      normalize({ vehicle: { make, model, modelGroup: null, motorTypeName: null, modelVersionInput: version } });
+    expect(other("Kia", "ANDERE", "Ceed Sportswagon 1.6 CRDi")).toMatchObject({
+      title: "Kia Ceed Sportswagon 1.6 CRDi",
+      modelSlug: "ceed",
+      modelRaw: "ANDERE",
+    });
+    expect(other("Mercedes-Benz", "Sonstige", "AMG ONE")).toMatchObject({ title: "Mercedes-Benz AMG ONE", modelSlug: "amg-one" });
+    expect(other("Lexus", "Others", "LF-A")).toMatchObject({ title: "Lexus LF-A", modelSlug: "lfa" });
+    expect(other("Ford", "Sonstige", "Transit Custom Kasten")).toMatchObject({ modelSlug: "transit" });
+    expect(other("Kia", "Andere", "Bastlerfahrzeug")).toMatchObject({ title: "Kia Bastlerfahrzeug", modelSlug: null });
+  });
+
   it("leaves a first registration after next month unknown", () => {
     expect(normalize({ vehicleDetails: [{ iconName: "calendar", data: "01/2099" }], tracking: {} })?.firstRegistration).toBeNull();
   });

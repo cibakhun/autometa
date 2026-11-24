@@ -1,6 +1,8 @@
 import {
   detectBodyType,
   hasWantedMarker,
+  isPlaceholderModel,
+  joinWithoutRepeats,
   normalizeFuel,
   normalizeTransmission,
   isYearOnlyRegistration,
@@ -8,6 +10,7 @@ import {
   parseInteger,
   parsePowerKw,
   resolveMakeModel,
+  resolveModelInTitle,
   sourceImageUrl,
 } from "@/core/normalize";
 import { plausibleListing } from "@/core/plausibility";
@@ -240,11 +243,20 @@ export function normalizeAutoScout24(raw: RawListing): NormalizedListing | null 
   // The title loses the stars of "*Suche*"; the seller's own text still has them.
   if (hasWantedMarker(item.version ?? "")) return null;
 
-  const resolved = resolveMakeModel(item.make, item.modelGroup ?? item.model);
-  const byModel = resolved.modelSlug ? resolved : resolveMakeModel(item.make, item.model);
+  const motor = cleanText(item.motor);
   const version = cleanText(item.version);
-  const variant = [cleanText(item.motor), version].filter(Boolean).join(" ").slice(0, 160) || null;
-  const title = [item.make, item.model, variant].filter(Boolean).join(" ").slice(0, 200);
+  // "Sonstige", "Others", "ANDERE": the seller's own text names the model, if anything does.
+  const placeholder = isPlaceholderModel(item.model);
+  const resolved = resolveMakeModel(item.make, item.modelGroup ?? item.model);
+  const byModel = resolved.modelSlug
+    ? resolved
+    : placeholder
+      ? resolveModelInTitle(item.make, [motor, version].filter(Boolean).join(" "))
+      : resolveMakeModel(item.make, item.model);
+  // Sellers often repeat the model and engine in their text: "Q3" "Q3 35 TDI" reads "Q3 35 TDI".
+  const name = joinWithoutRepeats([item.make, placeholder ? null : item.model]);
+  const title = joinWithoutRepeats([item.make, placeholder ? null : item.model, motor, version]).slice(0, 200);
+  const variant = title.slice(name.length).trim().slice(0, 160) || null;
   const sellerType: SellerType | null = item.sellerType === "Dealer" ? "dealer" : item.sellerType === "Private" ? "private" : null;
 
   return plausibleListing({
