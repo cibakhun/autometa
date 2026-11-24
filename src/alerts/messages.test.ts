@@ -13,6 +13,7 @@ const listing = (overrides: Partial<ListingSummary>): ListingSummary => ({
   priceEur: 2500,
   mileageKm: 180_000,
   firstRegistration: "2010-03-01",
+  firstRegistrationYearOnly: false,
   fuel: "petrol",
   transmission: "manual",
   powerKw: 59,

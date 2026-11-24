@@ -5,6 +5,7 @@ import {
   detectTransmission,
   findMakeInTitle,
   isNotForSale,
+  isYearOnlyRegistration,
   kwToPs,
   normalizeBodyType,
   normalizeFuel,
@@ -62,6 +63,17 @@ describe("parseFirstRegistration", () => {
   it("rejects impossible dates", () => {
     expect(parseFirstRegistration("13/2018")).toBeNull();
     expect(parseFirstRegistration("neu")).toBeNull();
+  });
+});
+
+describe("isYearOnlyRegistration", () => {
+  it("is true only for a bare, valid year", () => {
+    expect(isYearOnlyRegistration("2018")).toBe(true);
+    expect(isYearOnlyRegistration(" 2018 ")).toBe(true);
+    expect(isYearOnlyRegistration("01/2018")).toBe(false);
+    expect(isYearOnlyRegistration("2018-01")).toBe(false);
+    expect(isYearOnlyRegistration("1850")).toBe(false);
+    expect(isYearOnlyRegistration(null)).toBe(false);
   });
 });
 

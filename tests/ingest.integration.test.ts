@@ -32,6 +32,7 @@ async function freshTestDatabase(): Promise<Pool> {
 
 const PORTAL_A: SourceInfo = { id: "portal-a", name: "Portal A", kind: "scrape", websiteUrl: "https://a.example" };
 const PORTAL_B: SourceInfo = { id: "portal-b", name: "Portal B", kind: "scrape", websiteUrl: "https://b.example" };
+const PORTAL_C: SourceInfo = { id: "portal-c", name: "Portal C", kind: "scrape", websiteUrl: "https://c.example" };
 
 function car(source: SourceInfo, externalId: string, overrides: Partial<NormalizedListing> = {}): NormalizedListing {
   return {
@@ -464,6 +465,64 @@ describe.skipIf(!url)("importing scraped portals", () => {
     await runIngest(pool, fakePortal(PORTAL_A, [{ listing: car(PORTAL_A, "gift", { priceEur: 0 }) }, { listing: car(PORTAL_A, "sale") }]));
     const free = await searchListings(pool, parseFilters({ priceMax: "0" }), null);
     expect(free.items.map((item) => item.priceEur)).toEqual([0]);
+  });
+
+  it("finds the same car on a portal without a place or with only the year of registration", async () => {
+    const unplaced = { zip: null, city: null };
+    await runIngest(
+      pool,
+      fakePortal(PORTAL_A, [
+        { listing: car(PORTAL_A, "a1", { mileageKm: 98052, priceEur: 11990, firstRegistration: "2015-11-01" }) },
+        { listing: car(PORTAL_A, "a2", { mileageKm: 60000, priceEur: 15000, firstRegistration: "2019-05-01" }) },
+        { listing: car(PORTAL_A, "a3", { mileageKm: 9900, priceEur: 30000, firstRegistration: "2025-06-01" }) },
+        { listing: car(PORTAL_A, "a4", { mileageKm: 70123, priceEur: 16000, firstRegistration: "2020-04-01" }) },
+      ]),
+    );
+    await runIngest(
+      pool,
+      fakePortal(PORTAL_B, [
+        // a1 without a place and with only the year, 900 € dearer: the same car.
+        { listing: car(PORTAL_B, "b1", { mileageKm: 98052, priceEur: 12890, firstRegistration: "2015-01-01", firstRegistrationYearOnly: true, ...unplaced }) },
+        // a3 to the kilometre, but a round figure: no proof.
+        { listing: car(PORTAL_B, "b3", { mileageKm: 9900, priceEur: 30000, firstRegistration: "2025-06-01", ...unplaced }) },
+        // a4 to the kilometre, but another month of registration (both known): another car.
+        { listing: car(PORTAL_B, "b4", { mileageKm: 70123, priceEur: 16000, firstRegistration: "2020-09-01", ...unplaced }) },
+      ]),
+    );
+    await runIngest(
+      pool,
+      fakePortal(PORTAL_C, [
+        // a2 with only the year, at the same place, a little rounded: the same car.
+        { listing: car(PORTAL_C, "c2", { mileageKm: 60500, priceEur: 14800, firstRegistration: "2019-01-01", firstRegistrationYearOnly: true }) },
+        // Only the year and a place, but nearly new: dealers have several of those.
+        { listing: car(PORTAL_C, "c5", { mileageKm: 10, priceEur: 30000, firstRegistration: "2025-01-01", firstRegistrationYearOnly: true }) },
+      ]),
+    );
+
+    expect(await updateDuplicates(pool)).toEqual({ clusters: 2, listings: 4 });
+    const groups = await pool.query<{ external_id: string; group: string }>(
+      `select l.external_id, g.external_id as group from listings l join listings g on g.id = l.cluster_id order by l.external_id`,
+    );
+    expect(groups.rows).toEqual([
+      { external_id: "a1", group: "a1" },
+      { external_id: "a2", group: "a2" },
+      { external_id: "b1", group: "a1" },
+      { external_id: "c2", group: "a2" },
+    ]);
+
+    // The search shows the cheaper offer with the dearer one next to it, and only the year where that is all a portal says.
+    const polo = (await searchListings(pool, parseFilters({ priceMin: "11000", priceMax: "13000" }), null)).items;
+    expect(polo).toEqual([
+      expect.objectContaining({ priceEur: 11990, firstRegistrationYearOnly: false, otherOffers: [expect.objectContaining({ sourceName: "Portal B", priceEur: 12890 })] }),
+    ]);
+    const onlyB = await searchListings(pool, parseFilters({ source: "portal-b", priceMin: "11000", priceMax: "13000" }), null);
+    expect(onlyB.items).toEqual([
+      expect.objectContaining({ priceEur: 12890, firstRegistrationYearOnly: true, otherOffers: [expect.objectContaining({ sourceName: "Portal A", priceEur: 11990 })] }),
+    ]);
+
+    // A second listing on Portal A that fits b1 to the kilometre makes the match ambiguous: no guess.
+    await runIngest(pool, fakePortal(PORTAL_A, [{ listing: car(PORTAL_A, "a6", { mileageKm: 98052, priceEur: 12500, firstRegistration: "2015-03-01", zip: "80331", city: "München" }) }]));
+    expect(await updateDuplicates(pool)).toEqual({ clusters: 1, listings: 2 });
   });
 
   it("never groups two listings of the same portal", async () => {

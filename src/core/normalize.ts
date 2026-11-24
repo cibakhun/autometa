@@ -81,6 +81,14 @@ export function parseFirstRegistration(value: string | null | undefined): string
   return `${year}-${String(month).padStart(2, "0")}-01`;
 }
 
+/**
+ * Whether a first registration names only the year ("2018"). parseFirstRegistration stores it as
+ * January of that year, which must not count as a known month.
+ */
+export function isYearOnlyRegistration(value: string | null | undefined): boolean {
+  return typeof value === "string" && /^\d{4}$/.test(value.trim()) && parseFirstRegistration(value) !== null;
+}
+
 const FUEL_RULES: [RegExp, Fuel][] = [
   [/plug ?in|phev/, "plugin_hybrid"],
   [/hybrid|hev/, "hybrid"],

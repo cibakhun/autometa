@@ -16,6 +16,7 @@ import { MARKET_RULES } from "@/ingest/market";
 import { getPool } from "@/lib/db";
 import { getFlipSettings } from "@/lib/flip-settings";
 import {
+  compareOffers,
   formatDayTime,
   formatEuro,
   formatInspection,
@@ -61,7 +62,7 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
   });
   const rows: [string, string | null][] = [
     ["Preis", formatPrice(listing.priceEur)],
-    ["Erstzulassung", formatRegistration(listing.firstRegistration).replace("EZ ", "")],
+    ["Erstzulassung", formatRegistration(listing.firstRegistration, listing.firstRegistrationYearOnly).replace("EZ ", "")],
     ["Kilometerstand", formatKm(listing.mileageKm)],
     ["Leistung", formatPower(listing.powerKw)],
     ["Kraftstoff", listing.fuel ? FUEL_LABELS[listing.fuel] : null],
@@ -102,6 +103,7 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
             </div>
           </div>
         </div>
+        <CheaperElsewhere listing={listing} />
         <dl className="mt-6 grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
           {rows
             .filter((row): row is [string, string] => Boolean(row[1]))
@@ -128,24 +130,7 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
           <FavoriteButton listingId={listing.id} initial={favorites.has(listing.id)} variant="inline" />
           <p className="text-xs text-muted">Weitere Fotos, Beschreibung und Kontakt findest du in der Originalanzeige.</p>
         </div>
-        {listing.otherOffers.length > 0 && (
-          <section className="mt-6 border-t border-line pt-4">
-            <h2 className="text-sm font-semibold">Dieses Fahrzeug gibt es auch bei</h2>
-            <ul className="mt-2 space-y-1 text-sm">
-              {listing.otherOffers.map((offer) => (
-                <li key={offer.id} className="flex items-center justify-between gap-4">
-                  <a href={`/go/${offer.id}`} target="_blank" rel="noopener nofollow" className="font-medium text-accent hover:underline">
-                    {offer.sourceName}
-                  </a>
-                  <span className="font-medium">{formatPrice(offer.priceEur)}</span>
-                </li>
-              ))}
-            </ul>
-            <p className="mt-2 text-xs text-muted">
-              Erkannt an Marke, Modell, Erstzulassung, Kilometerstand, Preis und Standort. Ein Treffer kann in seltenen Fällen ein anderes Fahrzeug sein.
-            </p>
-          </section>
-        )}
+        {listing.otherOffers.length > 0 && <AllOffers listing={listing} />}
       </article>
     </div>
   );
@@ -446,4 +431,65 @@ function goneNotice(listing: ListingDetail): string {
     default:
       return `Dieses Angebot ist bei ${listing.sourceName} nicht mehr zu finden und wahrscheinlich verkauft.`;
   }
+}
+
+/** A note under the title when another portal offers this vehicle for less. */
+function CheaperElsewhere({ listing }: { listing: ListingDetail }) {
+  const { cheaper, savingEur } = compareOffers(listing.priceEur, listing.otherOffers);
+  if (!cheaper || listing.status === "gone") return null;
+  return (
+    <p className="mt-4 rounded-md border border-line bg-accent-soft px-3 py-2 text-sm">
+      Dieses Fahrzeug gibt es bei{" "}
+      <a href={`/go/${cheaper.id}`} target="_blank" rel="noopener nofollow" className="font-semibold text-accent hover:underline">
+        {cheaper.sourceName} für {formatPrice(cheaper.priceEur)}
+      </a>
+      , <span className="font-semibold text-good-text">{formatPrice(savingEur)} günstiger</span>.
+    </p>
+  );
+}
+
+/** Every portal that lists this vehicle, cheapest first, with the gap to the one shown. */
+function AllOffers({ listing }: { listing: ListingDetail }) {
+  const offers = [
+    ...listing.otherOffers,
+    ...(listing.status === "active" ? [{ id: listing.id, sourceName: listing.sourceName, priceEur: listing.priceEur }] : []),
+  ].sort((a, b) => a.priceEur - b.priceEur || a.id - b.id);
+  const lowest = offers[0].priceEur;
+  return (
+    <section className="mt-6 border-t border-line pt-4">
+      <h2 className="text-sm font-semibold">
+        {listing.status === "active" ? `Dieses Fahrzeug auf ${offers.length} Börsen` : "Dieses Fahrzeug gibt es noch bei"}
+      </h2>
+      <ul className="mt-2 space-y-1 text-sm">
+        {offers.map((offer) => {
+          const self = offer.id === listing.id;
+          return (
+            <li key={offer.id} className="flex items-center justify-between gap-4">
+              <span className="flex min-w-0 flex-wrap items-center gap-2">
+                <a href={`/go/${offer.id}`} target="_blank" rel="noopener nofollow" className="font-medium text-accent hover:underline">
+                  {offer.sourceName}
+                </a>
+                {self && <span className="text-xs text-muted">diese Anzeige</span>}
+                {offer.priceEur === lowest && offers.some((o) => o.priceEur > lowest) && (
+                  <span className="rounded-full bg-accent-soft px-2 py-0.5 text-xs font-medium text-good-text">günstigster Preis</span>
+                )}
+              </span>
+              <span className="shrink-0 text-right">
+                <span className="font-medium">{formatPrice(offer.priceEur)}</span>
+                {!self && listing.status === "active" && offer.priceEur !== listing.priceEur && (
+                  <span className={offer.priceEur < listing.priceEur ? "ml-2 text-good-text" : "ml-2 text-muted"}>
+                    {formatSignedPrice(offer.priceEur - listing.priceEur)}
+                  </span>
+                )}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mt-2 text-xs text-muted">
+        Erkannt an Marke, Modell, Erstzulassung, Kilometerstand, Preis und Standort. Bei Börsen ohne Standort muss der
+        Kilometerstand auf den Kilometer gleich sein. Ein Treffer kann in seltenen Fällen ein anderes Fahrzeug sein.
+      </p>
+    </section>
+  );
 }
