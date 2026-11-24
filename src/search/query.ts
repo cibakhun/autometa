@@ -320,12 +320,72 @@ const countSqls = (where: string) => [
   `select count(distinct l.cluster_id) as total from listings l where ${where} and l.cluster_id is not null`,
 ];
 
+/**
+ * Results of broad queries (counts over many listings, the facets of the filter form) are kept
+ * per pool: served as they are while fresh, and while stale too, with a refresh in the
+ * background. Smaller results are cheap to count and always counted anew, so a narrow search, a
+ * saved search's "new since" and anything inside a transaction (a PoolClient) are always exact.
+ */
+export const CACHE_FRESH_MS = 5 * 60_000;
+export const CACHE_STALE_MS = 30 * 60_000;
+export const CACHE_MIN_VEHICLES = 10_000;
+const CACHE_MAX_ENTRIES = 1_000;
+
+interface CacheEntry {
+  value: unknown;
+  at: number;
+}
+
+const caches = new WeakMap<Pool, { entries: Map<string, CacheEntry>; loading: Map<string, Promise<unknown>> }>();
+
 const isClient = (db: Pool | PoolClient): db is PoolClient => typeof (db as PoolClient).release === "function";
 
 /** Runs the queries at the same time on a pool, one after another on a client (one query at a time). */
 async function together<A, B>(db: Pool | PoolClient, a: () => Promise<A>, b: () => Promise<B>): Promise<[A, B]> {
   if (!isClient(db)) return Promise.all([a(), b()]);
   return [await a(), await b()];
+}
+
+/** load()'s result, kept per pool under key as described above; vehicles: how many vehicles it covers. */
+export async function remembered<T>(
+  db: Pool | PoolClient,
+  key: string,
+  load: () => Promise<T>,
+  vehicles: (value: T) => number,
+): Promise<T> {
+  if (isClient(db)) return load();
+  let cache = caches.get(db);
+  if (!cache) caches.set(db, (cache = { entries: new Map(), loading: new Map() }));
+  const { entries, loading } = cache;
+
+  // One query per key at a time; requests arriving meanwhile wait for it.
+  const refresh = () => {
+    const running = loading.get(key) as Promise<T> | undefined;
+    if (running) return running;
+    const promise = load()
+      .then((value) => {
+        entries.delete(key);
+        if (vehicles(value) >= CACHE_MIN_VEHICLES) {
+          entries.set(key, { value, at: Date.now() });
+          // The oldest entry goes first (a Map keeps insertion order).
+          if (entries.size > CACHE_MAX_ENTRIES) entries.delete(entries.keys().next().value!);
+        }
+        return value;
+      })
+      .finally(() => loading.delete(key));
+    loading.set(key, promise);
+    return promise;
+  };
+
+  const entry = entries.get(key);
+  const age = entry ? Date.now() - entry.at : Infinity;
+  if (age < CACHE_FRESH_MS) return entry!.value as T;
+  if (age < CACHE_STALE_MS) {
+    // A failed refresh keeps the stale value; the next request tries again.
+    refresh().catch(() => {});
+    return entry!.value as T;
+  }
+  return refresh();
 }
 
 /**
@@ -366,7 +426,7 @@ export async function searchListings(
   const head = isGroupHead(buildConditions(filters, origin, new Params(), settings, options, "d").where);
   const sort: Sort = filters.sort === "distance" && !distance ? "newest" : filters.sort;
   const offset = (filters.page - 1) * PAGE_SIZE;
-  const total = countMatches(pool, where, whereParams);
+  const total = countMatches(pool, where, whereParams, filters, options);
   // Awaited below; this only keeps a failure from being reported as unhandled while the page loads.
   total.catch(() => {});
   // A client (a transaction) runs one query at a time.
@@ -514,18 +574,29 @@ export async function countListings(
 ): Promise<number> {
   const params = new Params();
   const { where } = buildWhere(filters, origin, params, settings);
-  return countMatches(pool, where, params.values);
+  return countMatches(pool, where, params.values, filters);
 }
 
-/** The count of countListings for a built WHERE clause. */
-async function countMatches(pool: Pool | PoolClient, where: string, values: unknown[]): Promise<number> {
+/** The count of countListings for a built WHERE clause; kept for a while when it is large (see remembered). */
+function countMatches(
+  pool: Pool | PoolClient,
+  where: string,
+  values: unknown[],
+  filters: SearchFilters,
+  options: WhereOptions = {},
+): Promise<number> {
   const sqls = countSqls(where);
-  const [first, second] = await together(
-    pool,
-    () => pool.query<{ total: string }>(sqls[0], values),
-    () => pool.query<{ total: string }>(sqls[1], values),
-  );
-  return Number(first.rows[0]?.total ?? 0) + Number(second.rows[0]?.total ?? 0);
+  const count = async () => {
+    const [first, second] = await together(
+      pool,
+      () => pool.query<{ total: string }>(sqls[0], values),
+      () => pool.query<{ total: string }>(sqls[1], values),
+    );
+    return Number(first.rows[0]?.total ?? 0) + Number(second.rows[0]?.total ?? 0);
+  };
+  // "New since" and alert counts are always counted anew.
+  if (filters.seit !== undefined || options.notAlertedBy !== undefined) return count();
+  return remembered(pool, `count\u0000${where}\u0000${JSON.stringify(values)}`, count, (total) => total);
 }
 
 /** Active listings of the given duplicate groups, cheapest first, by cluster id. */
@@ -603,8 +674,15 @@ export interface MakeFacet {
   models: { slug: string; name: string; count: number }[];
 }
 
-/** Makes and models that currently have active listings, with counts (each duplicate group once), for the filter form. */
+/**
+ * Makes and models that currently have active listings, with counts (each duplicate group once),
+ * for the filter form. Kept for a while when large (see remembered).
+ */
 export async function getMakeFacets(pool: Pool): Promise<MakeFacet[]> {
+  return remembered(pool, "makeFacets", () => loadMakeFacets(pool), (makes) => makes.reduce((sum, make) => sum + make.count, 0));
+}
+
+async function loadMakeFacets(pool: Pool): Promise<MakeFacet[]> {
   const active = "l.status = 'active' and l.source_id in (select id from sources where active) and l.make_slug is not null";
   const { rows } = await pool.query<{ make_slug: string; make_name: string; model_slug: string | null; model_name: string | null; count: number }>(
     `select c.make_slug, mk.name as make_name, c.model_slug, md.name as model_name, sum(c.count)::int as count
@@ -636,8 +714,12 @@ export interface SourceFacet {
   count: number;
 }
 
-/** Portals that currently have active listings, with counts, for the filter form. */
+/** Portals that currently have active listings, with counts, for the filter form. Kept for a while when large (see remembered). */
 export async function getSourceFacets(pool: Pool): Promise<SourceFacet[]> {
+  return remembered(pool, "sourceFacets", () => loadSourceFacets(pool), (sources) => sources.reduce((sum, source) => sum + source.count, 0));
+}
+
+async function loadSourceFacets(pool: Pool): Promise<SourceFacet[]> {
   const { rows } = await pool.query<SourceFacet>(
     `select s.id, s.name, count(*)::int as count
        from listings l join sources s on s.id = l.source_id
