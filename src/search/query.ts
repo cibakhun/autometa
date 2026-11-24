@@ -113,17 +113,20 @@ function flipFromRow(priceEur: number, marketEur: number | null, repair: RepairS
   );
 }
 
-/** The flip margin and margin per hour in SQL, the same formula as calculateFlip (risk buffer included). */
-function flipSql(settings: FlipSettings, params: Params) {
+/**
+ * The flip margin and margin per hour in SQL, the same formula as calculateFlip (risk buffer
+ * included), for the listing with the given table alias.
+ */
+function flipSql(settings: FlipSettings, params: Params, l = "l") {
   const keep = params.add(1 - settings.discountPct / 100);
   const fixed = params.add(settings.huEur + settings.registrationEur);
   const tow = params.add(settings.towEur);
   const transport = params.add(settings.transportEur);
-  const margin = `(l.market_price_eur * ${keep}::float8 - l.price_eur
-      - (l.repair_parts_min_eur + l.repair_parts_max_eur) / 2.0 - ${fixed}::int
-      - coalesce(l.repair_risk_hidden_eur, 0) - coalesce(l.repair_risk_unclear_eur, 0)
-      - case when l.repair_needs_tow then ${tow}::int else ${transport}::int end)`;
-  return { margin, perHour: `(${margin} / nullif((l.repair_hours_min + l.repair_hours_max) / 2.0, 0))` };
+  const margin = `(${l}.market_price_eur * ${keep}::float8 - ${l}.price_eur
+      - (${l}.repair_parts_min_eur + ${l}.repair_parts_max_eur) / 2.0 - ${fixed}::int
+      - coalesce(${l}.repair_risk_hidden_eur, 0) - coalesce(${l}.repair_risk_unclear_eur, 0)
+      - case when ${l}.repair_needs_tow then ${tow}::int else ${transport}::int end)`;
+  return { margin, perHour: `(${margin} / nullif((${l}.repair_hours_min + ${l}.repair_hours_max) / 2.0, 0))` };
 }
 
 /** One portal's listing of a vehicle. */
@@ -141,17 +144,23 @@ export interface SearchResult {
   items: ListingSummary[];
 }
 
-const ORDER_BY: Record<Exclude<Sort, "flip" | "margin" | "empfehlung">, string> = {
+/**
+ * The fixed sort orders. Each has an index over the active listings in the same order
+ * (supabase/migrations/20261124040000_search_sort_indexes.sql), so a page is read in order.
+ */
+const ORDER_BY: Record<Exclude<Sort, "flip" | "margin" | "empfehlung" | "distance">, string> = {
   newest: "l.first_seen_at desc, l.id desc",
   price_asc: "l.price_eur asc, l.id asc",
   price_desc: "l.price_eur desc, l.id desc",
   km_asc: "l.mileage_km asc nulls last, l.id asc",
   year_desc: "l.first_registration desc nulls last, l.id desc",
-  distance: "distance_km asc nulls last, l.id asc",
   // The biggest gap in euros: what a repaired car could be worth minus what it costs now.
   below_market: "l.market_price_eur - l.price_eur desc nulls last, l.id desc",
   price_drop: "l.price_dropped_at desc nulls last, l.id desc",
 };
+
+/** The distance shown, in km with one decimal; sorted by this, then id. */
+const shownDistance = (distance: string) => `round(${distance}::numeric, 1)::float8`;
 
 const escapeLike = (value: string) => value.replace(/[\\%_]/g, (char) => `\\${char}`);
 
@@ -162,29 +171,18 @@ export function ageBucketSql(column = "l.first_registration"): string {
 }
 
 /**
- * Per model and age group: its share of cars with an HU defect divided by that of all cars of
- * the age group (the same average as poolProfiles). Below 1 means more reliable than usual.
- */
-const RELIABILITY_CTE = `reliability as (
-  select p.make_slug, p.model_slug, p.age_bucket, (p.any_defect::float8 / p.sample) / nullif(a.rate, 0) as ratio
-    from model_defect_profiles p
-    join (select age_bucket, sum(any_defect)::float8 / sum(sample) as rate
-            from model_defect_profiles where sample >= ${MIN_SAMPLE} group by age_bucket) a on a.age_bucket = p.age_bucket
-   where p.sample >= ${MIN_SAMPLE})`;
-
-/**
  * Recommendation ("Empfehlung"): points for a model with fewer HU defects than cars of its age
  * (1 point per percent, ±50) plus points for a price below market value (1 point per percent,
  * ±30). Listings whose title names damage get the lowest price points, since their market value
  * is that of an intact car. Unknown parts count 0. Kept in step with recommendationScore.
  */
 // greatest() and least() skip nulls in Postgres, hence the explicit case for an unknown ratio.
-const RECOMMENDATION_SQL = `(case when l.reliability_ratio is null then 0 else greatest(-50, least(50, (1 - l.reliability_ratio) * 100)) end
+const recommendationSql = (ratio: string) => `(case when ${ratio} is null then 0 else greatest(-50, least(50, (1 - ${ratio}) * 100)) end
   + case when cardinality(l.damage) > 0 then -30
          when l.market_price_eur > 0 then greatest(-30, least(30, (l.market_price_eur - l.price_eur) * 100.0 / l.market_price_eur))
          else 0 end)`;
 
-/** The recommendation points of a listing, as RECOMMENDATION_SQL. */
+/** The recommendation points of a listing, as recommendationSql. */
 export function recommendationScore(listing: Pick<ListingSummary, "reliabilityRatio" | "damage" | "marketPriceEur" | "priceEur">): number {
   const clamp = (value: number, limit: number) => Math.max(-limit, Math.min(limit, value));
   const reliability = listing.reliabilityRatio === null ? 0 : clamp((1 - listing.reliabilityRatio) * 100, 50);
@@ -210,74 +208,124 @@ export function buildWhere(
   settings = DEFAULT_FLIP_SETTINGS,
   options: WhereOptions = {},
 ) {
-  const where = ["l.status = 'active'", "l.source_id in (select id from sources where active)"];
-  const add = (sql: (p: (value: unknown) => string) => string) => where.push(sql((value) => params.add(value)));
+  return buildConditions(filters, origin, params, settings, options, "l");
+}
 
-  if (filters.make) add((p) => `l.make_slug = ${p(filters.make)}`);
-  if (filters.make && filters.model) add((p) => `l.model_slug = ${p(filters.model)}`);
-  if (filters.priceMin !== undefined) add((p) => `l.price_eur >= ${p(filters.priceMin)}`);
-  if (filters.priceMax !== undefined) add((p) => `l.price_eur <= ${p(filters.priceMax)}`);
-  if (filters.kmMax !== undefined) add((p) => `l.mileage_km <= ${p(filters.kmMax)}`);
-  if (filters.yearMin !== undefined) add((p) => `l.first_registration >= make_date(${p(filters.yearMin)}::int, 1, 1)`);
-  if (filters.yearMax !== undefined) add((p) => `l.first_registration < make_date(${p(filters.yearMax)}::int + 1, 1, 1)`);
-  if (filters.psMin !== undefined) add((p) => `l.power_kw >= ${p(psToKw(filters.psMin!))}`);
-  if (filters.fuel.length > 0) add((p) => `l.fuel = any(${p(filters.fuel)}::text[])`);
-  if (filters.body.length > 0) add((p) => `l.body_type = any(${p(filters.body)}::text[])`);
-  if (filters.transmission) add((p) => `l.transmission = ${p(filters.transmission)}`);
-  if (filters.seller) add((p) => `l.seller_type = ${p(filters.seller)}`);
-  if (filters.hu) add((p) => `l.hu_until >= (date_trunc('month', current_date) + make_interval(months => ${p(huFilterMonths(filters.hu!))}::int))::date`);
+/**
+ * buildWhere for the listing with table alias l. Adds the same parameters in the same order
+ * whatever the alias, so a second call with a fresh Params yields the same placeholders.
+ */
+function buildConditions(
+  filters: SearchFilters,
+  origin: Origin | null,
+  params: Params,
+  settings: FlipSettings,
+  options: WhereOptions,
+  l: string,
+) {
+  const where = [`${l}.status = 'active'`, `${l}.source_id in (select id from sources where active)`];
+  const add = (sql: (p: (value: unknown) => string) => string) => where.push(sql((value) => params.add(value)));
+  // Aliases of the subqueries below, distinct for each outer alias.
+  const other = `${l}_other`;
+  const hit = `${l}_hit`;
+
+  if (filters.make) add((p) => `${l}.make_slug = ${p(filters.make)}`);
+  if (filters.make && filters.model) add((p) => `${l}.model_slug = ${p(filters.model)}`);
+  if (filters.priceMin !== undefined) add((p) => `${l}.price_eur >= ${p(filters.priceMin)}`);
+  if (filters.priceMax !== undefined) add((p) => `${l}.price_eur <= ${p(filters.priceMax)}`);
+  if (filters.kmMax !== undefined) add((p) => `${l}.mileage_km <= ${p(filters.kmMax)}`);
+  if (filters.yearMin !== undefined) add((p) => `${l}.first_registration >= make_date(${p(filters.yearMin)}::int, 1, 1)`);
+  if (filters.yearMax !== undefined) add((p) => `${l}.first_registration < make_date(${p(filters.yearMax)}::int + 1, 1, 1)`);
+  if (filters.psMin !== undefined) add((p) => `${l}.power_kw >= ${p(psToKw(filters.psMin!))}`);
+  if (filters.fuel.length > 0) add((p) => `${l}.fuel = any(${p(filters.fuel)}::text[])`);
+  if (filters.body.length > 0) add((p) => `${l}.body_type = any(${p(filters.body)}::text[])`);
+  if (filters.transmission) add((p) => `${l}.transmission = ${p(filters.transmission)}`);
+  if (filters.seller) add((p) => `${l}.seller_type = ${p(filters.seller)}`);
+  if (filters.hu) add((p) => `${l}.hu_until >= (date_trunc('month', current_date) + make_interval(months => ${p(huFilterMonths(filters.hu!))}::int))::date`);
   if (filters.gesenkt) {
     // The last price change was a drop (a later rise clears it), within the chosen days.
-    where.push("l.price_dropped_at is not null");
+    where.push(`${l}.price_dropped_at is not null`);
     const days = priceDropDays(filters.gesenkt);
-    if (days !== null) add((p) => `l.price_dropped_at > now() - make_interval(days => ${p(days)}::int)`);
+    if (days !== null) add((p) => `${l}.price_dropped_at > now() - make_interval(days => ${p(days)}::int)`);
   }
-  if (filters.zustand === "defekt") where.push("cardinality(l.damage) > 0");
-  if (filters.zustand === "intakt") where.push("l.damage = '{}'");
-  if (filters.schwierigkeit !== undefined) add((p) => `l.repair_difficulty <= ${p(filters.schwierigkeit)}`);
+  if (filters.zustand === "defekt") where.push(`cardinality(${l}.damage) > 0`);
+  if (filters.zustand === "intakt") where.push(`${l}.damage = '{}'`);
+  if (filters.schwierigkeit !== undefined) add((p) => `${l}.repair_difficulty <= ${p(filters.schwierigkeit)}`);
   if (filters.margeMin !== undefined) {
-    const { margin } = flipSql(settings, params);
+    const { margin } = flipSql(settings, params, l);
     // Rounded to 10 euros like the margin shown (Math.round), so a shown 1.880 € passes "ab 1.880 €".
     add((p) => `floor(${margin} / 10 + 0.5) * 10 >= ${p(filters.margeMin)}`);
   }
-  if (filters.source.length > 0) add((p) => `l.source_id = any(${p(filters.source)}::text[])`);
+  if (filters.source.length > 0) add((p) => `${l}.source_id = any(${p(filters.source)}::text[])`);
   // Every word of the search term somewhere in the title: "GTI Standheizung" finds "Golf GTI mit Standheizung".
   for (const word of (filters.q ?? "").split(/\s+/).filter(Boolean)) {
-    add((p) => `l.title ilike ${p(`%${escapeLike(word)}%`)}`);
+    add((p) => `${l}.title ilike ${p(`%${escapeLike(word)}%`)}`);
   }
   if (filters.seit) {
     // New: first seen after that moment, and no portal had the same vehicle before. Or cheaper since.
     const since = params.add(filters.seit);
-    where.push(`((l.first_seen_at > ${since}::timestamptz
-       and (l.cluster_id is null or not exists (
-         select 1 from listings d
-          where d.cluster_id is not null and d.cluster_id = l.cluster_id and d.first_seen_at <= ${since}::timestamptz)))
-     or l.price_dropped_at > ${since}::timestamptz)`);
+    where.push(`((${l}.first_seen_at > ${since}::timestamptz
+       and (${l}.cluster_id is null or not exists (
+         select 1 from listings ${other}
+          where ${other}.cluster_id is not null and ${other}.cluster_id = ${l}.cluster_id and ${other}.first_seen_at <= ${since}::timestamptz)))
+     or ${l}.price_dropped_at > ${since}::timestamptz)`);
   }
   if (options.notAlertedBy !== undefined) {
     const search = params.add(options.notAlertedBy);
-    const after = "coalesce(l.price_dropped_at, '-infinity'::timestamptz)";
+    const after = `coalesce(${l}.price_dropped_at, '-infinity'::timestamptz)`;
     // Two lookups instead of one with "or", so each can use an index (hits by key, cluster members).
     where.push(`not exists (
-      select 1 from saved_search_hits h where h.search_id = ${search} and h.listing_id = l.id and h.alerted_at > ${after})`);
-    where.push(`(l.cluster_id is null or not exists (
-      select 1 from listings d join saved_search_hits h on h.search_id = ${search} and h.listing_id = d.id
-       where d.cluster_id is not null and d.cluster_id = l.cluster_id and h.alerted_at > ${after}))`);
+      select 1 from saved_search_hits ${hit} where ${hit}.search_id = ${search} and ${hit}.listing_id = ${l}.id and ${hit}.alerted_at > ${after})`);
+    where.push(`(${l}.cluster_id is null or not exists (
+      select 1 from listings ${other} join saved_search_hits ${hit} on ${hit}.search_id = ${search} and ${hit}.listing_id = ${other}.id
+       where ${other}.cluster_id is not null and ${other}.cluster_id = ${l}.cluster_id and ${hit}.alerted_at > ${after}))`);
   }
 
   let distance: string | null = null;
   if (origin) {
     const lat = params.add(origin.lat);
     const lng = params.add(origin.lng);
-    distance = distanceSql("l.lat", "l.lng", `${lat}::float8`, `${lng}::float8`);
+    distance = distanceSql(`${l}.lat`, `${l}.lng`, `${lat}::float8`, `${lng}::float8`);
     if (filters.radius) {
       const box = boundingBox(origin.lat, origin.lng, filters.radius);
-      add((p) => `l.lat between ${p(box.minLat)} and ${p(box.maxLat)}`);
-      add((p) => `l.lng between ${p(box.minLng)} and ${p(box.maxLng)}`);
+      add((p) => `${l}.lat between ${p(box.minLat)} and ${p(box.maxLat)}`);
+      add((p) => `${l}.lng between ${p(box.minLng)} and ${p(box.maxLng)}`);
       add((p) => `${distance} <= ${p(filters.radius)}`);
     }
   }
   return { where: where.join("\n  and "), distance };
+}
+
+/**
+ * The listing a group of duplicates is shown with: the cheapest one that matches the filters
+ * (price, then id). True for every listing without duplicates, since a null cluster_id equals
+ * nothing. An anti-join rather than ranking every match, so the search can read listings in the
+ * order of an index and stop after a page. Without an "or" around it, so Postgres plans it as a
+ * join, not as a subquery per listing. whereOther: the filters for another listing of the group,
+ * alias "d", with the same parameters.
+ */
+const isGroupHead = (whereOther: string) => `not exists (
+     select 1 from listings d
+      where d.cluster_id is not null and d.cluster_id = l.cluster_id
+        and (d.price_eur, d.id) < (l.price_eur, l.id)
+        and ${whereOther})`;
+
+/**
+ * How many vehicles match, each duplicate group once: the listings without duplicates plus the
+ * groups with at least one matching listing. Two queries that run at the same time: the large
+ * first one reads in parallel, the second reads only grouped listings.
+ */
+const countSqls = (where: string) => [
+  `select count(*) as total from listings l where ${where} and l.cluster_id is null`,
+  `select count(distinct l.cluster_id) as total from listings l where ${where} and l.cluster_id is not null`,
+];
+
+const isClient = (db: Pool | PoolClient): db is PoolClient => typeof (db as PoolClient).release === "function";
+
+/** Runs the queries at the same time on a pool, one after another on a client (one query at a time). */
+async function together<A, B>(db: Pool | PoolClient, a: () => Promise<A>, b: () => Promise<B>): Promise<[A, B]> {
+  if (!isClient(db)) return Promise.all([a(), b()]);
+  return [await a(), await b()];
 }
 
 /**
@@ -303,9 +351,6 @@ export function summaryColumns(distanceKm = "null::float8") {
            ${distanceKm} as distance_km`;
 }
 
-/** The listing a group of duplicates is shown with: the cheapest one that matches the filters. */
-const GROUP = "coalesce(l.cluster_id, l.id)";
-
 export async function searchListings(
   pool: Pool | PoolClient,
   filters: SearchFilters,
@@ -317,53 +362,105 @@ export async function searchListings(
   const { where, distance } = buildWhere(filters, origin, params, settings, options);
   // The count query takes only the filter parameters; Postgres rejects parameters a query does not use.
   const whereParams = params.values.slice();
+  // A vehicle listed on several portals is shown once, with its cheapest listing that matches.
+  const head = isGroupHead(buildConditions(filters, origin, new Params(), settings, options, "d").where);
   const sort: Sort = filters.sort === "distance" && !distance ? "newest" : filters.sort;
+  const offset = (filters.page - 1) * PAGE_SIZE;
+  const total = countMatches(pool, where, whereParams);
+  // Awaited below; this only keeps a failure from being reported as unhandled while the page loads.
+  total.catch(() => {});
+  // A client (a transaction) runs one query at a time.
+  if (isClient(pool)) await total;
+
   let orderBy: string;
+  // The Modell-Akte comparison, only for the recommendation.
+  let reliability: { join: string; ratio: string } | null = null;
   if (sort === "flip" || sort === "margin") {
     const { margin, perHour } = flipSql(settings, params);
     orderBy = `${sort === "flip" ? perHour : margin} desc nulls last, l.id desc`;
   } else if (sort === "empfehlung") {
-    orderBy = `${RECOMMENDATION_SQL} desc, l.id desc`;
+    reliability = await reliabilitySql(pool, params);
+    orderBy = `${recommendationSql(reliability.ratio)} desc, l.id desc`;
+  } else if (sort === "distance") {
+    orderBy = `${shownDistance(distance!)} asc nulls last, l.id asc`;
   } else {
     orderBy = ORDER_BY[sort];
   }
-  // The Modell-Akte comparison, only for the recommendation: a join over every matching listing.
-  const reliability = sort === "empfehlung";
-  const offset = (filters.page - 1) * PAGE_SIZE;
 
-  // A vehicle listed on several portals counts once.
-  const countSql = `select count(distinct ${GROUP})::int as total from listings l where ${where}`;
-  const itemsSql = `
-    ${reliability ? `with ${RELIABILITY_CTE}` : ""}
-    select ${summaryColumns(distance ? `round(${distance}::numeric, 1)::float8` : "null::float8")}${reliability ? ", l.reliability_ratio" : ""}
-      from (
-        select l.*, row_number() over (partition by ${GROUP} order by l.price_eur asc, l.id asc) as group_rank
-               ${reliability ? ", r.ratio as reliability_ratio" : ""}
-          from listings l
-          ${reliability ? `left join reliability r on r.make_slug = l.make_slug and r.model_slug = l.model_slug and r.age_bucket = ${ageBucketSql()}` : ""}
-         where ${where}
-      ) l
-      join sources s on s.id = l.source_id
-     where l.group_rank = 1
-     order by ${orderBy}
-     limit ${PAGE_SIZE} offset ${offset}`;
-
-  const [count, items] = await Promise.all([
-    pool.query<{ total: number }>(countSql, whereParams),
-    pool.query(itemsSql, params.values),
-  ]);
-  const total = count.rows[0]?.total ?? 0;
-  const offers = await getOffers(
-    pool,
-    items.rows.filter((row) => row.cluster_id !== null).map((row) => Number(row.cluster_id)),
+  // First the page's listings, then their details: reading only the ids keeps a sort over many
+  // listings (flip, recommendation) small. The other orders read an index and stop after the page.
+  const page = await pool.query<{ id: string; cluster_id: string | null; ratio?: number | null }>(
+    `select l.id, l.cluster_id${reliability ? `, ${reliability.ratio} as ratio` : ""}
+       from listings l
+       ${reliability?.join ?? ""}
+      where ${where}
+        and ${head}
+      order by ${orderBy}
+      limit ${PAGE_SIZE} offset ${offset}`,
+    params.values,
   );
+  const detailParams = new Params();
+  const ids = detailParams.add(page.rows.map((row) => row.id));
+  const distanceKm = origin
+    ? shownDistance(distanceSql("l.lat", "l.lng", `${detailParams.add(origin.lat)}::float8`, `${detailParams.add(origin.lng)}::float8`))
+    : "null::float8";
+  const [details, offers] = await together(
+    pool,
+    () =>
+      pool.query(
+        `select ${summaryColumns(distanceKm)}
+           from listings l join sources s on s.id = l.source_id
+          where l.id = any(${ids}::int8[])`,
+        detailParams.values,
+      ),
+    () => getOffers(pool, page.rows.filter((row) => row.cluster_id !== null).map((row) => Number(row.cluster_id))),
+  );
+  const byId = new Map(details.rows.map((row) => [String(row.id), row]));
+  const rows = page.rows.flatMap((row) => {
+    const detail = byId.get(String(row.id));
+    return detail ? [{ ...detail, reliability_ratio: row.ratio ?? null }] : [];
+  });
 
+  const count = await total;
   return {
-    total,
+    total: count,
     page: filters.page,
     pageSize: PAGE_SIZE,
-    pageCount: Math.max(1, Math.ceil(total / PAGE_SIZE)),
-    items: items.rows.map((row) => summaryFromRow(row, offers, settings)),
+    pageCount: Math.max(1, Math.ceil(count / PAGE_SIZE)),
+    items: rows.map((row) => summaryFromRow(row, offers, settings)),
+  };
+}
+
+/**
+ * The Modell-Akte comparison as a join for the listing "l", and its ratio as an SQL expression:
+ * per model and age group, its share of cars with an HU defect divided by that of all cars of
+ * the age group (the same average as poolProfiles). Below 1 means more reliable than usual; null
+ * without a profile of at least MIN_SAMPLE cars.
+ *
+ * The averages per age group and the current year are read first and passed as parameters, and
+ * the age group comes from an array by age (the same groups as ageBucketSql), so Postgres joins
+ * the profiles by hash, with one cheap lookup per listing.
+ */
+async function reliabilitySql(pool: Pool | PoolClient, params: Params): Promise<{ join: string; ratio: string }> {
+  const { rows } = await pool.query<{ year: number; rates: (number | null)[] }>(
+    `select extract(year from current_date)::int as year,
+            array(select (select sum(any_defect)::float8 / sum(sample) from model_defect_profiles
+                           where sample >= ${MIN_SAMPLE} and age_bucket = bucket)
+                    from generate_series(0, $1::int - 1) bucket order by bucket) as rates`,
+    [AGE_BUCKETS.length],
+  );
+  const bucketByAge = Array.from({ length: Math.max(...AGE_BUCKETS.map(([, to]) => to)) + 1 }, (_, age) => {
+    const bucket = AGE_BUCKETS.findIndex(([from, to]) => age >= from && age <= to);
+    return bucket === -1 ? null : bucket;
+  });
+  const ages = params.add(bucketByAge);
+  const year = params.add(rows[0].year);
+  const rates = params.add(rows[0].rates);
+  return {
+    join: `left join model_defect_profiles p
+             on p.make_slug = l.make_slug and p.model_slug = l.model_slug and p.sample >= ${MIN_SAMPLE}
+            and p.age_bucket = (${ages}::int[])[${year}::int - date_part('year', l.first_registration)::int + 1]`,
+    ratio: `((p.any_defect::float8 / p.sample) / nullif((${rates}::float8[])[p.age_bucket + 1], 0))`,
   };
 }
 
@@ -417,11 +514,18 @@ export async function countListings(
 ): Promise<number> {
   const params = new Params();
   const { where } = buildWhere(filters, origin, params, settings);
-  const { rows } = await pool.query<{ total: number }>(
-    `select count(distinct ${GROUP})::int as total from listings l where ${where}`,
-    params.values,
+  return countMatches(pool, where, params.values);
+}
+
+/** The count of countListings for a built WHERE clause. */
+async function countMatches(pool: Pool | PoolClient, where: string, values: unknown[]): Promise<number> {
+  const sqls = countSqls(where);
+  const [first, second] = await together(
+    pool,
+    () => pool.query<{ total: string }>(sqls[0], values),
+    () => pool.query<{ total: string }>(sqls[1], values),
   );
-  return rows[0]?.total ?? 0;
+  return Number(first.rows[0]?.total ?? 0) + Number(second.rows[0]?.total ?? 0);
 }
 
 /** Active listings of the given duplicate groups, cheapest first, by cluster id. */
@@ -499,14 +603,20 @@ export interface MakeFacet {
   models: { slug: string; name: string; count: number }[];
 }
 
-/** Makes and models that currently have active listings, with counts, for the filter form. */
+/** Makes and models that currently have active listings, with counts (each duplicate group once), for the filter form. */
 export async function getMakeFacets(pool: Pool): Promise<MakeFacet[]> {
+  const active = "l.status = 'active' and l.source_id in (select id from sources where active) and l.make_slug is not null";
   const { rows } = await pool.query<{ make_slug: string; make_name: string; model_slug: string | null; model_name: string | null; count: number }>(
-    `select l.make_slug, mk.name as make_name, l.model_slug, md.name as model_name, count(distinct ${GROUP})::int as count
-       from listings l
-       join makes mk on mk.slug = l.make_slug
-       left join models md on md.make_slug = l.make_slug and md.slug = l.model_slug
-      where l.status = 'active' and l.source_id in (select id from sources where active)
+    `select c.make_slug, mk.name as make_name, c.model_slug, md.name as model_name, sum(c.count)::int as count
+       from (
+         select l.make_slug, l.model_slug, count(*) as count
+           from listings l where ${active} and l.cluster_id is null group by 1, 2
+         union all
+         select l.make_slug, l.model_slug, count(distinct l.cluster_id) as count
+           from listings l where ${active} and l.cluster_id is not null group by 1, 2
+       ) c
+       join makes mk on mk.slug = c.make_slug
+       left join models md on md.make_slug = c.make_slug and md.slug = c.model_slug
       group by 1, 2, 3, 4
       order by mk.name, md.name`,
   );
