@@ -64,6 +64,8 @@ export async function updateMarketValues(pool: Pool): Promise<MarketResult> {
         where l.make_slug is not null and l.model_slug is not null
           and l.first_registration is not null and l.mileage_km is not null
           and l.price_eur >= $1
+          -- Left out by the import rules (wanted ads, placeholder prices): no price of a car.
+          and l.gone_reason is distinct from 'filtered'
           and l.damage = '{}'
           and l.hu_basis is distinct from 'expired'
           -- hu_until is the first day of the last valid month: expired when we last saw the listing.
