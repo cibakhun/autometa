@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { getPool } from "@/lib/db";
 import { getFlipSettings } from "@/lib/flip-settings";
 import { formatDayTime, formatNumber } from "@/lib/format";
@@ -24,8 +25,13 @@ export async function SearchView({ searchParams }: { searchParams: PageProps<"/"
     searchListings(pool, filters, origin, settings),
     findSavedSearch(pool, device?.profileId ?? null, savedQuery),
     // Read the sentence again to show how it was understood; the filters themselves come from the URL.
-    // A failed town lookup only costs the explanation, never the results.
-    filters.ki ? parseNaturalSearch(filters.ki, (name) => findTown(pool, name)).catch(() => null) : null,
+    // A failed town lookup only costs the explanation, never the results. The parser reads the
+    // current date, which Cache Components only allows at request time, hence connection().
+    filters.ki
+      ? connection()
+          .then(() => parseNaturalSearch(filters.ki!, (name) => findTown(pool, name)))
+          .catch(() => null)
+      : null,
   ]);
   const favorites = await favoriteIds(
     pool,
