@@ -1,7 +1,5 @@
 "use client";
 
-import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { BODY_TYPE_LABELS, BODY_TYPES, FUEL_LABELS, FUELS, SELLER_TYPE_LABELS, SELLER_TYPES, TRANSMISSION_LABELS, TRANSMISSIONS } from "@/core/types";
 import { DIFFICULTY_LABELS, type Difficulty } from "@/core/repairs";
@@ -18,6 +16,7 @@ import {
   SORTS,
 } from "@/search/filters";
 import type { MakeFacet, SourceFacet } from "@/search/query";
+import { SearchLink, Spinner, useSearchNavigation } from "./search-transition";
 
 const KM_STEPS = [10_000, 25_000, 50_000, 75_000, 100_000, 150_000, 200_000];
 /** The options plus a value from the URL that is not one of them (e.g. from "Vergleichbare Angebote"). */
@@ -38,7 +37,8 @@ const fieldClass =
 const labelClass = "mb-1 block text-xs font-medium text-muted";
 
 export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; sources: SourceFacet[]; filters: SearchFilters }) {
-  const router = useRouter();
+  const { navigate, pendingOrigin } = useSearchNavigation();
+  const searching = pendingOrigin === "form";
   const [make, setMake] = useState(filters.make ?? "");
   const [open, setOpen] = useState(false);
   const models = facets.find((f) => f.slug === make)?.models ?? [];
@@ -52,7 +52,7 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
     if (params.get("sort") === "newest") params.delete("sort");
     if (!params.get("zip")) params.delete("radius");
     const query = params.toString();
-    router.push(query ? `/?${query}` : "/");
+    navigate(query ? `/?${query}` : "/", "form");
   }
 
   return (
@@ -279,12 +279,16 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
         </div>
 
         <div className="flex gap-2 pt-1">
-          <button type="submit" className="flex-1 rounded-md bg-accent px-3 py-2 text-sm font-semibold text-on-accent hover:bg-accent-strong">
-            Suchen
+          <button
+            type="submit"
+            className="inline-flex flex-1 items-center justify-center gap-2 rounded-md bg-accent px-3 py-2 text-sm font-semibold text-on-accent hover:bg-accent-strong"
+          >
+            {searching && <Spinner />}
+            {searching ? "Sucht …" : "Suchen"}
           </button>
-          <Link href="/" className="rounded-md border border-line px-3 py-2 text-sm hover:border-accent">
+          <SearchLink href="/" className="rounded-md border border-line px-3 py-2 text-sm hover:border-accent">
             Zurücksetzen
-          </Link>
+          </SearchLink>
         </div>
       </form>
     </>

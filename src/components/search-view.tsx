@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { getPool } from "@/lib/db";
 import { getFlipSettings } from "@/lib/flip-settings";
 import { formatDayTime, formatNumber } from "@/lib/format";
@@ -12,6 +11,7 @@ import { FilterForm } from "./filter-form";
 import { NaturalSearchBox } from "./natural-search";
 import { ResultCard } from "./result-card";
 import { SaveSearchButton } from "./save-search-button";
+import { PendingResults, SearchLink, SearchTransition } from "./search-transition";
 
 export async function SearchView({ searchParams }: { searchParams: PageProps<"/">["searchParams"] }) {
   const [filters, settings, device] = await Promise.all([searchParams.then(parseFilters), getFlipSettings(), currentDevice()]);
@@ -34,7 +34,7 @@ export async function SearchView({ searchParams }: { searchParams: PageProps<"/"
   );
 
   return (
-    <>
+    <SearchTransition>
       {/* Keyed by the sentence, so the field does not keep an old one after the filter form changed the search. */}
       <NaturalSearchBox key={filters.ki ?? ""} text={filters.ki} search={natural} sort={filters.sort} />
       <div className="grid gap-6 md:grid-cols-[18rem_1fr]">
@@ -42,32 +42,34 @@ export async function SearchView({ searchParams }: { searchParams: PageProps<"/"
           <FilterForm key={filtersToQuery(filters, { page: 1 })} facets={facets} sources={sources} filters={filters} />
         </aside>
         <section aria-label="Suchergebnisse" className="min-w-0">
-          <ResultHeader result={result} filters={filters} origin={origin} savedQuery={savedQuery} saved={saved} />
-          {filters.seit && <NewSinceNotice filters={filters} />}
-          {result.items.length === 0 ? (
-            <div className="rounded-xl border border-line bg-surface p-8 text-center">
-              <p className="font-medium">Keine Fahrzeuge gefunden.</p>
-              <p className="mt-1 text-sm text-muted">Lockere einen Filter oder vergrößere den Umkreis.</p>
-            </div>
-          ) : (
-            <ul className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-              {result.items.map((item) => (
-                <li key={item.id}>
-                  <ResultCard
-                    listing={item}
-                    minMarginEur={settings.minMarginEur}
-                    favorite={favorites.has(item.id)}
-                    newSince={filters.seit}
-                    allDrops={filters.gesenkt !== undefined || filters.sort === "price_drop"}
-                  />
-                </li>
-              ))}
-            </ul>
-          )}
-          <Pagination result={result} filters={filters} />
+          <PendingResults>
+            <ResultHeader result={result} filters={filters} origin={origin} savedQuery={savedQuery} saved={saved} />
+            {filters.seit && <NewSinceNotice filters={filters} />}
+            {result.items.length === 0 ? (
+              <div className="rounded-xl border border-line bg-surface p-8 text-center">
+                <p className="font-medium">Keine Fahrzeuge gefunden.</p>
+                <p className="mt-1 text-sm text-muted">Lockere einen Filter oder vergrößere den Umkreis.</p>
+              </div>
+            ) : (
+              <ul className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+                {result.items.map((item) => (
+                  <li key={item.id}>
+                    <ResultCard
+                      listing={item}
+                      minMarginEur={settings.minMarginEur}
+                      favorite={favorites.has(item.id)}
+                      newSince={filters.seit}
+                      allDrops={filters.gesenkt !== undefined || filters.sort === "price_drop"}
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
+            <Pagination result={result} filters={filters} />
+          </PendingResults>
         </section>
       </div>
-    </>
+    </SearchTransition>
   );
 }
 
@@ -110,9 +112,9 @@ function NewSinceNotice({ filters }: { filters: SearchFilters }) {
   return (
     <p className="mb-4 rounded-md border border-line bg-accent-soft px-3 py-2 text-sm text-accent-strong">
       Nur Fahrzeuge, die seit {formatDayTime(filters.seit!)} neu dazukamen oder günstiger wurden.{" "}
-      <Link href={`/${filtersToQuery(filters, { seit: undefined, page: 1 })}`} className="font-medium underline">
+      <SearchLink href={`/${filtersToQuery(filters, { seit: undefined, page: 1 })}`} className="font-medium underline">
         Alle Treffer dieser Suche
-      </Link>
+      </SearchLink>
     </p>
   );
 }
@@ -134,9 +136,9 @@ function Pagination({ result, filters }: { result: SearchResult; filters: Search
               {p}
             </span>
           ) : (
-            <Link href={`/${filtersToQuery(filters, { page: p })}`} className="rounded-md border border-line bg-surface px-3 py-1.5 hover:border-accent">
+            <SearchLink href={`/${filtersToQuery(filters, { page: p })}`} className="rounded-md border border-line bg-surface px-3 py-1.5 hover:border-accent">
               {p}
-            </Link>
+            </SearchLink>
           )}
         </span>
       ))}

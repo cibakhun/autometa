@@ -1,5 +1,9 @@
+"use client";
+
+import type { MouseEvent } from "react";
 import { SORT_LABELS, type Sort } from "@/search/filters";
 import type { NaturalSearch } from "@/search/natural";
+import { Spinner, useSearchNavigation } from "./search-transition";
 
 const EXAMPLES = [
   "zuverlässiger Kombi für Familie bis 8.000 €",
@@ -22,13 +26,19 @@ const kiHref = (text: string) => `/ki?text=${encodeURIComponent(text)}`;
  * search it shows what became a filter, what has no filter, and which words it did not know.
  */
 export function NaturalSearchBox({ text, search, sort }: { text?: string; search: NaturalSearch | null; sort: Sort }) {
+  const { pendingOrigin, markLeaving } = useSearchNavigation();
+  const understanding = pendingOrigin === "ki";
+  // An example opens the page anew (a plain link), so show it loading, unless it opens in a new tab.
+  const onExample = (event: MouseEvent) => {
+    if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) markLeaving("example");
+  };
   return (
     <section aria-labelledby="ki-title" className="mb-6 rounded-xl border border-line bg-surface p-4">
       <h2 id="ki-title" className="mb-2 text-sm font-semibold">
         Suche in eigenen Worten
       </h2>
       {/* A route handler turns the sentence into filters, so a plain form that works without JavaScript. */}
-      <form action="/ki" method="get" className="flex flex-col gap-2 sm:flex-row">
+      <form action="/ki" method="get" onSubmit={() => markLeaving("ki")} className="flex flex-col gap-2 sm:flex-row">
         <label htmlFor="ki-text" className="sr-only">
           Beschreib dein Wunschauto
         </label>
@@ -41,8 +51,12 @@ export function NaturalSearchBox({ text, search, sort }: { text?: string; search
           placeholder="z. B. zuverlässiger Kombi für Familie bis 8.000 €"
           className="min-w-0 flex-1 rounded-md border border-line bg-background px-3 py-2 text-base outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
         />
-        <button type="submit" className="rounded-md bg-accent px-4 py-2 text-sm font-semibold text-on-accent hover:bg-accent-strong">
-          Verstehen und suchen
+        <button
+          type="submit"
+          className="inline-flex items-center justify-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-semibold text-on-accent hover:bg-accent-strong"
+        >
+          {understanding && <Spinner />}
+          {understanding ? "Sucht …" : "Verstehen und suchen"}
         </button>
       </form>
       {search ? (
@@ -53,7 +67,7 @@ export function NaturalSearchBox({ text, search, sort }: { text?: string; search
           {EXAMPLES.map((example, i) => (
             <span key={example}>
               {i > 0 && " · "}
-              <a href={kiHref(example)} className="text-accent hover:underline">
+              <a href={kiHref(example)} onClick={onExample} className="text-accent hover:underline">
                 {example}
               </a>
             </span>
