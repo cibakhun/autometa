@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
 :root {
+  /* Native controls (selects, checkboxes, scrollbars) follow the theme too. */
+  color-scheme: light dark;
   --background: #f6f7f9;
   --surface: #ffffff;
   --foreground: #16181d;
@@ -54,4 +56,10 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* One visible focus ring for keyboard users on every link and control. */
+:where(a, button, summary, select, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }

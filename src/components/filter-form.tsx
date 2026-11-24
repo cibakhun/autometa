@@ -31,8 +31,9 @@ const YEARS = Array.from({ length: 27 }, (_, i) => CURRENT_YEAR - i);
 const nf = new Intl.NumberFormat("de-DE");
 const DIFFICULTIES = [1, 2, 3, 4, 5] as const satisfies readonly Difficulty[];
 
+// 16px text on phones: iOS zooms into any smaller field on focus.
 const fieldClass =
-  "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/20";
+  "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-base outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 sm:text-sm";
 const labelClass = "mb-1 block text-xs font-medium text-muted";
 
 export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; sources: SourceFacet[]; filters: SearchFilters }) {
