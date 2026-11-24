@@ -46,7 +46,7 @@ export async function SearchView({ searchParams }: { searchParams: PageProps<"/"
     <SearchTransition>
       {/* Keyed by the sentence, so the field does not keep an old one after the filter form changed the search. */}
       <NaturalSearchBox key={filters.ki ?? ""} text={filters.ki} search={natural} sort={filters.sort} />
-      <div className="grid gap-6 md:grid-cols-[18rem_1fr]">
+      <div className="grid gap-4 md:grid-cols-[18rem_1fr] md:gap-6">
         <aside>
           <FilterForm key={filtersToQuery(filters, { page: 1 })} facets={facets} sources={sources} filters={filters} />
         </aside>

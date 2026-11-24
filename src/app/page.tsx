@@ -16,8 +16,8 @@ function SearchSkeleton() {
       <p role="status" className="sr-only">
         Suche lädt …
       </p>
-      <div className="mb-6 h-36 animate-pulse rounded-xl bg-surface sm:h-28" />
-      <div className="grid gap-6 md:grid-cols-[18rem_1fr]">
+      <div className="mb-4 h-36 animate-pulse rounded-xl bg-surface sm:h-28 md:mb-6" />
+      <div className="grid gap-4 md:grid-cols-[18rem_1fr] md:gap-6">
         {/* Phones: the folded filter button; wider: the filter sidebar. */}
         <div className="h-11 animate-pulse rounded-md bg-surface md:h-[32rem] md:rounded-xl" />
         <div className="min-w-0">

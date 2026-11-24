@@ -33,7 +33,7 @@ export function NaturalSearchBox({ text, search, sort }: { text?: string; search
     if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) markLeaving("example");
   };
   return (
-    <section aria-labelledby="ki-title" className="mb-6 rounded-xl border border-line bg-surface p-4">
+    <section aria-labelledby="ki-title" className="mb-4 rounded-xl border border-line bg-surface p-4 md:mb-6">
       <h2 id="ki-title" className="mb-2 text-sm font-semibold">
         Suche in eigenen Worten
       </h2>
