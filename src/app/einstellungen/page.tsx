@@ -58,19 +58,27 @@ async function SettingsForm({ searchParams }: { searchParams: PageProps<"/einste
           Gespeichert.
         </p>
       )}
-      <div>
-        <label htmlFor="level" className={labelClass}>Was traust du dir zu?</label>
-        <select id="level" name="level" defaultValue={settings.level} aria-describedby="level-hint" className={fieldClass}>
-          {(Object.keys(DIFFICULTY_LABELS) as unknown as Difficulty[]).map((level) => (
-            <option key={level} value={level}>
-              bis Schwierigkeit {level}: {DIFFICULTY_LABELS[level]}
-            </option>
+      {/* Radio buttons rather than a select: the long descriptions stay readable on a phone. */}
+      <fieldset aria-describedby="level-hint">
+        <legend className={labelClass}>Was traust du dir zu?</legend>
+        <div className="space-y-1">
+          {(Object.keys(DIFFICULTY_LABELS).map(Number) as Difficulty[]).map((level) => (
+            <label
+              key={level}
+              className="flex cursor-pointer items-start gap-2.5 rounded-md border border-line px-3 py-2 text-sm has-[:checked]:border-accent has-[:checked]:bg-accent-soft"
+            >
+              <input type="radio" name="level" value={level} defaultChecked={settings.level === level} className="mt-0.5 accent-accent" />
+              <span>
+                <span className="font-medium">Bis Schwierigkeit {level}</span>
+                <span className="block text-muted">{DIFFICULTY_LABELS[level]}</span>
+              </span>
+            </label>
           ))}
-        </select>
+        </div>
         <p id="level-hint" className={hintClass}>
           Die Flip-Liste zeigt nur Autos, deren schwerste Arbeit du dir zutraust. Standard: Schwierigkeit {DEFAULT_FLIP_SETTINGS.level}.
         </p>
-      </div>
+      </fieldset>
       <div>
         <label htmlFor="discountPct" className={labelClass}>Verhandlungsabschlag beim Verkauf (%)</label>
         <input

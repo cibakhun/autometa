@@ -4,7 +4,7 @@ import { Suspense } from "react";
 import { ResultCard } from "@/components/result-card";
 import { getPool } from "@/lib/db";
 import { getFlipSettings } from "@/lib/flip-settings";
-import { formatDayTime, formatPrice, formatSignedPrice } from "@/lib/format";
+import { formatDayTime, formatEuro, formatSignedPrice } from "@/lib/format";
 import { currentDevice } from "@/lib/profile";
 import { getFavorites, type WatchedListing } from "@/profiles/favorites";
 
@@ -16,14 +16,20 @@ export default function WatchListPage() {
       <div className="mb-6 max-w-3xl">
         <h1 className="text-2xl font-bold">Merkliste</h1>
         <p className="mt-2 text-sm text-muted">
-          Autos, die du mit dem Herz gemerkt hast. Sinkt ein Preis oder verschwindet eine Anzeige, sagt dir AutoMeta Bescheid, wenn du unter{" "}
+          Autos, die du mit dem Herz-Symbol gemerkt hast. Sinkt ein Preis oder verschwindet eine Anzeige, sagt dir AutoMeta Bescheid, wenn du unter{" "}
           <Link href="/suchauftraege#benachrichtigungen" className="text-accent hover:underline">
             Suchaufträge
           </Link>{" "}
           Benachrichtigungen eingeschaltet hast.
         </p>
       </div>
-      <Suspense fallback={<div className="h-64 animate-pulse rounded-xl bg-surface" />}>
+      <Suspense
+        fallback={
+          <div aria-busy="true" className="h-64 animate-pulse rounded-xl bg-surface">
+            <span className="sr-only">Merkliste wird geladen …</span>
+          </div>
+        }
+      >
         <WatchList />
       </Suspense>
     </div>
@@ -36,13 +42,16 @@ async function WatchList() {
   if (listings.length === 0) {
     return (
       <div className="rounded-xl border border-line bg-surface p-8 text-center">
-        <p className="font-medium">Noch nichts gemerkt.</p>
-        <p className="mt-1 text-sm text-muted">
-          Tippe in der{" "}
-          <Link href="/" className="text-accent hover:underline">
-            Suche
-          </Link>{" "}
-          auf das Herz eines Autos. Auf einem anderen Gerät gemerkt?{" "}
+        <h2 className="text-lg font-semibold">Noch nichts gemerkt</h2>
+        <p className="mx-auto mt-1 max-w-md text-sm text-muted">
+          Tippe in der Suche auf das Herz eines Autos oder auf einer Angebotsseite auf „Merken“. Dann steht es hier, mit dem Preis von
+          dem Tag, an dem du es gemerkt hast.
+        </p>
+        <Link href="/" className="mt-4 inline-block rounded-md bg-accent px-4 py-2 text-sm font-semibold text-on-accent hover:bg-accent-strong">
+          Zur Suche
+        </Link>
+        <p className="mt-4 text-sm text-muted">
+          Auf einem anderen Gerät gemerkt?{" "}
           <Link href="/geraete" className="text-accent hover:underline">
             Geräte verbinden
           </Link>
@@ -80,7 +89,7 @@ function SavedNote({ listing }: { listing: WatchedListing }) {
   const change = listing.priceEur - listing.savedPriceEur;
   return (
     <p className="mb-2 text-xs text-muted">
-      Gemerkt {formatDayTime(listing.savedAt)} für {formatPrice(listing.savedPriceEur)}
+      Gemerkt {formatDayTime(listing.savedAt)} für {formatEuro(listing.savedPriceEur)}
       {change !== 0 && (
         <span className={change < 0 ? "font-medium text-good-text" : "font-medium"}> · seitdem {formatSignedPrice(change)}</span>
       )}

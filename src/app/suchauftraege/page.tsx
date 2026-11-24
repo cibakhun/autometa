@@ -19,7 +19,13 @@ export default function SavedSearchesPage({ searchParams }: PageProps<"/suchauft
         Gespeicherte Suchen. Kommt ein passendes Auto neu dazu oder wird eins günstiger, schickt AutoMeta eine Benachrichtigung, meist
         wenige Minuten nachdem es auf der Börse gelesen wurde.
       </p>
-      <Suspense fallback={<div className="mt-6 h-96 animate-pulse rounded-xl bg-surface" />}>
+      <Suspense
+        fallback={
+          <div aria-busy="true" className="mt-6 h-96 animate-pulse rounded-xl bg-surface">
+            <span className="sr-only">Suchaufträge werden geladen …</span>
+          </div>
+        }
+      >
         <SavedSearches searchParams={searchParams} />
       </Suspense>
     </div>
@@ -80,18 +86,20 @@ async function SavedSearches({ searchParams }: { searchParams: PageProps<"/sucha
 
       {searches.length === 0 ? (
         <div className="mt-6 rounded-xl border border-line bg-surface p-8 text-center">
-          <p className="font-medium">Noch keine Suchaufträge.</p>
-          <p className="mt-1 text-sm text-muted">
-            Stell in der{" "}
-            <Link href="/" className="text-accent hover:underline">
-              Suche
-            </Link>{" "}
-            deine Filter ein, zum Beispiel die{" "}
-            <a href="/flip" className="text-accent hover:underline">
-              Flip-Liste
-            </a>
-            , und tippe über den Ergebnissen auf „Suche speichern“.
+          <h2 className="text-lg font-semibold">Noch keine Suchaufträge</h2>
+          <p className="mx-auto mt-1 max-w-md text-sm text-muted">
+            Stell in der Suche deine Filter ein, zum Beispiel Marke, Preis und Umkreis, und tippe über den Ergebnissen auf „Suche
+            speichern“. Dann zeigt AutoMeta hier, was neu dazukommt oder günstiger wird, und meldet sich auf Wunsch per Benachrichtigung.
           </p>
+          <div className="mt-4 flex flex-wrap justify-center gap-3">
+            <Link href="/" className="rounded-md bg-accent px-4 py-2 text-sm font-semibold text-on-accent hover:bg-accent-strong">
+              Zur Suche
+            </Link>
+            {/* A route handler that redirects to the search with the visitor's settings, so a plain link. */}
+            <a href="/flip" className="rounded-md border border-line px-4 py-2 text-sm font-medium hover:border-accent">
+              Zur Flip-Liste
+            </a>
+          </div>
         </div>
       ) : (
         <ul className="mt-6 space-y-4">
