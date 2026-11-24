@@ -252,6 +252,8 @@ describe("isNotForSale", () => {
     "Rolex Submariner Tausch gegen Porsche",
     "Xbox One Tausch gegen Auto",
     "Samsung Galaxy S24 Tausch gegen Auto",
+    "Samsung Galaxy Note 10 Tausch gegen Auto",
+    "iPhone 15 Pro Max Tausch gegen Auto",
   ])("skips the wanted or swap ad %s", (title) => expect(isNotForSale(title)).toBe(true));
 
   it.each([
@@ -275,6 +277,8 @@ describe("isNotForSale", () => {
     "Mini One Tausch gegen Cabrio",
     "911 Turbo Tausch gegen Golf",
     "Golf 4 mit E-Bike Tausch gegen Transporter",
+    "E-Bike und Golf 4 Tausch gegen Transporter",
+    "iPhone 15 Pro und Golf 4 Tausch gegen Bulli",
   ])("keeps the sale ad %s", (title) => expect(isNotForSale(title)).toBe(false));
 });
 

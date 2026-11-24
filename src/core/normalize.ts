@@ -314,6 +314,9 @@ let carKeys: { makes: string[][]; models: string[][] } | null = null;
 const NON_CAR_PRODUCTS =
   /\b(?:iphone|ipad|macbook|apple|samsung|galaxy s\d+|xbox|playstation|ps[2-5]|nintendo|konsole|handy|smartphone|laptop|notebook|tablet|fernseher|rolex|uhr|fahrrad|e ?bike|pedelec|motorrad|roller|quad)\b/;
 
+/** Words that follow a product's name as its model ("15 pro max", "one", "galaxy note"), never a car's name. */
+const PRODUCT_MODEL_WORDS = String.raw`(?: (?:\S*\d\S*|pro|max|mini|plus|ultra|air|one|series|lite|slim|switch|watch|edge|note|fold|flip|galaxy|tab))*`;
+
 const toKeys = (keys: string[]) =>
   keys
     .map((key) => normalizeText(key))
@@ -337,9 +340,9 @@ export function mentionsCar(text: string): boolean {
   const found = (keys: string[][], within: string[]) =>
     keys.some((key) => within.some((_, start) => key.every((word, i) => within[start + i] === word)));
   if (found(carKeys.makes, words)) return true;
-  // A product and the two words after it ("xbox one", "samsung galaxy s24") are no model; the
-  // rest still is ("golf 4 mit e bike").
-  const rest = joined.replace(new RegExp(String.raw`${NON_CAR_PRODUCTS.source}(?: \S+){0,2}`, "g"), " ");
+  // A product and its model words after it ("xbox one", "samsung galaxy note 10") are no model;
+  // the rest still is, before or after the product ("golf 4 mit e bike", "e bike und golf 4").
+  const rest = joined.replace(new RegExp(String.raw`${NON_CAR_PRODUCTS.source}${PRODUCT_MODEL_WORDS}`, "g"), " ");
   const restWords = rest.split(" ").filter(Boolean);
   if (found(carKeys.models, restWords)) return true;
   // "320d", "a180": model codes (with a digit, so a lone "e" or "s" says nothing); "E46", "W124".
