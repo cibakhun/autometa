@@ -4,7 +4,7 @@ import { formatDayTime, formatNumber } from "@/lib/format";
 import { currentDevice } from "@/lib/profile";
 import { favoriteIds } from "@/profiles/favorites";
 import { findSavedSearch, normalizeSearchQuery } from "@/profiles/searches";
-import { filtersToQuery, parseFilters, SORT_LABELS, type SearchFilters } from "@/search/filters";
+import { filtersToQuery, MAX_PAGE, PAGE_SIZE, parseFilters, SORT_LABELS, type SearchFilters } from "@/search/filters";
 import { parseNaturalSearch } from "@/search/natural";
 import { findTown, getMakeFacets, getSourceFacets, resolveZip, searchListings, type Origin, type SearchResult } from "@/search/query";
 import { FilterForm } from "./filter-form";
@@ -119,29 +119,72 @@ function NewSinceNotice({ filters }: { filters: SearchFilters }) {
   );
 }
 
+const pageButton = "inline-flex h-10 min-w-10 items-center justify-center rounded-md px-3";
+
+/**
+ * Previous/next and a few page numbers. The URL takes at most MAX_PAGE pages (anything beyond
+ * falls back to page 1), so the last page offered is MAX_PAGE even when more vehicles match.
+ */
 function Pagination({ result, filters }: { result: SearchResult; filters: SearchFilters }) {
-  if (result.pageCount <= 1) return null;
+  const last = Math.min(result.pageCount, MAX_PAGE);
+  if (last <= 1 || result.page > last) return null;
   const page = result.page;
-  const pages = [...new Set([1, page - 1, page, page + 1, result.pageCount])]
-    .filter((p) => p >= 1 && p <= result.pageCount)
-    .sort((a, b) => a - b);
+  const pages = [...new Set([1, page - 1, page, page + 1, last])].filter((p) => p >= 1 && p <= last).sort((a, b) => a - b);
+  const href = (p: number) => `/${filtersToQuery(filters, { page: p })}`;
+  const capped = result.pageCount > MAX_PAGE;
 
   return (
-    <nav aria-label="Seiten" className="mt-6 flex flex-wrap items-center justify-center gap-1 text-sm">
-      {pages.map((p, i) => (
-        <span key={p} className="flex items-center gap-1">
-          {i > 0 && p - pages[i - 1] > 1 && <span className="px-1 text-muted">…</span>}
-          {p === page ? (
-            <span aria-current="page" className="rounded-md bg-accent px-3 py-1.5 font-medium text-on-accent">
-              {p}
-            </span>
-          ) : (
-            <SearchLink href={`/${filtersToQuery(filters, { page: p })}`} className="rounded-md border border-line bg-surface px-3 py-1.5 hover:border-accent">
-              {p}
-            </SearchLink>
-          )}
+    <nav aria-label="Seiten" className="mt-8 text-sm">
+      <div className="flex items-center justify-between gap-2 sm:justify-center">
+        {page > 1 ? (
+          <SearchLink href={href(page - 1)} rel="prev" className={`${pageButton} gap-1 border border-line bg-surface font-medium hover:border-accent`}>
+            <span aria-hidden="true">‹</span> Zurück
+          </SearchLink>
+        ) : (
+          <span aria-disabled="true" className={`${pageButton} gap-1 border border-line text-muted opacity-50`}>
+            <span aria-hidden="true">‹</span> Zurück
+          </span>
+        )}
+        {/* Phones: just "Seite 3 von 400" between the two buttons. */}
+        <span className="text-muted sm:hidden">
+          Seite {formatNumber(page)} von {formatNumber(last)}
         </span>
-      ))}
+        <ol className="hidden items-center gap-1 sm:flex">
+          {pages.map((p, i) => (
+            <li key={p} className="flex items-center gap-1">
+              {i > 0 && p - pages[i - 1] > 1 && (
+                <span aria-hidden="true" className="px-1 text-muted">
+                  …
+                </span>
+              )}
+              {p === page ? (
+                <span aria-current="page" className={`${pageButton} bg-accent font-medium text-on-accent`}>
+                  {formatNumber(p)}
+                </span>
+              ) : (
+                <SearchLink href={href(p)} aria-label={`Seite ${p}`} className={`${pageButton} border border-line bg-surface hover:border-accent`}>
+                  {formatNumber(p)}
+                </SearchLink>
+              )}
+            </li>
+          ))}
+        </ol>
+        {page < last ? (
+          <SearchLink href={href(page + 1)} rel="next" className={`${pageButton} gap-1 border border-line bg-surface font-medium hover:border-accent`}>
+            Weiter <span aria-hidden="true">›</span>
+          </SearchLink>
+        ) : (
+          <span aria-disabled="true" className={`${pageButton} gap-1 border border-line text-muted opacity-50`}>
+            Weiter <span aria-hidden="true">›</span>
+          </span>
+        )}
+      </div>
+      {capped && (
+        <p className="mt-3 text-center text-xs text-muted">
+          Angezeigt werden die ersten {formatNumber(MAX_PAGE)} Seiten ({formatNumber(MAX_PAGE * PAGE_SIZE)} Fahrzeuge). Für den Rest grenze die Suche
+          mit Filtern ein oder ändere die Sortierung.
+        </p>
+      )}
     </nav>
   );
 }
