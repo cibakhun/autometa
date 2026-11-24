@@ -215,7 +215,7 @@ function OriginalLink({ listing, className, label }: { listing: ListingDetail; c
 /** Near the top, so a phone does not have to scroll past the whole page: to the portal, and the heart. */
 function Actions({ listing, saved }: { listing: ListingDetail; saved: boolean }) {
   // A listing that went stale may still be online; one that was taken down or vanished from its list most likely is not.
-  const probablyDeleted = listing.status === "gone" && listing.goneReason !== "stale";
+  const probablyDeleted = listing.status === "gone" && listing.goneReason !== "stale" && listing.goneReason !== "filtered";
   return (
     <div className="mt-4">
       <div className="flex flex-wrap items-start gap-2">
@@ -567,6 +567,10 @@ function GoneNotice({ listing }: { listing: ListingDetail }) {
     case "checked":
       heading = `Nicht mehr online seit ${formatDate(listing.goneAt ?? listing.lastSeenAt)}`;
       text = `Laut ${listing.sourceName} verkauft oder gelöscht.`;
+      break;
+    case "filtered":
+      heading = "Aus der Suche aussortiert";
+      text = `Die Anzeige sieht nicht nach einem Auto zum Kaufen aus (etwa ein Gesuch, ein Tausch oder ein Platzhalterpreis), deshalb steht sie nicht mehr in der Suche.`;
       break;
     case "stale":
       heading = `Seit ${formatDate(listing.checkedAt)} nicht mehr bestätigt`;

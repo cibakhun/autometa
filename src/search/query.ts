@@ -588,7 +588,7 @@ export interface ListingDetail extends ListingSummary {
    * Why a gone listing left: missed in complete reads of its list, taken down according to its
    * own page, or not confirmed for too long. Null while active or when it left before this was kept.
    */
-  goneReason: "missed" | "checked" | "stale" | null;
+  goneReason: "missed" | "checked" | "stale" | "filtered" | null;
   /** When a gone listing left the search; null while active or when not recorded. */
   goneAt: string | null;
   firstSeenAt: string;
