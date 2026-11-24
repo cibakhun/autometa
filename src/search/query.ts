@@ -4,11 +4,12 @@ import type { DamageKind } from "@/core/damage";
 import { AGE_BUCKETS, MIN_SAMPLE } from "@/core/defects";
 import { calculateFlip, DEFAULT_FLIP_SETTINGS, type FlipResult, type FlipSettings } from "@/core/flip";
 import type { InspectionBasis } from "@/core/inspection";
+import type { PricePoint } from "@/core/price-history";
 import type { Confidence, Difficulty, VehicleClass } from "@/core/repairs";
 import { psToKw } from "@/core/normalize";
 import type { BodyType, Fuel, SellerType, Transmission } from "@/core/types";
 import { Params } from "@/lib/db";
-import { huFilterMonths, PAGE_SIZE, type SearchFilters, type Sort } from "./filters";
+import { huFilterMonths, PAGE_SIZE, priceDropDays, type SearchFilters, type Sort } from "./filters";
 
 export interface Origin {
   zip: string;
@@ -149,6 +150,7 @@ const ORDER_BY: Record<Exclude<Sort, "flip" | "margin" | "empfehlung">, string> 
   distance: "distance_km asc nulls last, l.id asc",
   // The biggest gap in euros: what a repaired car could be worth minus what it costs now.
   below_market: "l.market_price_eur - l.price_eur desc nulls last, l.id desc",
+  price_drop: "l.price_dropped_at desc nulls last, l.id desc",
 };
 
 const escapeLike = (value: string) => value.replace(/[\\%_]/g, (char) => `\\${char}`);
@@ -224,6 +226,12 @@ export function buildWhere(
   if (filters.transmission) add((p) => `l.transmission = ${p(filters.transmission)}`);
   if (filters.seller) add((p) => `l.seller_type = ${p(filters.seller)}`);
   if (filters.hu) add((p) => `l.hu_until >= (date_trunc('month', current_date) + make_interval(months => ${p(huFilterMonths(filters.hu!))}::int))::date`);
+  if (filters.gesenkt) {
+    // The last price change was a drop (a later rise clears it), within the chosen days.
+    where.push("l.price_dropped_at is not null");
+    const days = priceDropDays(filters.gesenkt);
+    if (days !== null) add((p) => `l.price_dropped_at > now() - make_interval(days => ${p(days)}::int)`);
+  }
   if (filters.zustand === "defekt") where.push("cardinality(l.damage) > 0");
   if (filters.zustand === "intakt") where.push("l.damage = '{}'");
   if (filters.schwierigkeit !== undefined) add((p) => `l.repair_difficulty <= ${p(filters.schwierigkeit)}`);
@@ -561,11 +569,7 @@ export async function getSourceStatus(pool: Pool): Promise<SourceStatus[]> {
   }));
 }
 
-/** One price a listing had and when we first saw it. */
-export interface PricePoint {
-  priceEur: number;
-  seenAt: string;
-}
+export type { PricePoint } from "@/core/price-history";
 
 export interface ListingDetail extends ListingSummary {
   /** Middle half of the comparable listings' prices. */
@@ -585,14 +589,20 @@ export interface ListingDetail extends ListingSummary {
    * own page, or not confirmed for too long. Null while active or when it left before this was kept.
    */
   goneReason: "missed" | "checked" | "stale" | null;
+  /** When a gone listing left the search; null while active or when not recorded. */
+  goneAt: string | null;
   firstSeenAt: string;
   lastSeenAt: string;
+  /** The day the portal says the listing was put online (YYYY-MM-DD), where its page showed it. */
+  listedOn: string | null;
+  /** The database's "now" when the listing was read, for ages and durations. */
+  asOf: string;
 }
 
 export async function getListing(pool: Pool, id: number, settings = DEFAULT_FLIP_SETTINGS): Promise<ListingDetail | null> {
   const { rows } = await pool.query(
     `select l.*, to_char(l.first_registration, 'YYYY-MM-DD') as first_registration_text, s.name as source_name,
-            to_char(l.hu_until, 'YYYY-MM-DD') as hu_until_text,
+            to_char(l.hu_until, 'YYYY-MM-DD') as hu_until_text, to_char(l.listed_on, 'YYYY-MM-DD') as listed_on_text, now() as as_of,
             coalesce(l.image_url, (select d.image_url from listings d
                                     where l.cluster_id is not null and d.cluster_id = l.cluster_id
                                       and d.status = 'active' and d.image_url is not null
@@ -650,8 +660,11 @@ export async function getListing(pool: Pool, id: number, settings = DEFAULT_FLIP
     sellerName: row.seller_name,
     status: row.status,
     goneReason: row.status === "gone" ? (row.gone_reason ?? null) : null,
+    goneAt: row.status === "gone" && row.gone_at ? new Date(row.gone_at).toISOString() : null,
     firstSeenAt: new Date(row.first_seen_at).toISOString(),
     lastSeenAt: new Date(row.last_seen_at).toISOString(),
+    listedOn: row.listed_on_text,
+    asOf: new Date(row.as_of).toISOString(),
     checkedAt: new Date(row.last_seen_at).toISOString(),
     priceDroppedAt: row.price_dropped_at ? new Date(row.price_dropped_at).toISOString() : null,
     priceBeforeDropEur: row.price_before_drop_eur ?? null,

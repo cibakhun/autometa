@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { CheckResult, ListingRef } from "../adapter";
-import { BlockedError, PoliteFetcher } from "../http/fetcher";
-import { kleinanzeigenVerdict } from "./kleinanzeigen";
-import { CHECK_GROUP, checkListingPages, MAX_UNCLEAR_IN_A_ROW, portalText } from "./listing-check";
+import { BlockedError, PoliteFetcher, type FetchedPage } from "../http/fetcher";
+import { kleinanzeigenFacts, kleinanzeigenVerdict } from "./kleinanzeigen";
+import { CHECK_GROUP, checkListingPages, MAX_PRICE_CHANGES_IN_GROUP, MAX_UNCLEAR_IN_A_ROW, portalText } from "./listing-check";
 import { quokaDisallowedRedirect, quokaVerdict } from "./quoka";
 
 type Reply = { status?: number; body?: string; location?: string };
@@ -23,7 +23,7 @@ function fakeSite(routes: Record<string, Reply>, options: { maxRequests?: number
 
 const KA = "https://www.kleinanzeigen.de";
 const adUrl = (id: string) => `${KA}/s-anzeige/bmw-320d/${id}-216-3331`;
-const ref = (id: string): ListingRef => ({ externalId: id, url: adUrl(id) });
+const ref = (id: string, priceEur = 12500): ListingRef => ({ externalId: id, url: adUrl(id), priceEur });
 const adPage = (id: string, extra = "") => ({ body: `<html><head><link rel="canonical" href="${adUrl(id)}"></head><body><h1>BMW 320d</h1>${extra}</body></html>` });
 
 async function collect(source: AsyncIterable<CheckResult>) {
@@ -159,6 +159,63 @@ describe("checkListingPages with Kleinanzeigen's ad pages", () => {
   });
 });
 
+/** The boxes under an ad's title as Kleinanzeigen shows them: price, then the day it was put online. */
+const priceBoxes = (price: string, day = "18.11.2026") =>
+  `<div class="boxedarticle--flex--container"><h2 class="boxedarticle--price" id="viewad-price">
+     ${price}</h2></div>
+   <div id="viewad-extra-info" class="boxedarticle--details--full">
+     <div><i class="icon icon-small icon-calendar-gray-simple"></i><span>${day}</span></div>
+     <div><i class="icon icon-small icon-eye-gray-simple"></i><span id="viewad-cntr-num"></span></div>
+   </div>`;
+
+describe("checkListingPages reading the price on Kleinanzeigen's ad pages", () => {
+  const facts = (_ref: ListingRef, page: FetchedPage) => kleinanzeigenFacts(page, Date.parse("2026-11-23T22:00:00Z"));
+
+  it("hands on the price and the day put online of ads that are online", async () => {
+    const site = fakeSite({
+      [`${KA}/robots.txt`]: { body: "User-agent: *\n" },
+      [adUrl("1")]: adPage("1", priceBoxes("11.900 € VB")),
+      [adUrl("2")]: adPage("2", priceBoxes("VB")),
+      [adUrl("3")]: adPage("3", `<h1><span>Gelöscht</span> • BMW 320d</h1>${priceBoxes("9.000 €")}`),
+    });
+    const logs: string[] = [];
+    const results = await collect(
+      checkListingPages([ref("1"), ref("2"), ref("3")], { fetcher: site.fetcher, log: (m) => logs.push(m), verdict: kleinanzeigenVerdict, facts }),
+    );
+    expect(results).toEqual([
+      { externalId: "1", outcome: "active", priceEur: 11900, listedOn: "2026-11-18" },
+      // "VB" alone is no price: the stored one stays.
+      { externalId: "2", outcome: "active", listedOn: "2026-11-18" },
+      // Nothing is read from an ad that is taken down.
+      { externalId: "3", outcome: "gone" },
+    ]);
+    expect(logs.at(-1)).toBe("checked 3 listing pages: 2 online, 1 taken down, 0 unclear, 1 new prices");
+  });
+
+  it("does not believe prices when too many in a group changed, but keeps the outcomes", async () => {
+    const due = Array.from({ length: CHECK_GROUP }, (_, i) => ref(String(i + 1), 12500));
+    const changed = MAX_PRICE_CHANGES_IN_GROUP + 1;
+    const routes = Object.fromEntries(due.map((r, i) => [r.url, adPage(r.externalId, priceBoxes(i < changed ? "2.019 €" : "12.500 € VB"))]));
+    const logs: string[] = [];
+    const site = fakeSite({ [`${KA}/robots.txt`]: { body: "User-agent: *\n" }, ...routes });
+    const results = await collect(checkListingPages(due, { fetcher: site.fetcher, log: (m) => logs.push(m), verdict: kleinanzeigenVerdict, facts }));
+    expect(results).toHaveLength(CHECK_GROUP);
+    expect(results.every((r) => r.outcome === "active" && r.priceEur === undefined && r.listedOn === "2026-11-18")).toBe(true);
+    expect(logs.some((line) => line.startsWith(`prices ignored: ${changed} of ${CHECK_GROUP} listing pages`))).toBe(true);
+  });
+
+  it("passes on a group in which some prices changed", async () => {
+    const due = Array.from({ length: CHECK_GROUP }, (_, i) => ref(String(i + 1), 12500));
+    const routes = Object.fromEntries(
+      due.map((r, i) => [r.url, adPage(r.externalId, priceBoxes(i < MAX_PRICE_CHANGES_IN_GROUP ? "11.000 €" : "12.500 € VB"))]),
+    );
+    const site = fakeSite({ [`${KA}/robots.txt`]: { body: "User-agent: *\n" }, ...routes });
+    const results = await collect(checkListingPages(due, { fetcher: site.fetcher, log: () => undefined, verdict: kleinanzeigenVerdict, facts }));
+    expect(results.filter((r) => r.priceEur === 11000)).toHaveLength(MAX_PRICE_CHANGES_IN_GROUP);
+    expect(results.filter((r) => r.priceEur === 12500)).toHaveLength(CHECK_GROUP - MAX_PRICE_CHANGES_IN_GROUP);
+  });
+});
+
 describe("checkListingPages with Quoka's ad pages", () => {
   const QUOKA = "https://www.quoka.de";
   const quokaAd = (id: string) => `${QUOKA}/anzeigen/auto-motorrad/automarkt/anzeige/vw-golf-7/${id}.html`;
@@ -178,7 +235,7 @@ describe("checkListingPages with Quoka's ad pages", () => {
       [`${QUOKA}/anzeigen/auto-motorrad/automarkt/`]: { body: "<html>Automarkt</html>" },
       [quokaAd("jkl24680")]: { body: "<html><p>Diese Anzeige ist nicht mehr verfügbar.</p></html>" },
     });
-    const due = ["abc12345", "def67890", "ghi13579", "jkl24680", "mno97531", "pqr86420"].map((id) => ({ externalId: id, url: quokaAd(id) }));
+    const due = ["abc12345", "def67890", "ghi13579", "jkl24680", "mno97531", "pqr86420"].map((id) => ({ externalId: id, url: quokaAd(id), priceEur: 2500 }));
     const results = await collect(
       checkListingPages(due, { fetcher: site.fetcher, log: () => undefined, verdict: quokaVerdict, disallowedRedirect: quokaDisallowedRedirect }),
     );

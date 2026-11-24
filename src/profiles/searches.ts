@@ -58,6 +58,7 @@ export function describeSearch(filters: SearchFilters, sourceNames: Record<strin
     filters.transmission ? TRANSMISSION_LABELS[filters.transmission] : null,
     filters.seller ? SELLER_TYPE_LABELS[filters.seller] : null,
     filters.hu ? (filters.hu === "neu" ? "TÜV neu" : `TÜV mind. ${filters.hu} Monate`) : null,
+    filters.gesenkt ? (filters.gesenkt === "ja" ? "Preis gesenkt" : `Preis gesenkt (${filters.gesenkt} Tage)`) : null,
     filters.zustand && !flipList ? CONDITION_LABELS[filters.zustand].split(" (")[0] : null,
     filters.schwierigkeit !== undefined ? `Schwierigkeit bis ${filters.schwierigkeit}` : null,
     filters.margeMin !== undefined ? `Marge ab ${nf(filters.margeMin)} €` : null,

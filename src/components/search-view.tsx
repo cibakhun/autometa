@@ -53,7 +53,13 @@ export async function SearchView({ searchParams }: { searchParams: PageProps<"/"
             <ul className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
               {result.items.map((item) => (
                 <li key={item.id}>
-                  <ResultCard listing={item} minMarginEur={settings.minMarginEur} favorite={favorites.has(item.id)} newSince={filters.seit} />
+                  <ResultCard
+                    listing={item}
+                    minMarginEur={settings.minMarginEur}
+                    favorite={favorites.has(item.id)}
+                    newSince={filters.seit}
+                    allDrops={filters.gesenkt !== undefined || filters.sort === "price_drop"}
+                  />
                 </li>
               ))}
             </ul>

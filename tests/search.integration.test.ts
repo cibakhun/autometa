@@ -72,6 +72,32 @@ describe.skipIf(!url)("search against Postgres", () => {
     }
   });
 
+  it("finds listings whose price dropped, the latest drop first", async () => {
+    const { rows } = await pool.query<{ id: string; price_eur: number }>(
+      "select id, price_eur from listings where status = 'active' order by id limit 3",
+    );
+    const [recent, older, raised] = rows.map((row) => ({ id: Number(row.id), price: row.price_eur }));
+    try {
+      for (const car of [recent, older, raised]) await pool.query("update listings set price_eur = $2 where id = $1", [car.id, car.price - 500]);
+      await pool.query("update listings set price_dropped_at = now() - interval '10 days' where id = $1", [older.id]);
+      // A rise after the drop: the last change is no drop any more.
+      await pool.query("update listings set price_eur = $2 where id = $1", [raised.id, raised.price]);
+
+      const ids = async (query: Record<string, string>) => (await searchListings(pool, parseFilters(query), null)).items.map((item) => item.id);
+      expect(await ids({ gesenkt: "3" })).toEqual([recent.id]);
+      expect((await ids({ gesenkt: "30" })).sort()).toEqual([recent.id, older.id].sort());
+      expect((await ids({ gesenkt: "ja", sort: "price_drop" }))).toEqual([recent.id, older.id]);
+      expect((await ids({ sort: "price_drop" })).slice(0, 2)).toEqual([recent.id, older.id]);
+      const [item] = (await searchListings(pool, parseFilters({ gesenkt: "3" }), null)).items;
+      expect(item).toMatchObject({ priceEur: recent.price - 500, priceBeforeDropEur: recent.price });
+      expect(parseFilters({ gesenkt: "14" }).gesenkt).toBeUndefined();
+    } finally {
+      for (const car of [recent, older, raised]) {
+        await pool.query("update listings set price_eur = $2, price_dropped_at = null, price_before_drop_eur = null where id = $1", [car.id, car.price]);
+      }
+    }
+  });
+
   it("sorts by price and pages through results", async () => {
     const first = await searchListings(pool, parseFilters({ sort: "price_asc" }), null);
     const prices = first.items.map((i) => i.priceEur);

@@ -30,6 +30,7 @@ export function ResultCard({
   favorite = false,
   newSince,
   note,
+  allDrops = false,
 }: {
   listing: ListingSummary;
   minMarginEur?: number;
@@ -39,6 +40,8 @@ export function ResultCard({
   newSince?: string;
   /** Extra line at the top, e.g. on the watch list: "Nicht mehr online". */
   note?: ReactNode;
+  /** Show a price drop however long ago it was (the search asks for dropped prices). */
+  allDrops?: boolean;
 }) {
   const facts = [
     formatRegistration(listing.firstRegistration, listing.firstRegistrationYearOnly),
@@ -61,7 +64,7 @@ export function ResultCard({
     listing.priceBeforeDropEur !== null &&
     (newSince !== undefined
       ? listing.priceDroppedAt > newSince
-      : Date.parse(listing.priceDroppedAt) > Date.parse(listing.checkedAt) - RECENT_DROP_MS);
+      : allDrops || Date.parse(listing.priceDroppedAt) > Date.parse(listing.checkedAt) - RECENT_DROP_MS);
 
   return (
     <article className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-sm">
@@ -69,8 +72,18 @@ export function ResultCard({
         <Link href={`/angebot/${listing.id}`} tabIndex={-1} aria-hidden="true">
           <ListingPhoto src={listing.imageUrl} alt="" className="aspect-[4/3] w-full" />
         </Link>
-        {isNew && (
-          <span className="absolute left-2 top-2 rounded-full bg-accent px-2.5 py-0.5 text-xs font-semibold text-on-accent shadow-sm">Neu</span>
+        {(isNew || dropped) && (
+          <span className="absolute left-2 top-2 flex flex-col items-start gap-1">
+            {isNew && <span className="rounded-full bg-accent px-2.5 py-0.5 text-xs font-semibold text-on-accent shadow-sm">Neu</span>}
+            {dropped && (
+              <span
+                className="rounded-full bg-good-text px-2.5 py-0.5 text-xs font-semibold text-surface shadow-sm"
+                title={`Preis gesenkt am ${formatDayTime(listing.priceDroppedAt!)}`}
+              >
+                Preis {formatSignedPrice(listing.priceEur - listing.priceBeforeDropEur!)}
+              </span>
+            )}
+          </span>
         )}
         <FavoriteButton listingId={listing.id} initial={favorite} />
       </div>

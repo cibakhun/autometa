@@ -1,12 +1,25 @@
 import { z } from "zod";
 import { BODY_TYPES, FUELS, SELLER_TYPES, TRANSMISSIONS } from "@/core/types";
 
-export const SORTS = ["newest", "empfehlung", "price_asc", "price_desc", "km_asc", "year_desc", "distance", "below_market", "flip", "margin"] as const;
+export const SORTS = [
+  "newest",
+  "empfehlung",
+  "price_drop",
+  "price_asc",
+  "price_desc",
+  "km_asc",
+  "year_desc",
+  "distance",
+  "below_market",
+  "flip",
+  "margin",
+] as const;
 export type Sort = (typeof SORTS)[number];
 
 export const SORT_LABELS: Record<Sort, string> = {
   newest: "Neueste zuerst",
   empfehlung: "Empfehlung: zuverlässig und günstig",
+  price_drop: "Zuletzt im Preis gesenkt",
   price_asc: "Preis aufsteigend",
   price_desc: "Preis absteigend",
   km_asc: "Kilometer aufsteigend",
@@ -37,6 +50,17 @@ export const HU_FILTER_LABELS: Record<HuFilter, string> = {
   "6": "noch mind. 6 Monate",
 };
 export const huFilterMonths = (value: HuFilter) => (value === "neu" ? 21 : Number(value));
+
+/** "Preis gesenkt": the last price change was a drop, within this many days ("ja": whenever). */
+export const PRICE_DROP_FILTERS = ["3", "7", "30", "ja"] as const;
+export type PriceDropFilter = (typeof PRICE_DROP_FILTERS)[number];
+export const PRICE_DROP_FILTER_LABELS: Record<PriceDropFilter, string> = {
+  "3": "in den letzten 3 Tagen",
+  "7": "in den letzten 7 Tagen",
+  "30": "in den letzten 30 Tagen",
+  ja: "egal wann",
+};
+export const priceDropDays = (value: PriceDropFilter) => (value === "ja" ? null : Number(value));
 export const PAGE_SIZE = 24;
 export const MAX_PAGE = 400;
 
@@ -75,6 +99,7 @@ const schema = z.object({
   transmission: oneOf(TRANSMISSIONS),
   seller: oneOf(SELLER_TYPES),
   hu: oneOf(HU_FILTERS),
+  gesenkt: oneOf(PRICE_DROP_FILTERS),
   zustand: oneOf(CONDITIONS),
   /** Flip filters: hardest repair job at most this difficulty, margin at least this many euros. */
   schwierigkeit: int(1, 5),

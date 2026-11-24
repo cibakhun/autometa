@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { DAMAGE_LABELS } from "@/core/damage";
 import { coveredComponents, hiddenDefectRisk, type DefectProfile } from "@/core/defects";
+import { onlineSpan, priceStory, type OnlineSpan, type PricePoint } from "@/core/price-history";
 import type { FlipSettings } from "@/core/flip";
 import { CONFIDENCE_LABELS, DIFFICULTY_LABELS, estimateRepairs, VEHICLE_CLASS_LABELS } from "@/core/repairs";
 import { findMake, findModel } from "@/core/taxonomy";
@@ -52,6 +53,13 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
     favoriteIds(pool, device?.profileId ?? null, [listing.id]),
   ]);
 
+  const online = onlineSpan({
+    listedOn: listing.listedOn,
+    firstSeenAt: listing.firstSeenAt,
+    // Only a page that said "taken down" dates the end; missed and stale listings were last seen online at lastSeenAt.
+    endedAt: listing.status === "gone" ? (listing.goneReason === "checked" ? (listing.goneAt ?? listing.lastSeenAt) : listing.lastSeenAt) : null,
+    asOf: listing.asOf,
+  });
   const rows: [string, string | null][] = [
     ["Preis", formatPrice(listing.priceEur)],
     ["Erstzulassung", formatRegistration(listing.firstRegistration, listing.firstRegistrationYearOnly).replace("EZ ", "")],
@@ -65,6 +73,7 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
     ["Standort", [listing.zip, listing.city].filter(Boolean).join(" ") || null],
     ["Anbieter", listing.sellerName ?? (listing.sellerType ? SELLER_TYPE_LABELS[listing.sellerType] : null)],
     ["Quelle", listing.sourceName],
+    ["Online", formatOnline(online, listing.sourceName)],
     ["Zuletzt geprüft", formatDayTime(listing.checkedAt)],
   ];
 
@@ -296,26 +305,119 @@ function Flip({ listing, settings, file }: { listing: ListingDetail; settings: F
   );
 }
 
+const longDate = new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "Europe/Berlin" });
+/** "19.11.2026" for a moment (ISO) or a day (YYYY-MM-DD), in German time. */
+const formatDate = (value: string) => longDate.format(new Date(value.length === 10 ? `${value}T12:00:00Z` : value));
+const formatDays = (days: number) => (days === 1 ? "1 Tag" : `${formatNumber(days)} Tage`);
+const formatTimes = (count: number) => (count === 1 ? "einmal" : count === 2 ? "zweimal" : `${formatNumber(count)}-mal`);
+
+/** "seit 12.11.2026 (11 Tage, laut Kleinanzeigen)" or "mind. 5 Tage (bei AutoMeta seit 19.11.2026)". */
+function formatOnline(online: OnlineSpan, sourceName: string): string {
+  const days = online.days === 0 ? "unter einem Tag" : formatDays(online.days);
+  if (online.until) {
+    return online.basis === "portal"
+      ? `${formatDate(online.since)} bis ${formatDate(online.until)} (${days})`
+      : `mind. ${days} (bei AutoMeta ${formatDate(online.since)} bis ${formatDate(online.until)})`;
+  }
+  if (online.days === 0) return online.basis === "portal" ? `seit heute (laut ${sourceName})` : "seit heute bei AutoMeta";
+  return online.basis === "portal"
+    ? `seit ${formatDate(online.since)} (${days}, laut ${sourceName})`
+    : `mind. ${days} (bei AutoMeta seit ${formatDate(online.since)})`;
+}
+
+/** Price changes since AutoMeta first saw the listing, how long it has been online, and a small chart. */
 function PriceHistory({ listing }: { listing: ListingDetail }) {
-  if (listing.priceHistory.length < 2) return null;
-  const first = listing.priceHistory[0];
-  const change = listing.priceEur - first.priceEur;
+  const story = priceStory(listing.priceHistory);
+  if (!story) return null;
+  const { changes, totalEur } = story;
+  const share = story.firstEur > 0 ? Math.round((Math.abs(totalEur) / story.firstEur) * 100) : null;
+  const total = `${formatSignedPrice(totalEur)}${share ? ` (${totalEur < 0 ? "−" : "+"}${share} %)` : ""}`;
+  const counts = [story.drops > 0 ? `${formatTimes(story.drops)} gesenkt` : null, story.raises > 0 ? `${formatTimes(story.raises)} erhöht` : null]
+    .filter(Boolean)
+    .join(" und ");
+  const end = listing.status === "gone" ? (listing.goneReason === "checked" ? (listing.goneAt ?? listing.lastSeenAt) : listing.lastSeenAt) : listing.asOf;
   return (
     <section className="mt-6 border-t border-line pt-4 text-sm">
       <h2 className="font-semibold">Preisverlauf</h2>
-      <p className="mt-1 text-muted">
-        {change < 0 ? `Um ${formatPrice(-change)} gesenkt` : change > 0 ? `Um ${formatPrice(change)} erhöht` : "Wieder beim ersten Preis"} seit{" "}
-        {new Date(first.seenAt).toLocaleDateString("de-DE")}.
+      {changes.length === 0 ? (
+        <p className="mt-1">Unverändert, seit AutoMeta das Angebot am {formatDate(story.firstSeenAt)} zum ersten Mal gesehen hat.</p>
+      ) : (
+        <>
+          {changes.length === 1 ? (
+            <p className="mt-1">
+              Am {formatDate(changes[0].at)} von {formatPrice(changes[0].fromEur)} auf {formatPrice(changes[0].toEur)}{" "}
+              {totalEur < 0 ? "gesenkt" : "erhöht"}: <span className={`font-semibold ${totalEur < 0 ? "text-good-text" : ""}`}>{total}</span>.
+            </p>
+          ) : (
+            <p className="mt-1">
+              Seit dem {formatDate(story.firstSeenAt)} {counts}, insgesamt{" "}
+              <span className={`font-semibold ${totalEur < 0 ? "text-good-text" : totalEur > 0 ? "" : "text-muted"}`}>{total}</span>.
+              {story.lastDrop && (
+                <>
+                  {" "}
+                  Zuletzt gesenkt am {formatDate(story.lastDrop.at)} von {formatPrice(story.lastDrop.fromEur)} auf {formatPrice(story.lastDrop.toEur)}.
+                </>
+              )}
+            </p>
+          )}
+          <PriceChart points={listing.priceHistory} endAt={end} />
+          <ol className="mt-3 space-y-1">
+            <li className="flex justify-between gap-4">
+              <span className="text-muted">{formatDate(story.firstSeenAt)} erster Preis</span>
+              <span className="font-medium">{formatPrice(story.firstEur)}</span>
+            </li>
+            {changes.map((change) => (
+              <li key={change.at} className="flex justify-between gap-4">
+                <span className="text-muted">
+                  {formatDate(change.at)}{" "}
+                  <span className={change.toEur < change.fromEur ? "text-good-text" : ""}>{formatSignedPrice(change.toEur - change.fromEur)}</span>
+                </span>
+                <span className="font-medium">{formatPrice(change.toEur)}</span>
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+      <p className="mt-2 text-xs text-muted">
+        Preise, wie AutoMeta sie bei {listing.sourceName} gesehen hat. Jedes Angebot wird etwa einmal am Tag geprüft; eine Änderung, die
+        innerhalb eines Tages wieder zurückgenommen wurde, kann fehlen.
       </p>
-      <ul className="mt-2 space-y-1">
-        {listing.priceHistory.map((point) => (
-          <li key={point.seenAt} className="flex justify-between gap-4">
-            <span className="text-muted">{new Date(point.seenAt).toLocaleDateString("de-DE")}</span>
-            <span className="font-medium">{formatPrice(point.priceEur)}</span>
-          </li>
-        ))}
-      </ul>
     </section>
+  );
+}
+
+/** A step line of the price from the first sighting to now (or until the listing left). */
+function PriceChart({ points, endAt }: { points: PricePoint[]; endAt: string }) {
+  const start = Date.parse(points[0].seenAt);
+  const last = Date.parse(points.at(-1)!.seenAt);
+  // The line goes on to today; a change seen moments ago still gets a little room.
+  const end = Math.max(Date.parse(endAt), last + (last - start) * 0.05, start + 1);
+  const prices = points.map((p) => p.priceEur);
+  const low = Math.min(...prices);
+  const high = Math.max(...prices);
+  const pad = (high - low) * 0.15 || high * 0.05 || 1;
+  const x = (iso: string) => (((Date.parse(iso) - start) / (end - start)) * 100).toFixed(2);
+  const y = (eur: number) => (100 - ((eur - (low - pad)) / (high - low + 2 * pad)) * 100).toFixed(2);
+  const line = points.map((p, i) => (i === 0 ? `M0 ${y(p.priceEur)}` : `H${x(p.seenAt)} V${y(p.priceEur)}`)).join(" ") + " H100";
+  const label = `Preis von ${formatPrice(points[0].priceEur)} am ${formatDate(points[0].seenAt)} bis ${formatPrice(points.at(-1)!.priceEur)} am ${formatDate(points.at(-1)!.seenAt)}`;
+
+  return (
+    <figure className="mt-3">
+      <div className="flex gap-2">
+        <div className="flex w-16 shrink-0 flex-col justify-between text-right text-xs text-muted" aria-hidden="true">
+          <span>{formatPrice(high)}</span>
+          <span>{formatPrice(low)}</span>
+        </div>
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={label} className="h-28 w-full overflow-visible rounded-md border border-line">
+          <path d={`${line} V100 H0 Z`} fill="var(--accent)" fillOpacity={0.12} stroke="none" />
+          <path d={line} fill="none" stroke="var(--accent)" strokeWidth={2} vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+        </svg>
+      </div>
+      <figcaption className="ml-[4.5rem] mt-1 flex justify-between text-xs text-muted">
+        <span>{formatDate(points[0].seenAt)}</span>
+        <span>{formatDate(endAt)}</span>
+      </figcaption>
+    </figure>
   );
 }
 

@@ -6,7 +6,17 @@ import { useState, type FormEvent } from "react";
 import { BODY_TYPE_LABELS, BODY_TYPES, FUEL_LABELS, FUELS, SELLER_TYPE_LABELS, SELLER_TYPES, TRANSMISSION_LABELS, TRANSMISSIONS } from "@/core/types";
 import { DIFFICULTY_LABELS, type Difficulty } from "@/core/repairs";
 import type { SearchFilters } from "@/search/filters";
-import { CONDITION_LABELS, CONDITIONS, HU_FILTER_LABELS, HU_FILTERS, RADII_KM, SORT_LABELS, SORTS } from "@/search/filters";
+import {
+  CONDITION_LABELS,
+  CONDITIONS,
+  HU_FILTER_LABELS,
+  HU_FILTERS,
+  PRICE_DROP_FILTER_LABELS,
+  PRICE_DROP_FILTERS,
+  RADII_KM,
+  SORT_LABELS,
+  SORTS,
+} from "@/search/filters";
 import type { MakeFacet, SourceFacet } from "@/search/query";
 
 const KM_STEPS = [10_000, 25_000, 50_000, 75_000, 100_000, 150_000, 200_000];
@@ -107,6 +117,15 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
             <label htmlFor="priceMax" className={labelClass}>Preis bis (€)</label>
             <input id="priceMax" name="priceMax" type="number" min={0} step={1} inputMode="numeric" defaultValue={filters.priceMax} className={fieldClass} />
           </div>
+        </div>
+
+        <div>
+          <label htmlFor="gesenkt" className={labelClass}>Preis gesenkt</label>
+          <select id="gesenkt" name="gesenkt" defaultValue={filters.gesenkt ?? ""} aria-describedby="gesenkt-hint" className={fieldClass}>
+            <option value="">Beliebig</option>
+            {PRICE_DROP_FILTERS.map((d) => <option key={d} value={d}>{PRICE_DROP_FILTER_LABELS[d]}</option>)}
+          </select>
+          <p id="gesenkt-hint" className="mt-1 text-xs text-muted">Nur Angebote, deren Preis zuletzt gesunken ist, seit AutoMeta sie kennt.</p>
         </div>
 
         <div className="grid grid-cols-2 gap-2">

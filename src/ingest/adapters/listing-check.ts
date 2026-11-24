@@ -1,4 +1,4 @@
-import type { CheckOutcome, CheckResult, ListingRef } from "../adapter";
+import type { CheckOutcome, CheckResult, ListingRef, PageFacts } from "../adapter";
 import {
   BlockedError,
   BudgetExceededError,
@@ -27,6 +27,11 @@ export interface ListingCheckOptions {
    * portal's "ad not found" page. Without it such a redirect is unclear.
    */
   disallowedRedirect?: (ref: ListingRef, target: string) => CheckOutcome;
+  /**
+   * Facts the page shows besides the listing being online, such as its price now. Read only from
+   * pages the verdict calls online; the page itself is not kept.
+   */
+  facts?: (ref: ListingRef, page: FetchedPage) => PageFacts;
 }
 
 /** Network or server errors in a row that end the checks: the site is probably down. */
@@ -40,8 +45,14 @@ export const MAX_UNCLEAR_IN_A_ROW = 20;
  */
 export const CHECK_GROUP = 25;
 export const MAX_GONE_IN_GROUP = 22;
+/**
+ * Sellers change a price now and then, so in a group in which many pages show another price than
+ * the stored one the price was probably misread (the page changed): the group keeps its outcomes
+ * but hands on none of its prices.
+ */
+export const MAX_PRICE_CHANGES_IN_GROUP = 10;
 
-type Attempt = CheckOutcome | "stop";
+type Attempt = { outcome: CheckOutcome; facts?: PageFacts } | "stop";
 
 /**
  * Elements the seller writes or the portal fills from the seller's text: scripts and meta tags
@@ -65,6 +76,8 @@ export function portalText(html: string): string {
 export async function* checkListingPages(due: ListingRef[], options: ListingCheckOptions): AsyncGenerator<CheckResult> {
   const { fetcher, log } = options;
   const counts: Record<CheckOutcome, number> = { active: 0, gone: 0, unclear: 0 };
+  const storedPrice = new Map(due.map((ref) => [ref.externalId, ref.priceEur]));
+  let newPrices = 0;
   let failures = 0;
   let unclearInARow = 0;
   let group: CheckResult[] = [];
@@ -73,14 +86,15 @@ export async function* checkListingPages(due: ListingRef[], options: ListingChec
     try {
       const page = await fetcher.getText(ref.url);
       failures = 0;
-      return options.verdict(ref, page);
+      const outcome = options.verdict(ref, page);
+      return outcome === "active" && options.facts ? { outcome, facts: options.facts(ref, page) } : { outcome };
     } catch (error) {
       if (error instanceof BudgetExceededError) return "stop";
       if (error instanceof BlockedError) throw error;
       if (error instanceof HttpStatusError && error.status < 500) {
         failures = 0;
         // Taken down; anything else (400, 405 …) says nothing about the listing.
-        return error.status === 404 || error.status === 410 ? "gone" : "unclear";
+        return { outcome: error.status === 404 || error.status === 410 ? "gone" : "unclear" };
       }
       if (error instanceof DisallowedError) {
         if (error.url === ref.url) {
@@ -88,11 +102,11 @@ export async function* checkListingPages(due: ListingRef[], options: ListingChec
           return "stop";
         }
         failures = 0;
-        return options.disallowedRedirect?.(ref, error.url) ?? "unclear";
+        return { outcome: options.disallowedRedirect?.(ref, error.url) ?? "unclear" };
       }
       failures += 1;
       log(`check failed: ${ref.url}: ${error instanceof Error ? error.message : String(error)}`);
-      return failures >= MAX_FAILURES_IN_A_ROW ? "stop" : "unclear";
+      return failures >= MAX_FAILURES_IN_A_ROW ? "stop" : { outcome: "unclear" };
     }
   };
 
@@ -106,20 +120,32 @@ export async function* checkListingPages(due: ListingRef[], options: ListingChec
     return true;
   };
 
+  /** The group as handed on: without its prices when too many of them changed. */
+  const handOn = (results: CheckResult[]) => {
+    const changed = results.filter((r) => r.priceEur !== undefined && r.priceEur !== storedPrice.get(r.externalId));
+    if (changed.length > MAX_PRICE_CHANGES_IN_GROUP) {
+      log(`prices ignored: ${changed.length} of ${results.length} listing pages show another price than stored; did the price on the page change?`);
+      return results.map((r) => ({ externalId: r.externalId, outcome: r.outcome, ...withoutEmpty({ listedOn: r.listedOn }) }));
+    }
+    newPrices += changed.length;
+    return results;
+  };
+
   try {
     for (const ref of due) {
       if (fetcher.requestsLeft < 1) break;
-      let outcome: Attempt;
+      let tried: Attempt;
       try {
-        outcome = await attempt(ref);
+        tried = await attempt(ref);
       } catch (error) {
         // A block ends the run, but the listings checked before it still count.
-        if (plausible(group)) yield* group;
+        if (plausible(group)) yield* handOn(group);
         throw error;
       }
-      if (outcome === "stop") break;
+      if (tried === "stop") break;
+      const { outcome, facts } = tried;
       counts[outcome] += 1;
-      group.push({ externalId: ref.externalId, outcome });
+      group.push({ externalId: ref.externalId, outcome, ...withoutEmpty(facts) });
       if (outcome === "unclear") {
         unclearInARow += 1;
         if (unclearInARow >= MAX_UNCLEAR_IN_A_ROW) {
@@ -131,12 +157,23 @@ export async function* checkListingPages(due: ListingRef[], options: ListingChec
       }
       if (group.length >= CHECK_GROUP) {
         if (!plausible(group)) return;
-        yield* group;
+        yield* handOn(group);
         group = [];
       }
     }
-    if (group.length > 0 && plausible(group)) yield* group;
+    if (group.length > 0 && plausible(group)) yield* handOn(group);
   } finally {
-    log(`checked ${counts.active + counts.gone + counts.unclear} listing pages: ${counts.active} online, ${counts.gone} taken down, ${counts.unclear} unclear`);
+    log(
+      `checked ${counts.active + counts.gone + counts.unclear} listing pages: ${counts.active} online, ${counts.gone} taken down, ${counts.unclear} unclear` +
+        (options.facts ? `, ${newPrices} new prices` : ""),
+    );
   }
+}
+
+/** The facts the page showed, without keys for those it did not. */
+function withoutEmpty(facts: PageFacts | undefined): PageFacts {
+  const result: PageFacts = {};
+  if (facts?.priceEur !== undefined) result.priceEur = facts.priceEur;
+  if (facts?.listedOn !== undefined) result.listedOn = facts.listedOn;
+  return result;
 }

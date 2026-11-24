@@ -82,6 +82,8 @@ export interface FetchContext {
 export interface ListingRef {
   externalId: string;
   url: string;
+  /** The price stored for it, to tell a price change on its page from a misread. */
+  priceEur: number;
 }
 
 /**
@@ -90,7 +92,15 @@ export interface ListingRef {
  */
 export type CheckOutcome = "active" | "gone" | "unclear";
 
-export interface CheckResult {
+/** Facts a listing's own page shows besides being online; each left out when the page does not show it clearly. */
+export interface PageFacts {
+  /** The price the page asks now (0 for a car given away). */
+  priceEur?: number;
+  /** The day the portal says the listing was put online, YYYY-MM-DD. */
+  listedOn?: string;
+}
+
+export interface CheckResult extends PageFacts {
   externalId: string;
   outcome: CheckOutcome;
 }

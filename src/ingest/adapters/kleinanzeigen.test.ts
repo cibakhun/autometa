@@ -5,9 +5,11 @@ import {
   createKleinanzeigenAdapter,
   firstPageUrl,
   giveawayPageUrl,
+  kleinanzeigenFacts,
   normalizeKleinanzeigen,
   pageUrl,
   parseKleinanzeigenPage,
+  parseKleinanzeigenPrice,
   type KleinanzeigenItem,
 } from "./kleinanzeigen";
 
@@ -329,5 +331,54 @@ describe("createKleinanzeigenAdapter", () => {
     await expect(async () => {
       for await (const raw of adapter.fetch()) void raw;
     }).rejects.toThrow(/did the page change/);
+  });
+});
+
+describe("the facts on a Kleinanzeigen ad page", () => {
+  const NOW = Date.parse("2026-11-23T22:00:00Z");
+  const url = "https://www.kleinanzeigen.de/s-anzeige/bmw-320d/1-216-3331";
+  const facts = (body: string, now = NOW) => kleinanzeigenFacts({ url, status: 200, text: `<html><body><h1>BMW 320d</h1>${body}</body></html>` }, now);
+  const boxes = (price: string, day = "18.11.2026") =>
+    `<h2 class="boxedarticle--price" id="viewad-price">\n   ${price}\n </h2>
+     <div id="viewad-extra-info" class="boxedarticle--details--full">
+       <div><i class="icon icon-small icon-calendar-gray-simple"></i><span>${day}</span></div>
+       <div><i class="icon icon-small icon-eye-gray-simple"></i><span id="viewad-cntr-num"></span></div>
+     </div>`;
+
+  it("reads the price and the day the ad was put online", () => {
+    expect(facts(boxes("6.500 € VB"))).toEqual({ priceEur: 6500, listedOn: "2026-11-18" });
+    expect(facts(boxes("12.000&nbsp;&euro;"))).toEqual({ priceEur: 12000, listedOn: "2026-11-18" });
+    expect(facts(boxes("Zu verschenken"))).toEqual({ priceEur: 0, listedOn: "2026-11-18" });
+  });
+
+  it("reads the price now, not the one struck through", () => {
+    expect(facts(boxes(`<span class="boxedarticle--old-price"><s>7.000 €</s></span> 6.500 € VB`)).priceEur).toBe(6500);
+    expect(facts(boxes(`<del>7.000 €</del> 6.500 €`)).priceEur).toBe(6500);
+  });
+
+  it("leaves out what is not shown in the expected form", () => {
+    expect(facts(boxes("VB"))).toEqual({ listedOn: "2026-11-18" });
+    expect(facts(boxes("1 € VB"))).toEqual({ listedOn: "2026-11-18" });
+    expect(facts(boxes("6.500 € VB", "31.02.2026"))).toEqual({ priceEur: 6500 });
+    // Not after today in Germany; the next day starts at 23:00 UTC in winter.
+    expect(facts(boxes("6.500 €", "24.11.2026"))).toEqual({ priceEur: 6500 });
+    expect(facts(boxes("6.500 €", "24.11.2026"), Date.parse("2026-11-23T23:30:00Z"))).toEqual({ priceEur: 6500, listedOn: "2026-11-24" });
+    expect(facts("<p>Preis: 6.500 €</p><p>Eingestellt am 18.11.2026</p>")).toEqual({});
+  });
+
+  it("takes no date from the seller's text", () => {
+    const page = `<h2 id="viewad-price">6.500 €</h2>
+      <div id="viewad-extra-info"><div><span id="viewad-cntr-num"></span></div></div>
+      <p id="viewad-description-text" itemprop="description">TÜV neu seit 01.10.2026</p>`;
+    expect(facts(page)).toEqual({ priceEur: 6500 });
+  });
+
+  it("parses prices as the lists write them", () => {
+    expect(parseKleinanzeigenPrice("18.500 € VB")).toBe(18500);
+    expect(parseKleinanzeigenPrice("950 €")).toBe(950);
+    expect(parseKleinanzeigenPrice("Zu verschenken")).toBe(0);
+    expect(parseKleinanzeigenPrice("VB")).toBeNull();
+    expect(parseKleinanzeigenPrice("ab 5.000 €")).toBeNull();
+    expect(parseKleinanzeigenPrice(null)).toBeNull();
   });
 });
