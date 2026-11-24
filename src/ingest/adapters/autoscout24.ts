@@ -222,7 +222,7 @@ export function parseAutoScout24Page(html: string, url = ORIGIN): AutoScout24Pag
       power: details.get("speedometer") ?? null,
       sellerType,
       // Company names only; private sellers' names are never stored.
-      dealerName: sellerType === "Dealer" ? str(seller.companyName) : null,
+      dealerName: autoScout24SellerType(sellerType) === "dealer" ? str(seller.companyName) : null,
       zip: str(location.zip),
       city: str(location.city),
       countryCode: str(location.countryCode),
@@ -234,6 +234,14 @@ export function parseAutoScout24Page(html: string, url = ORIGIN): AutoScout24Pag
 }
 
 const isCount = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0;
+
+/** The seller type in any case and in its usual short, long and German forms; anything else stays unknown. */
+export function autoScout24SellerType(value: string | null): SellerType | null {
+  const key = (value ?? "").normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z]/g, "");
+  if (/^(?:d|dealer|haendler|handler|commercial|business|professional|trader|company)$/.test(key)) return "dealer";
+  if (/^(?:p|private|privat|privateseller|privatseller|privatperson|privatanbieter|consumer)$/.test(key)) return "private";
+  return null;
+}
 
 const cleanText = (value: string | null) => (value ? value.replace(/[*|]+/g, " ").replace(/\s+/g, " ").trim() || null : null);
 
@@ -257,7 +265,7 @@ export function normalizeAutoScout24(raw: RawListing): NormalizedListing | null 
   const name = joinWithoutRepeats([item.make, placeholder ? null : item.model]);
   const title = joinWithoutRepeats([item.make, placeholder ? null : item.model, motor, version]).slice(0, 200);
   const variant = title.slice(name.length).trim().slice(0, 160) || null;
-  const sellerType: SellerType | null = item.sellerType === "Dealer" ? "dealer" : item.sellerType === "Private" ? "private" : null;
+  const sellerType = autoScout24SellerType(item.sellerType);
 
   return plausibleListing({
     sourceId: AUTOSCOUT24.id,

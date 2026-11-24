@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   type AutoScout24Item,
+  autoScout24SellerType,
   listUrl,
   normalizeAutoScout24,
   paceDelayMs,
@@ -158,6 +159,19 @@ describe("normalizeAutoScout24", () => {
 
   it("knows private sellers but not their names", () => {
     expect(normalize({ seller: { type: "Private" } })).toMatchObject({ sellerType: "private", sellerName: null });
+    expect(normalize({ seller: { type: "PrivateSeller", companyName: "Erika Mustermann" } })).toMatchObject({ sellerType: "private", sellerName: null });
+  });
+
+  it("reads the seller type however it is written", () => {
+    for (const type of ["Dealer", "dealer", "DEALER", "D", "Händler"]) expect(autoScout24SellerType(type), type).toBe("dealer");
+    for (const type of ["Private", "private", "P", "PrivateSeller", "private_seller", "Privat"]) expect(autoScout24SellerType(type), type).toBe("private");
+    for (const type of [null, "", "Unknown"]) expect(autoScout24SellerType(type), String(type)).toBeNull();
+    expect(normalize({ seller: { type: "dealer", companyName: "Autohaus Beispiel GmbH" } })).toMatchObject({
+      sellerType: "dealer",
+      sellerName: "Autohaus Beispiel GmbH",
+    });
+    // A name is stored only when the seller is known to be a dealer.
+    expect(normalize({ seller: { type: "Unknown", companyName: "Erika Mustermann" } })).toMatchObject({ sellerType: null, sellerName: null });
   });
 
   it("skips listings without a real price", () => {
