@@ -79,6 +79,8 @@ function fakePortal(
     beforeEnd?: () => Promise<void>;
     /** What each listing's own page says, for a portal whose listings are checked one by one. */
     checks?: { outcomes: Record<string, CheckOutcome>; due: ListingRef[]; blockAt?: string; facts?: Record<string, PageFacts> };
+    /** Listings normalize leaves out, as the import rules would (e.g. a dealer buying up cars). */
+    leftOut?: string[];
   } = {},
 ): SourceAdapter {
   const checks = options.checks;
@@ -97,7 +99,7 @@ function fakePortal(
         }
       },
     }),
-    normalize: (raw: RawListing) => ({ ...(raw.payload as unknown as NormalizedListing) }),
+    normalize: (raw: RawListing) => (options.leftOut?.includes(raw.externalId) ? null : { ...(raw.payload as unknown as NormalizedListing) }),
     async *fetch() {
       for (const { listing, segment } of sightings) {
         yield { externalId: listing.externalId, payload: listing as unknown as Record<string, unknown>, segment };
@@ -277,6 +279,44 @@ describe.skipIf(!url)("importing scraped portals", () => {
     const after = await pool.query("select to_char(listed_on, 'YYYY-MM-DD') as listed_on from listings where external_id = '1'");
     expect(after.rows[0].listed_on).toBe("2026-11-02");
     expect((await getListing(pool, id))?.priceHistory).toHaveLength(2);
+  });
+
+  it("takes a stored listing out as filtered when the import now leaves it out, and back in once it is kept", async () => {
+    const reasonOf = async (id: string) => (await pool.query("select status, gone_reason from listings where external_id = $1", [id])).rows[0];
+    await runIngest(pool, fakePortal(PORTAL_A, ["1", "2"].map((id) => ({ listing: car(PORTAL_A, id) }))));
+    const result = await runIngest(pool, fakePortal(PORTAL_A, ["1", "2"].map((id) => ({ listing: car(PORTAL_A, id) })), { leftOut: ["1"] }));
+    expect(result).toMatchObject({ upserted: 1, skipped: 1, gone: 1 });
+    expect(await reasonOf("1")).toEqual({ status: "gone", gone_reason: "filtered" });
+    expect(await reasonOf("2")).toEqual({ status: "active", gone_reason: null });
+
+    // Kept by a later import (the rule was wrong, or the seller changed the ad): back in the search.
+    await runIngest(pool, fakePortal(PORTAL_A, [{ listing: car(PORTAL_A, "1") }]));
+    expect(await reasonOf("1")).toEqual({ status: "active", gone_reason: null });
+
+    // The last sighting in a batch counts: kept, then left out, stays out.
+    const twice = fakePortal(PORTAL_A, [{ listing: car(PORTAL_A, "1") }, { listing: car(PORTAL_A, "1") }]);
+    let sightings = 0;
+    await runIngest(pool, { ...twice, normalize: (raw: RawListing) => (++sightings === 1 ? twice.normalize(raw) : null) });
+    expect(await reasonOf("1")).toEqual({ status: "gone", gone_reason: "filtered" });
+  });
+
+  it("takes a listing out as filtered when its own page shows no car for sale", async () => {
+    await runIngest(pool, fakePortal(PORTAL_A, ["1", "2"].map((id) => ({ listing: car(PORTAL_A, id, { title: id === "1" ? "Unfallwagen Motorschaden" : "VW Golf" }) }))));
+    await pool.query("update listings set last_seen_at = now() - interval '30 hours'");
+    const checks = {
+      outcomes: { "1": "active", "2": "active" } as Record<string, CheckOutcome>,
+      due: [] as ListingRef[],
+      facts: { "1": { notForSale: true } } as Record<string, PageFacts>,
+    };
+    const result = await runIngest(pool, fakePortal(PORTAL_A, [], { checks }));
+    expect(result).toMatchObject({ checked: 2, gone: 1 });
+    // The stored title goes along, for the adapter to judge the page by.
+    expect(checks.due.map((ref) => ref.title).sort()).toEqual(["Unfallwagen Motorschaden", "VW Golf"]);
+    const { rows } = await pool.query("select external_id, status, gone_reason from listings order by external_id");
+    expect(rows).toEqual([
+      { external_id: "1", status: "gone", gone_reason: "filtered" },
+      { external_id: "2", status: "active", gone_reason: null },
+    ]);
   });
 
   it("keeps the checks and the clean-up when the portal blocks a listing page", async () => {

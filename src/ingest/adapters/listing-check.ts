@@ -51,6 +51,11 @@ export const MAX_GONE_IN_GROUP = 22;
  * but hands on none of its prices.
  */
 export const MAX_PRICE_CHANGES_IN_GROUP = 10;
+/**
+ * Ads that turn out to offer no car (dealers buying up cars) are rare, so a group with more of them
+ * means the rule misreads the pages: the group keeps its outcomes but drops that finding.
+ */
+export const MAX_NOT_FOR_SALE_IN_GROUP = 5;
 
 type Attempt = { outcome: CheckOutcome; facts?: PageFacts } | "stop";
 
@@ -120,12 +125,25 @@ export async function* checkListingPages(due: ListingRef[], options: ListingChec
     return true;
   };
 
-  /** The group as handed on: without its prices when too many of them changed. */
+  /** The group as handed on: without its prices when too many of them changed, likewise for ads that offer no car. */
   const handOn = (results: CheckResult[]) => {
+    const notForSale = results.filter((r) => r.notForSale).length;
+    if (notForSale > MAX_NOT_FOR_SALE_IN_GROUP) {
+      log(`buyer ads ignored: ${notForSale} of ${results.length} listing pages look like dealers buying up cars; did the page change?`);
+      results = results.map((r) => {
+        const kept = { ...r };
+        delete kept.notForSale;
+        return kept;
+      });
+    }
     const changed = results.filter((r) => r.priceEur !== undefined && r.priceEur !== storedPrice.get(r.externalId));
     if (changed.length > MAX_PRICE_CHANGES_IN_GROUP) {
       log(`prices ignored: ${changed.length} of ${results.length} listing pages show another price than stored; did the price on the page change?`);
-      return results.map((r) => ({ externalId: r.externalId, outcome: r.outcome, ...withoutEmpty({ listedOn: r.listedOn }) }));
+      return results.map((r) => ({
+        externalId: r.externalId,
+        outcome: r.outcome,
+        ...withoutEmpty({ listedOn: r.listedOn, notForSale: r.notForSale }),
+      }));
     }
     newPrices += changed.length;
     return results;
@@ -175,5 +193,6 @@ function withoutEmpty(facts: PageFacts | undefined): PageFacts {
   const result: PageFacts = {};
   if (facts?.priceEur !== undefined) result.priceEur = facts.priceEur;
   if (facts?.listedOn !== undefined) result.listedOn = facts.listedOn;
+  if (facts?.notForSale) result.notForSale = true;
   return result;
 }

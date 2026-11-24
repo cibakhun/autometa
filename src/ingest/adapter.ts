@@ -84,6 +84,8 @@ export interface ListingRef {
   url: string;
   /** The price stored for it, to tell a price change on its page from a misread. */
   priceEur: number;
+  /** The title stored for it. */
+  title?: string;
 }
 
 /**
@@ -98,6 +100,8 @@ export interface PageFacts {
   priceEur?: number;
   /** The day the portal says the listing was put online, YYYY-MM-DD. */
   listedOn?: string;
+  /** The page shows no car for sale after all (a dealer buying up cars): the listing leaves the search as filtered. */
+  notForSale?: true;
 }
 
 export interface CheckResult extends PageFacts {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CheckResult, ListingRef } from "../adapter";
 import { BlockedError, PoliteFetcher, type FetchedPage } from "../http/fetcher";
 import { kleinanzeigenFacts, kleinanzeigenVerdict } from "./kleinanzeigen";
-import { CHECK_GROUP, checkListingPages, MAX_PRICE_CHANGES_IN_GROUP, MAX_UNCLEAR_IN_A_ROW, portalText } from "./listing-check";
+import { CHECK_GROUP, checkListingPages, MAX_NOT_FOR_SALE_IN_GROUP, MAX_PRICE_CHANGES_IN_GROUP, MAX_UNCLEAR_IN_A_ROW, portalText } from "./listing-check";
 import { quokaDisallowedRedirect, quokaVerdict } from "./quoka";
 
 type Reply = { status?: number; body?: string; location?: string };
@@ -202,6 +202,30 @@ describe("checkListingPages reading the price on Kleinanzeigen's ad pages", () =
     expect(results).toHaveLength(CHECK_GROUP);
     expect(results.every((r) => r.outcome === "active" && r.priceEur === undefined && r.listedOn === "2026-11-18")).toBe(true);
     expect(logs.some((line) => line.startsWith(`prices ignored: ${changed} of ${CHECK_GROUP} listing pages`))).toBe(true);
+  });
+
+  describe("dealers buying up cars", () => {
+    const buyerFacts = (ref: ListingRef, page: FetchedPage) => kleinanzeigenFacts(page, Date.parse("2026-11-23T22:00:00Z"), ref);
+    const buyer = `<p id="viewad-description-text" itemprop="description">KFZ Handel Berlin kauft ihr Auto auf.</p>`;
+    const titled = (id: string): ListingRef => ({ ...ref(id), title: "Unfallwagen Motorschaden Getriebeschaden" });
+
+    it("hands on that an online ad offers no car, with its other facts", async () => {
+      const site = fakeSite({ [`${KA}/robots.txt`]: { body: "User-agent: *\n" }, [adUrl("1")]: adPage("1", priceBoxes("12.500 € VB") + buyer) });
+      const results = await collect(checkListingPages([titled("1")], { fetcher: site.fetcher, log: () => undefined, verdict: kleinanzeigenVerdict, facts: buyerFacts }));
+      expect(results).toEqual([{ externalId: "1", outcome: "active", priceEur: 12500, listedOn: "2026-11-18", notForSale: true }]);
+    });
+
+    it("does not believe it for too many ads of a group, but keeps their outcomes", async () => {
+      const due = Array.from({ length: CHECK_GROUP }, (_, i) => titled(String(i + 1)));
+      const flagged = MAX_NOT_FOR_SALE_IN_GROUP + 1;
+      const routes = Object.fromEntries(due.map((r, i) => [r.url, adPage(r.externalId, priceBoxes("12.500 € VB") + (i < flagged ? buyer : ""))]));
+      const logs: string[] = [];
+      const site = fakeSite({ [`${KA}/robots.txt`]: { body: "User-agent: *\n" }, ...routes });
+      const results = await collect(checkListingPages(due, { fetcher: site.fetcher, log: (m) => logs.push(m), verdict: kleinanzeigenVerdict, facts: buyerFacts }));
+      expect(results).toHaveLength(CHECK_GROUP);
+      expect(results.every((r) => r.outcome === "active" && r.notForSale === undefined && r.priceEur === 12500)).toBe(true);
+      expect(logs.some((line) => line.startsWith(`buyer ads ignored: ${flagged} of ${CHECK_GROUP} listing pages`))).toBe(true);
+    });
   });
 
   it("passes on a group in which some prices changed", async () => {

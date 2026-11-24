@@ -4,6 +4,9 @@ import {
   detectFuel,
   detectTransmission,
   findMakeInTitle,
+  isBuyerAd,
+  isBuyerListing,
+  isBuyerText,
   isNotForSale,
   isPlaceholderModel,
   isYearOnlyRegistration,
@@ -280,6 +283,97 @@ describe("isNotForSale", () => {
     "E-Bike und Golf 4 Tausch gegen Transporter",
     "iPhone 15 Pro und Golf 4 Tausch gegen Bulli",
   ])("keeps the sale ad %s", (title) => expect(isNotForSale(title)).toBe(false));
+});
+
+describe("dealers buying up cars and wanted ads later in the title", () => {
+  // Titles of buyer ads that were active on the live site (2026-11-24).
+  it.each([
+    "Autoankauf Unfallautos Ankauf Kfz Ankauf Wohnmobil Ankauf SUV",
+    "Autoankauf Gebrauchtwagen Ankauf Kfz Ankauf Pkw Ankauf Wohnmobil",
+    "Autoankauf~ Kauf - Verkauf",
+    "Autoankauf alle alle Art Deutschland weit",
+    "AUTOANKAUF FÜR EXPORT & SCHROTT",
+    "Autoankauf Autoverwertung Fahrzeugrecycling kostenlose Abholung",
+    "BMW X5 & BMW X3 ANKAUF AB BAUJAHR 2012 – FÜR EXPORT!",
+    "unfall & Export Autos Ankauf ........Schrott Autos holen wir kostenlos ab",
+    "Toyota Corolla, Yaris, Auris - Ankauf - Wir kaufen Ihren Toyota!",
+    "ANAKUF AUTOS VON TOP BIS SCHROTT",
+    "+++ Autoankauf +++ Barzahlung",
+    "Autoankauf & Inzahlungnahme",
+    "Wir kaufen Ihr Auto – sofort Bargeld",
+    "Ihr Auto verkaufen? Rufen Sie an",
+    "Mercedes-Benz E 220 ich suchen und kaufen Autos ( For export",
+  ])("skips the buyer ad %s", (title) => {
+    expect(isBuyerAd(title) || isNotForSale(title)).toBe(true);
+    expect(isNotForSale(title)).toBe(true);
+  });
+
+  // Sale ads of a dealer whose title ends in the dealer's slogan, live on 2026-11-24.
+  it.each([
+    "Chevrolet Spark 1.0 Benzin*TÜV/AU NEU*KFZ ANKAUF",
+    "Opel Astra *AHK *PDC *AU/HU *KFZ ANKAUF AS FAIR",
+    "Merceds B 180 CDI *AU/HU *SERVICE *Teillleder *PDC *KFZ ANKAUF",
+    "Honda Jazz *HU/AU *Service *KFZ-Ankaufstation *AS FAIR",
+    "Dacia Duster *AHK *TÜV *Service *KFZ-Ankauf *Wir kaufen Autos",
+    "Ford Focus *PDC*KLIMA*AU/HU*TPM *Wir Kaufen dein KFZ",
+    "Opel Astra K ECOflex*TÜV *SERVICE *AS FAIR *WIR KAUFEN DEIN AUTO",
+    "BMW 320d Inzahlungnahme und Ankauf möglich",
+    "Porsche 911 Carrera mit Ankaufsgutachten",
+    "Golf 7 GTI, Ankauf-Check vorhanden",
+    "Fiat Panda zu kaufen super weinachsgesänk",
+    "4 Autos zu kaufen",
+    "Wir verkaufen unser BMW",
+    "Sein Auto verkaufen",
+  ])("keeps the sale ad %s", (title) => expect(isNotForSale(title)).toBe(false));
+
+  // Wanted ads that were active on the live site (2026-11-24).
+  it.each([
+    "Skoda Octavia gesucht Motorschaden Getriebeschaden Unfall Bastler",
+    "Volvo V70 von privat gesucht",
+    "Mercedes W204 C180 oder C200 Automatik gesucht bis max. 8000 Euro",
+    "Porsche 997 Porsche 997 oder Macan von Pensionär gesucht",
+    "Volkswagen Passat 2.0 TDI GESUCHT: Volkswagen Passat 2.0 TDI 150/200 PS",
+    "**Pkw Gesucht**",
+    "Familien Auto gesucht",
+    "VW Sharan gesucht – für Dreharbeiten am 29.11. in Frankfurt",
+    "Citroen 2 CV 6 (Ente...) in brauchbarem Zustand gegen unkomplizierte Barzahlung gesucht !!!!",
+    "Porsche 996 911 996 Coupe suche Turbo GTS 997",
+    "Porsche 992 911Turbo S Cabriolet SUCHE , SUCHE Volla",
+    "VW Golf 4 gesucht für Bastler",
+  ])("skips the wanted ad %s", (title) => expect(isNotForSale(title)).toBe(true));
+
+  it.each([
+    "Weihnachtsgeschenk gesucht? Smart fortwo coupé – nur 53610km",
+    "Mazda CX-7 2.2 Diesel AWD – TAUSCH bevorzugt / 7-Sitzer gesucht",
+    "E36 Touring M3 (Suche 135-140i)Tausch möglich",
+    "VW Golf 7, Liebhaber gesucht",
+    "Opel Corsa D, suche neuen Besitzer",
+    "Golf 4 Käufer suche dringend",
+    "Suche neuen Besitzer für meinen Golf 4",
+    "Ihre Suche hat ein Ende: VW Golf 7 GTI",
+    "BMW 320d – Ende der Suche",
+    "Golf 7 – der gesuchte Klassiker",
+  ])("keeps the sale ad %s", (title) => expect(isNotForSale(title)).toBe(false));
+});
+
+describe("isBuyerText and isBuyerListing", () => {
+  it("finds a buyer's opening, sentence by sentence", () => {
+    expect(isBuyerText("Hallo\n\nKFZ Handel Berlin kauft ihr Auto auf.\n\nwir kaufen Gebrauchtwagen in ganz Berlin")).toBe(true);
+    expect(isBuyerText("Autoankauf aller Marken, Barzahlung vor Ort")).toBe(true);
+    expect(isBuyerText("Ankauf von Unfallwagen und Motorschaden")).toBe(true);
+    expect(isBuyerText("Ich verkaufe meinen Golf, weil ich mir ein neues kaufe. Ihr bekommt ihn mit TÜV.")).toBe(false);
+    expect(isBuyerText("Wir kaufen uns ein größeres Auto, daher verkaufen wir unseren Polo.")).toBe(false);
+    expect(isBuyerText(null)).toBe(false);
+  });
+
+  it("only looks at the opening: a sale ad may end with the dealer's buying offer", () => {
+    expect(isBuyerText(`${"Golf 7 mit TÜV neu, Klima, Navi, Sitzheizung. ".repeat(8)}Wir kaufen auch Ihr Fahrzeug an!`)).toBe(false);
+  });
+
+  it("keeps a listing whose title names a car", () => {
+    expect(isBuyerListing("Unfallwagen | Motorschaden | Getriebeschaden", "Wir kaufen Ihr Auto, Barzahlung sofort")).toBe(true);
+    expect(isBuyerListing("Opel Astra *AHK *TÜV *KFZ ANKAUF AS FAIR", "KFZ Ankaufstation AS Fair: Wir kaufen Ihr Auto! Opel Astra mit TÜV")).toBe(false);
+  });
 });
 
 describe("mentionsCar", () => {
