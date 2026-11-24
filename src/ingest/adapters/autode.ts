@@ -9,6 +9,7 @@ import {
   resolveModelInTitle,
   sourceImageUrl,
 } from "@/core/normalize";
+import { plausibleListing } from "@/core/plausibility";
 import type { NormalizedListing } from "@/core/types";
 import type { FetchContext, RawListing, SourceAdapter, SourceInfo } from "../adapter";
 import { readJsonLd } from "../http/cards";
@@ -153,7 +154,7 @@ export function normalizeAutoDe(raw: RawListing): NormalizedListing | null {
   if (item.price < 300) return null;
   const byModel = resolveMakeModel(item.make, item.model);
   const resolved = byModel.modelSlug ? byModel : resolveModelInTitle(item.make, `${item.model} ${item.variant ?? ""}`.trim());
-  return {
+  return plausibleListing({
     sourceId: AUTODE.id,
     externalId: item.id,
     url: item.url,
@@ -180,7 +181,7 @@ export function normalizeAutoDe(raw: RawListing): NormalizedListing | null {
     lat: null,
     lng: null,
     imageUrl: sourceImageUrl(item.image, "auto.de"),
-  };
+  });
 }
 
 export interface AutoDeOptions {

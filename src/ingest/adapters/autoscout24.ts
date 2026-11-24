@@ -1,5 +1,8 @@
 import {
   detectBodyType,
+  hasWantedMarker,
+  isPlaceholderModel,
+  joinWithoutRepeats,
   normalizeFuel,
   normalizeTransmission,
   isYearOnlyRegistration,
@@ -7,8 +10,10 @@ import {
   parseInteger,
   parsePowerKw,
   resolveMakeModel,
+  resolveModelInTitle,
   sourceImageUrl,
 } from "@/core/normalize";
+import { plausibleListing } from "@/core/plausibility";
 import { MAKES } from "@/core/taxonomy";
 import type { NormalizedListing, SellerType } from "@/core/types";
 import type { FetchContext, RawListing, SourceAdapter, SourceInfo } from "../adapter";
@@ -217,7 +222,7 @@ export function parseAutoScout24Page(html: string, url = ORIGIN): AutoScout24Pag
       power: details.get("speedometer") ?? null,
       sellerType,
       // Company names only; private sellers' names are never stored.
-      dealerName: sellerType === "Dealer" ? str(seller.companyName) : null,
+      dealerName: autoScout24SellerType(sellerType) === "dealer" ? str(seller.companyName) : null,
       zip: str(location.zip),
       city: str(location.city),
       countryCode: str(location.countryCode),
@@ -230,20 +235,39 @@ export function parseAutoScout24Page(html: string, url = ORIGIN): AutoScout24Pag
 
 const isCount = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0;
 
+/** The seller type in any case and in its usual short, long and German forms; anything else stays unknown. */
+export function autoScout24SellerType(value: string | null): SellerType | null {
+  const key = (value ?? "").normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z]/g, "");
+  if (/^(?:d|dealer|haendler|handler|commercial|business|professional|trader|company)$/.test(key)) return "dealer";
+  if (/^(?:p|private|privat|privateseller|privatseller|privatperson|privatanbieter|consumer)$/.test(key)) return "private";
+  return null;
+}
+
 const cleanText = (value: string | null) => (value ? value.replace(/[*|]+/g, " ").replace(/\s+/g, " ").trim() || null : null);
 
 export function normalizeAutoScout24(raw: RawListing): NormalizedListing | null {
   const item = raw.payload as unknown as AutoScout24Item;
   if (item.price === null || item.price < 100) return null;
+  // The title loses the stars of "*Suche*"; the seller's own text still has them.
+  if (hasWantedMarker(item.version ?? "")) return null;
 
-  const resolved = resolveMakeModel(item.make, item.modelGroup ?? item.model);
-  const byModel = resolved.modelSlug ? resolved : resolveMakeModel(item.make, item.model);
+  const motor = cleanText(item.motor);
   const version = cleanText(item.version);
-  const variant = [cleanText(item.motor), version].filter(Boolean).join(" ").slice(0, 160) || null;
-  const title = [item.make, item.model, variant].filter(Boolean).join(" ").slice(0, 200);
-  const sellerType: SellerType | null = item.sellerType === "Dealer" ? "dealer" : item.sellerType === "Private" ? "private" : null;
+  // "Sonstige", "Others", "ANDERE": the seller's own text names the model, if anything does.
+  const placeholder = isPlaceholderModel(item.model);
+  const resolved = resolveMakeModel(item.make, item.modelGroup ?? item.model);
+  const byModel = resolved.modelSlug
+    ? resolved
+    : placeholder
+      ? resolveModelInTitle(item.make, [motor, version].filter(Boolean).join(" "))
+      : resolveMakeModel(item.make, item.model);
+  // Sellers often repeat the model and engine in their text: "Q3" "Q3 35 TDI" reads "Q3 35 TDI".
+  const name = joinWithoutRepeats([item.make, placeholder ? null : item.model]);
+  const title = joinWithoutRepeats([item.make, placeholder ? null : item.model, motor, version]).slice(0, 200);
+  const variant = title.slice(name.length).trim().slice(0, 160) || null;
+  const sellerType = autoScout24SellerType(item.sellerType);
 
-  return {
+  return plausibleListing({
     sourceId: AUTOSCOUT24.id,
     externalId: item.id,
     url: item.url,
@@ -269,7 +293,7 @@ export function normalizeAutoScout24(raw: RawListing): NormalizedListing | null 
     lat: null,
     lng: null,
     imageUrl: sourceImageUrl(item.image, "autoscout24.net"),
-  };
+  });
 }
 
 /** The result list URL for a make, newest first, optionally limited to a price range. */

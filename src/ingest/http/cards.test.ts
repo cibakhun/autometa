@@ -105,6 +105,12 @@ describe("facts from a card", () => {
   it("does not take a year from the future or a phone-like number", () => {
     expect(cardFacts(plain("2031", "1999 €"), NOW)).toMatchObject({ firstRegistration: null, price: 1999 });
   });
+
+  it("does not take the HU date for the first registration", () => {
+    expect(cardFacts(plain("HU", "05/2027", "EZ 03/2015", "4.500 €"), NOW)).toMatchObject({ firstRegistration: "03/2015" });
+    expect(cardFacts(plain("TÜV bis:", "11/2026", "2015", "4.500 €"), NOW)).toMatchObject({ firstRegistration: "2015" });
+    expect(cardFacts(plain("HU/AU", "11/2026", "4.500 €"), NOW)).toMatchObject({ firstRegistration: null });
+  });
 });
 
 describe("cards of a result list", () => {

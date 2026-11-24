@@ -3,7 +3,6 @@ import {
   detectFuel,
   detectTransmission,
   findMakeInTitle,
-  isNotForSale,
   normalizeText,
   isYearOnlyRegistration,
   parseFirstRegistration,
@@ -12,6 +11,7 @@ import {
   resolveModelInTitle,
   sourceImageUrl,
 } from "@/core/normalize";
+import { plausibleListing } from "@/core/plausibility";
 import { MAKES } from "@/core/taxonomy";
 import type { NormalizedListing } from "@/core/types";
 import type { CheckOutcome, ListingRef, PageFacts, RawListing, SourceAdapter, SourceInfo } from "../adapter";
@@ -234,7 +234,6 @@ export function normalizeKleinanzeigen(raw: RawListing): NormalizedListing | nul
   const giveaway = item.price === "Zu verschenken";
   const price = giveaway ? 0 : item.price && /\d/.test(item.price) ? parseInteger(item.price) : null;
   if (price === null || (!giveaway && price < 100)) return null;
-  if (isNotForSale(item.title)) return null;
 
   // The make from the title wins when it agrees with the list; otherwise the list's make filter.
   const fromTitle = findMakeInTitle(item.title);
@@ -245,7 +244,7 @@ export function normalizeKleinanzeigen(raw: RawListing): NormalizedListing | nul
   if (giveaway && !isGiveawayCar(item.title, resolved)) return null;
   const power = parsePowerKw(item.title);
 
-  return {
+  return plausibleListing({
     sourceId: KLEINANZEIGEN.id,
     externalId: item.id,
     url: item.url,
@@ -271,7 +270,7 @@ export function normalizeKleinanzeigen(raw: RawListing): NormalizedListing | nul
     lat: null,
     lng: null,
     imageUrl: sourceImageUrl(item.image, "kleinanzeigen.de"),
-  };
+  });
 }
 
 export interface KleinanzeigenOptions {
