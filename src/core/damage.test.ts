@@ -53,6 +53,7 @@ describe("detectDamage", () => {
     "Audi A6 Avant o. Unfall, Scheckheft",
     // A customs transit document for exporting a new car, not a parts car.
     "Toyota Land Cruiser 300+PREMIUM+V6_HYBRID_464PS+EXPORT_T1+READY",
+    "Toyota Land Cruiser HYBRID_EXPORT_T1_READY",
   ])("finds nothing in %j", (title) => {
     expect(detectDamage(title)).toEqual([]);
   });

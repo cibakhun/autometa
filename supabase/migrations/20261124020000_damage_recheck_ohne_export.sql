@@ -5,4 +5,5 @@
 update listings
    set damage = null
  where cardinality(damage) > 0
-   and (title ~* '\mexport[^a-z0-9]*t[12]\M' or title ~* '\mo(h)?\.');
+   -- Bounded like normalizeText: anything but a letter or digit, so "EXPORT_T1_READY" counts too.
+   and (title ~* '(^|[^a-z0-9])export[^a-z0-9]*t[12]([^a-z0-9]|$)' or title ~* '(^|[^a-z0-9])oh?\.');
