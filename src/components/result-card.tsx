@@ -4,6 +4,7 @@ import { DAMAGE_LABELS } from "@/core/damage";
 import { FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
 import type { FlipResult } from "@/core/flip";
 import {
+  compareOffers,
   formatDayTime,
   formatDistance,
   formatEuro,
@@ -40,7 +41,7 @@ export function ResultCard({
   note?: ReactNode;
 }) {
   const facts = [
-    formatRegistration(listing.firstRegistration),
+    formatRegistration(listing.firstRegistration, listing.firstRegistrationYearOnly),
     formatKm(listing.mileageKm),
     formatPower(listing.powerKw),
     listing.fuel ? FUEL_LABELS[listing.fuel] : null,
@@ -109,19 +110,7 @@ export function ResultCard({
         )}
         {listing.flip && listing.repair && <FlipLine flip={listing.flip} repair={listing.repair} minMarginEur={minMarginEur} />}
         {listing.reliabilityRatio !== null && <ReliabilityLine ratio={listing.reliabilityRatio} />}
-        {listing.otherOffers.length > 0 && (
-          <p className="mt-2 text-sm">
-            <span className="text-muted">Auch bei </span>
-            {listing.otherOffers.map((offer, i) => (
-              <span key={offer.id}>
-                {i > 0 && ", "}
-                <a href={`/go/${offer.id}`} target="_blank" rel="noopener nofollow" className="font-medium text-accent hover:underline">
-                  {offer.sourceName} ({formatPrice(offer.priceEur)})
-                </a>
-              </span>
-            ))}
-          </p>
-        )}
+        {listing.otherOffers.length > 0 && <OtherOffers listing={listing} />}
         <div className="mt-auto flex items-center justify-between gap-2 pt-4">
           <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong">{listing.sourceName}</span>
@@ -173,6 +162,41 @@ function FlipLine({ flip, repair, minMarginEur }: { flip: FlipResult; repair: Re
         {formatSignedPrice(flip.marginEur)}
       </span>
       <span className="text-muted"> · {parts.join(" · ")}</span>
+    </p>
+  );
+}
+
+/**
+ * The same vehicle on other portals: "Hier am günstigsten · auch bei auto.de 29.448 € (+2.048 €)".
+ * The card shows the cheapest listing that matches the filters, so with a portal filter another
+ * portal can be cheaper: then that comes first.
+ */
+function OtherOffers({ listing }: { listing: ListingSummary }) {
+  const { cheaper, savingEur, anyDearer } = compareOffers(listing.priceEur, listing.otherOffers);
+  const portals = listing.otherOffers.length + 1;
+  return (
+    <p className="mt-2 text-sm">
+      {cheaper ? (
+        <span className="font-medium text-good-text">
+          Bei {cheaper.sourceName} {formatPrice(savingEur)} günstiger
+        </span>
+      ) : (
+        <span className="font-medium">{anyDearer ? `Hier am günstigsten von ${portals} Börsen` : `Gleicher Preis auf ${portals} Börsen`}</span>
+      )}
+      <span className="text-muted"> · auch bei </span>
+      {listing.otherOffers.map((offer, i) => (
+        <span key={offer.id}>
+          {i > 0 && ", "}
+          <a href={`/go/${offer.id}`} target="_blank" rel="noopener nofollow" className="font-medium text-accent hover:underline">
+            {offer.sourceName} {formatPrice(offer.priceEur)}
+          </a>
+          {offer.priceEur !== listing.priceEur && (
+            <span className={offer.priceEur < listing.priceEur ? "text-good-text" : "text-muted"}>
+              {" "}({formatSignedPrice(offer.priceEur - listing.priceEur)})
+            </span>
+          )}
+        </span>
+      ))}
     </p>
   );
 }

@@ -31,11 +31,23 @@ export const formatShare = (share: number) => `${Math.floor(share * 100)}\u00a0%
 
 export const formatKm = (km: number | null) => (km === null ? "km unbekannt" : `${integer.format(km)} km`);
 
-/** "2019-04-01" -> "04/2019" */
-export function formatRegistration(isoDate: string | null): string {
+/** "2019-04-01" -> "EZ 04/2019"; "EZ 2019" when the portal gave only the year. */
+export function formatRegistration(isoDate: string | null, yearOnly = false): string {
   if (!isoDate) return "EZ unbekannt";
   const [year, month] = isoDate.split("-");
-  return `EZ ${month}/${year}`;
+  return yearOnly ? `EZ ${year}` : `EZ ${month}/${year}`;
+}
+
+/**
+ * How the price of a vehicle listed on several portals compares: the cheapest other offer when
+ * it costs less than this one, and whether any other costs more.
+ */
+export function compareOffers(priceEur: number, others: { id: number; sourceName: string; priceEur: number }[]) {
+  const cheapest = others.reduce<(typeof others)[number] | null>(
+    (best, offer) => (offer.priceEur < (best?.priceEur ?? priceEur) ? offer : best),
+    null,
+  );
+  return { cheaper: cheapest, savingEur: cheapest ? priceEur - cheapest.priceEur : 0, anyDearer: others.some((o) => o.priceEur > priceEur) };
 }
 
 export const formatPower = (kw: number | null) => (kw === null ? null : `${kw} kW (${kwToPs(kw)} PS)`);

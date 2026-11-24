@@ -27,6 +27,8 @@ export interface ListingSummary {
   priceEur: number;
   mileageKm: number | null;
   firstRegistration: string | null;
+  /** True when the portal gave only the year; firstRegistration is then January of it. */
+  firstRegistrationYearOnly: boolean;
   fuel: Fuel | null;
   transmission: Transmission | null;
   powerKw: number | null;
@@ -276,7 +278,7 @@ export function buildWhere(
  */
 export function summaryColumns(distanceKm = "null::float8") {
   return `l.id, l.title, l.make_slug, l.model_slug, l.price_eur, l.mileage_km,
-           to_char(l.first_registration, 'YYYY-MM-DD') as first_registration,
+           to_char(l.first_registration, 'YYYY-MM-DD') as first_registration, l.first_registration_year_only,
            l.fuel, l.transmission, l.power_kw, l.body_type, l.seller_type, l.zip, l.city, l.cluster_id,
            to_char(l.hu_until, 'YYYY-MM-DD') as hu_until, l.hu_basis,
            l.damage, l.market_price_eur, l.market_comps,
@@ -370,6 +372,7 @@ export function summaryFromRow(row: Record<string, any>, offers: Map<number, Off
     priceEur: row.price_eur,
     mileageKm: row.mileage_km,
     firstRegistration: row.first_registration,
+    firstRegistrationYearOnly: row.first_registration_year_only === true,
     fuel: row.fuel,
     transmission: row.transmission,
     powerKw: row.power_kw,
@@ -618,6 +621,7 @@ export async function getListing(pool: Pool, id: number, settings = DEFAULT_FLIP
     priceEur: row.price_eur,
     mileageKm: row.mileage_km,
     firstRegistration: row.first_registration_text,
+    firstRegistrationYearOnly: row.first_registration_year_only === true,
     fuel: row.fuel,
     transmission: row.transmission,
     powerKw: row.power_kw,
