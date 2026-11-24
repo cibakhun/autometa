@@ -247,6 +247,18 @@ describe("models sellers write in their own way", () => {
     ["smart", "451 Cabrio", "fortwo"],
     ["Abarth", "595C Competizione", "500"],
     ["Kia", "K4 Spirit 1.6T", "k4"],
+    ["MINI", "One Bj.2003 zum Schlachten", "one"],
+    ["MINI", "One D Countryman", "countryman"],
+    ["MINI", "Cooper S", "cooper"],
+    ["Renault", "19 – Bastlerfahrzeug", "19"],
+    ["Porsche", "962 C", "962"],
+    ["Porsche", "918 Spyder", "918"],
+    ["Porsche", "959", "959"],
+    ["Porsche", "935", "935"],
+    ["Porsche", "Carrera GT", "carrera-gt"],
+    ["Porsche", "Carrera GTS", "911"],
+    ["Lexus", "LF-A", "lfa"],
+    ["Mercedes-Benz", "AMG ONE", "amg-one"],
   ])("%s %s", (make, model, slug) => {
     expect(resolveMakeModel(make, model).modelSlug).toBe(slug);
   });

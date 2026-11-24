@@ -122,6 +122,9 @@ export const MAKES: MakeDef[] = [
       m("glk", "GLK"),
       m("gl", "GL"),
       m("amg-gt", "AMG GT", { aliases: ["amg gt"] }),
+      m("amg-one", "AMG ONE", { aliases: ["amg one"] }),
+      m("sls", "SLS AMG", { aliases: ["sls amg"] }),
+      m("slr", "SLR McLaren", { aliases: ["slr mclaren", "mclaren slr"] }),
       m("marco-polo", "Marco Polo", { aliases: ["marco polo"] }),
     ],
   },
@@ -292,6 +295,7 @@ export const MAKES: MakeDef[] = [
       m("fluence", "Fluence"),
       m("wind", "Wind"),
       m("5", "R5", { aliases: ["r5"] }),
+      m("19", "R19", { aliases: ["r19"] }),
     ],
   },
   {
@@ -368,7 +372,7 @@ export const MAKES: MakeDef[] = [
   {
     slug: "lexus",
     name: "Lexus",
-    models: [...["CT", "IS", "ES", "NX", "RX", "UX", "GS", "LS", "LC", "RC", "RZ"].map(lexus), m("lbx", "LBX")],
+    models: [...["CT", "IS", "ES", "NX", "RX", "UX", "GS", "LS", "LC", "RC", "RZ"].map(lexus), m("lbx", "LBX"), m("lfa", "LFA", { aliases: ["lf a"] })],
   },
   {
     slug: "hyundai",
@@ -606,15 +610,23 @@ export const MAKES: MakeDef[] = [
       m("boxster", "Boxster", { aliases: ["718 boxster"] }),
       m("cayman", "Cayman", { aliases: ["718 cayman"] }),
       ...codes("356", "914", "924", "928", "944", "968"),
+      // A longer match than "carrera", which names the 911.
+      m("carrera-gt", "Carrera GT", { aliases: ["carrera gt"] }),
+      m("918", "918 Spyder", { aliases: ["918 spyder"] }),
+      m("959", "959"),
+      m("962", "962"),
+      m("935", "935"),
     ],
   },
   {
     slug: "mini",
     name: "MINI",
     models: [
-      m("cooper", "Cooper", { aliases: ["one", "cooper s", "cooper se", "cooper d", "john cooper works"] }),
-      m("countryman", "Countryman", { aliases: ["cooper countryman", "cooper s countryman", "one countryman", "cooper d countryman"] }),
-      m("clubman", "Clubman", { aliases: ["cooper clubman", "cooper s clubman", "one clubman"] }),
+      m("cooper", "Cooper", { aliases: ["cooper s", "cooper se", "cooper d", "john cooper works"] }),
+      // The portals list the One as a model of its own, below the Cooper.
+      m("one", "One", { aliases: ["one d", "one first"] }),
+      m("countryman", "Countryman", { aliases: ["cooper countryman", "cooper s countryman", "one countryman", "one d countryman", "cooper d countryman"] }),
+      m("clubman", "Clubman", { aliases: ["cooper clubman", "cooper s clubman", "one clubman", "one d clubman"] }),
       m("cabrio", "Cabrio", { aliases: ["cooper cabrio", "cooper s cabrio", "one cabrio"] }),
       m("paceman", "Paceman"),
       m("aceman", "Aceman"),
