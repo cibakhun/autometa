@@ -196,6 +196,11 @@ describe("judgeListing", () => {
       mileageKm: 20_000,
     });
     expect(judgeListing(facts({ mileageKm: 0, firstRegistration: "2099-01-01" }), NOW).mileageKm).toBe(0);
+    // A placeholder mileage cannot pass a cheap young car as worn out.
+    expect(judgeListing(facts({ title: "VW Golf 1.0", priceEur: 2000, firstRegistration: "2026-01-01", mileageKm: 222_222 }), NOW)).toMatchObject({
+      firstRegistration: null,
+      mileageKm: null,
+    });
   });
 });
 

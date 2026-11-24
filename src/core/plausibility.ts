@@ -179,8 +179,11 @@ export function plausibleMileage(mileageKm: number | null, firstRegistration: st
 
 /** What the rules make of a listing's facts. The mileage is judged with the corrected first registration. */
 export function judgeListing(facts: ListingFacts, now = new Date()): Verdict {
-  const firstRegistration = plausibleRegistration(facts, now);
-  const mileageKm = plausibleMileage(facts.mileageKm, firstRegistration, now);
+  // A placeholder mileage says nothing, so it cannot vouch for the first registration either
+  // (222,222 km would pass a cheap young car as worn out).
+  const typedKm = facts.mileageKm !== null && (isPlaceholderMileage(facts.mileageKm) || facts.mileageKm >= MAX_MILEAGE_KM) ? null : facts.mileageKm;
+  const firstRegistration = plausibleRegistration({ ...facts, mileageKm: typedKm }, now);
+  const mileageKm = plausibleMileage(typedKm, firstRegistration, now);
   const checked = { ...facts, firstRegistration, mileageKm };
   let rejection: Rejection | null = null;
   if (isNotForSale(facts.title)) rejection = "not_for_sale";
