@@ -51,6 +51,7 @@ describe("detectDamage", () => {
     // Short for "ohne" in a title with few characters to spare.
     "Volkswagen Crafter 2.0 TDI Kasten 35 L4H3 NAV AHK oh.Schäden 5J.Gar",
     "Audi A6 Avant o. Unfall, Scheckheft",
+    "Golf o Unfall",
     // A customs transit document for exporting a new car, not a parts car.
     "Toyota Land Cruiser 300+PREMIUM+V6_HYBRID_464PS+EXPORT_T1+READY",
     "Toyota Land Cruiser HYBRID_EXPORT_T1_READY",
