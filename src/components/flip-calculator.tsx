@@ -41,8 +41,12 @@ interface JobRow {
   hours: string;
 }
 
+/**
+ * Middle of a parts or hours range, unrounded: the estimate on the page (countedJobs and the stored
+ * risk buffer) counts it like this, so the calculator starts at the same margin and risk buffer.
+ * Parts ranges are multiples of 10 euros, so the middle is a multiple of 5.
+ */
 const mid = ([from, to]: [number, number]) => (from + to) / 2;
-const round10 = (value: number) => Math.round(value / 10) * 10;
 /** Typed number, 0 when empty or invalid. Accepts a German decimal comma. */
 const num = (value: string) => {
   const parsed = Number(value.replace(",", "."));
@@ -66,7 +70,7 @@ export function FlipCalculator({ priceEur, marketEur, damage, facts, settings, p
       id: j.job.id,
       label: j.job.label,
       difficulty: j.job.difficulty,
-      parts: String(round10(mid(j.partsEur))),
+      parts: String(mid(j.partsEur)),
       hours: String(mid(j.job.hours)),
     }));
 
@@ -92,7 +96,7 @@ export function FlipCalculator({ priceEur, marketEur, damage, facts, settings, p
     const replaced = new Set(job.replaces ?? []);
     setJobs((rows) => [
       ...rows.filter((row) => !replaced.has(row.id)),
-      { key: nextKey, id, label: job.label, difficulty: job.difficulty, parts: String(round10(mid(parts))), hours: String(mid(job.hours)) },
+      { key: nextKey, id, label: job.label, difficulty: job.difficulty, parts: String(mid(parts)), hours: String(mid(job.hours)) },
     ]);
     setNextKey((key) => key + 1);
   };
