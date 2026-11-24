@@ -16,7 +16,15 @@ export function getPool(): Pool {
     }
     globalThis.__autometaPool = new Pool({
       connectionString,
-      max: Number(process.env.DATABASE_POOL_MAX ?? 5),
+      // A search page sends up to five queries at once (results, count, facets, the notice above).
+      max: Number(process.env.DATABASE_POOL_MAX ?? 10),
+      // Postgres compiles queries it estimates as expensive to machine code (JIT). The search's
+      // estimates count every listing although it mostly reads one page in index order, and
+      // compiling took up to 1.2 s for a query that ran in 0.1 s. The pool waits for this before
+      // handing out a new connection.
+      onConnect: async (client) => {
+        await client.query("set jit = off");
+      },
     });
   }
   return globalThis.__autometaPool;
