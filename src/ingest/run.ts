@@ -151,12 +151,28 @@ function sameSegmentFacts(a: NormalizedListing, b: NormalizedListing): boolean {
   return a.priceEur === b.priceEur && a.makeSlug === b.makeSlug;
 }
 
-/** Writes one batch in a transaction and returns how many listings it stored. */
-async function writeBatch(client: PoolClient, sourceId: string, raws: RawListing[], pending: PendingListing[]) {
+/**
+ * Writes one batch in a transaction: stores the listings and takes the ones normalize now leaves
+ * out (`rejected`, e.g. an ad found to be a dealer buying up cars) out of the search as filtered,
+ * like the review of stored listings does (src/ingest/review.ts). Returns how many listings it
+ * stored and how many it took out.
+ */
+async function writeBatch(client: PoolClient, sourceId: string, raws: RawListing[], pending: PendingListing[], rejected: string[] = []) {
   raws = lastPerId(raws, (raw) => raw.externalId);
-  pending = mergePending(pending);
+  // A listing left out at its last sighting stays out, even if an earlier one in the batch was kept.
+  const out = new Set(rejected);
+  pending = mergePending(pending).filter((item) => !out.has(item.listing.externalId));
+  let filtered = 0;
   await client.query("begin");
   try {
+    if (rejected.length > 0) {
+      const gone = await client.query(
+        `update listings set status = 'gone', gone_reason = 'filtered', gone_at = now()
+          where source_id = $1 and external_id = any($2::text[]) and status = 'active'`,
+        [sourceId, rejected],
+      );
+      filtered = gone.rowCount ?? 0;
+    }
     if (raws.length > 0) {
       const values = raws.flatMap((raw) => [sourceId, raw.externalId, JSON.stringify(raw.payload)]);
       await client.query(
@@ -188,7 +204,7 @@ async function writeBatch(client: PoolClient, sourceId: string, raws: RawListing
       );
     }
     await client.query("commit");
-    return pending.length;
+    return { upserted: pending.length, filtered };
   } catch (error) {
     await client.query("rollback");
     throw error;
@@ -240,10 +256,16 @@ async function ingestLocked(client: PoolClient, adapter: SourceAdapter): Promise
   const result: IngestResult = { runId, fetched: 0, upserted: 0, skipped: 0, gone: 0, checked: 0 };
   let raws: RawListing[] = [];
   let pending: PendingListing[] = [];
+  // Per listing of the batch, whether its last sighting was left out by normalize.
+  let leftOut = new Map<string, boolean>();
   const flush = async () => {
-    result.upserted += await writeBatch(client, source.id, raws, pending);
+    const rejected = [...leftOut].filter(([, out]) => out).map(([id]) => id);
+    const written = await writeBatch(client, source.id, raws, pending, rejected);
+    result.upserted += written.upserted;
+    result.gone += written.filtered;
     raws = [];
     pending = [];
+    leftOut = new Map();
   };
 
   try {
@@ -252,6 +274,7 @@ async function ingestLocked(client: PoolClient, adapter: SourceAdapter): Promise
         result.fetched += 1;
         raws.push(raw);
         const listing = adapter.normalize(raw);
+        leftOut.set(raw.externalId, !listing);
         if (!listing) {
           result.skipped += 1;
         } else {
@@ -351,8 +374,8 @@ async function markMissed(client: PoolClient, sourceId: string, startedAt: Date,
 async function checkDueListings(client: PoolClient, adapter: SourceAdapter, totals: IngestResult) {
   const { source } = adapter;
   // greatest() skips a null checked_at.
-  const due = await client.query<{ external_id: string; url: string; price_eur: number }>(
-    `select external_id, url, price_eur from listings
+  const due = await client.query<{ external_id: string; url: string; price_eur: number; title: string }>(
+    `select external_id, url, price_eur, title from listings
       where source_id = $1 and status = 'active'
         and greatest(last_seen_at, checked_at) < now() - make_interval(hours => $2)
       order by greatest(last_seen_at, checked_at), id
@@ -366,11 +389,13 @@ async function checkDueListings(client: PoolClient, adapter: SourceAdapter, tota
     totals.checked += batch.length;
     const checks = batch;
     batch = [];
-    const updated = await client.query<{ outcome: string }>(
+    // An ad online but offering no car (a dealer buying up cars) leaves the search like one the
+    // import rules leave out (see src/ingest/review.ts).
+    const updated = await client.query<{ outcome: string; not_for_sale: boolean }>(
       `update listings l
-          set status = case when v.outcome = 'gone' then 'gone' else l.status end,
-              gone_reason = case when v.outcome = 'gone' then 'checked' else l.gone_reason end,
-              gone_at = case when v.outcome = 'gone' then now() else l.gone_at end,
+          set status = case when v.outcome = 'gone' or v.not_for_sale then 'gone' else l.status end,
+              gone_reason = case when v.not_for_sale then 'filtered' when v.outcome = 'gone' then 'checked' else l.gone_reason end,
+              gone_at = case when v.outcome = 'gone' or v.not_for_sale then now() else l.gone_at end,
               last_seen_at = case when v.outcome = 'active' then now() else l.last_seen_at end,
               missed_runs = case when v.outcome = 'active' then 0 else l.missed_runs end,
               price_eur = case when v.outcome = 'active' and v.price_eur is not null then v.price_eur else l.price_eur end,
@@ -380,23 +405,25 @@ async function checkDueListings(client: PoolClient, adapter: SourceAdapter, tota
               -- The earliest day any page named: a later one may be the day it was pushed up again.
               listed_on = case when v.outcome = 'active' then least(l.listed_on, v.listed_on) else l.listed_on end,
               checked_at = now()
-         from unnest($2::text[], $3::text[], $4::int[], $5::date[]) as v (external_id, outcome, price_eur, listed_on)
+         from unnest($2::text[], $3::text[], $4::int[], $5::date[], $6::boolean[])
+              as v (external_id, outcome, price_eur, listed_on, not_for_sale)
         where l.source_id = $1 and l.external_id = v.external_id and l.status = 'active'
-        returning v.outcome`,
+        returning v.outcome, v.not_for_sale`,
       [
         source.id,
         checks.map((r) => r.externalId),
         checks.map((r) => r.outcome),
         checks.map((r) => r.priceEur ?? null),
         checks.map((r) => r.listedOn ?? null),
+        checks.map((r) => r.notForSale === true),
       ],
     );
-    totals.gone += updated.rows.filter((row) => row.outcome === "gone").length;
+    totals.gone += updated.rows.filter((row) => row.outcome === "gone" || row.not_for_sale).length;
   };
 
   try {
     for await (const check of adapter.checkListings!(
-      due.rows.map((row) => ({ externalId: row.external_id, url: row.url, priceEur: row.price_eur })),
+      due.rows.map((row) => ({ externalId: row.external_id, url: row.url, priceEur: row.price_eur, title: row.title })),
       { db: client },
     )) {
       batch.push(check);

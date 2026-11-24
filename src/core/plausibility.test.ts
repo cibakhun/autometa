@@ -6,6 +6,7 @@ import {
   judgeListing,
   type ListingFacts,
   plausibleListing,
+  isPlaceholderMileage,
   plausibleMileage,
   plausibleRegistration,
 } from "./plausibility";
@@ -161,12 +162,26 @@ describe("plausibleMileage", () => {
     expect(plausibleMileage(15, "2010-05-01", NOW)).toBe(15);
     expect(plausibleMileage(null, "2010-05-01", NOW)).toBeNull();
   });
+
+  // Mileages of buyer ads and wanted ads on the live site (2026-11-24), and a BMW 528 with 1,260,900 km.
+  it.each([99_999, 999_999, 9_999_999, 222_222, 11_111, 9999, 1234, 12_345, 123_456, 1_260_900, 1_000_000])("reads %i km as unknown", (km) => {
+    expect(isPlaceholderMileage(km) || km >= 1_000_000).toBe(true);
+    expect(plausibleMileage(km, "2018-06-01", NOW)).toBeNull();
+  });
+
+  it.each([199_999, 200_000, 100_000, 99_998, 1111, 8888, 123, 999_000, 12_346])("keeps %i km", (km) => {
+    expect(isPlaceholderMileage(km)).toBe(false);
+    expect(plausibleMileage(km, "2018-06-01", NOW)).toBe(km);
+  });
 });
 
 describe("judgeListing", () => {
   it("names why a listing is left out", () => {
     expect(judgeListing(facts({ title: "Mercedes-Benz AMG GT Coupe 2 Türer ab 2015 *Suche*", priceEur: 1234 }), NOW).rejection).toBe("not_for_sale");
     expect(judgeListing(facts({ title: "Porsche 962", priceEur: 9_999_999, mileageKm: 9999, powerKw: 470 }), NOW).rejection).toBe("placeholder_price");
+    expect(judgeListing(facts({ title: "Autoankauf Unfallautos Ankauf Kfz Ankauf Wohnmobil Ankauf SUV", priceEur: 2000 }), NOW).rejection).toBe(
+      "not_for_sale",
+    );
     expect(judgeListing(facts({ title: "Hyundai BAYON 1.0 T-GDI", priceEur: 2_499_000, mileageKm: 15, firstRegistration: null, powerKw: 66 }), NOW).rejection).toBe(
       "implausible_price",
     );

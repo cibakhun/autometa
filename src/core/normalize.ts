@@ -258,14 +258,122 @@ export function isNotForSale(title: string): boolean {
   const text = normalizeText(title);
   return (
     // At the start only: sale ads may say "neuer Besitzer gesucht" or "Ankauf möglich" later on.
-    /^(?:\S+ )?(?:suche|ich suche|wir suchen|kaufe|wir kaufen|kaufgesuch|ankauf)\b/.test(text) ||
+    (/^(?:\S+ )?(?:suche|ich suche|wir suchen|kaufe|wir kaufen|kaufgesuch|ankauf)\b/.test(text) && !offersCarToBuyer(text) && !SEARCH_NOUN.test(text)) ||
     // "Suchen Sie einen Kombi?" is a dealer's sale ad.
     /^(?:suchen|gesucht)\b(?! sie\b)/.test(text) ||
     /\b(?:leasingubernahme|leasing ubernahme)\b/.test(text) ||
     hasWantedMarker(title) ||
     endsWithSuche(text) ||
+    isBuyerAd(title) ||
+    seeksCar(title) ||
     offersNoCarInSwap(text)
   );
+}
+
+/** Who a sale ad looks for instead of a car: "neuer Besitzer gesucht", "suche Käufer", "Tausch suche". */
+const BUYER_WORDS = String.raw`(?:besitzer|eigentumer|liebhaber|bastler|schrauber|abholer|zuhause|heim|kaufer|kaeufer|abnehmer|interessent\w*|nachfolger|halter|tausch\w*)`;
+
+/** "Ihre Suche hat ein Ende": the search as a noun, the buyer's, in a dealer's sale ad. */
+const SEARCH_NOUN = /^(?:ihre|deine|eure|die|der|zur|ihrer|deiner|unsere|ende der) suche\b/;
+const SEARCH_NOUN_BEFORE = new Set(["ihre", "deine", "eure", "die", "der", "zur", "ihrer", "deiner", "unsere"]);
+
+/** "Suche neuen Besitzer für meinen Golf": the search word looks for a buyer, the ad offers a car. */
+function offersCarToBuyer(text: string): boolean {
+  return new RegExp(String.raw`^(?:\S+ )?(?:suche|ich suche|wir suchen)(?: \S+){0,2} ${BUYER_WORDS}\b`).test(text);
+}
+
+/**
+ * A dealer's sale ad may end in its own slogan after the car's facts, behind stars or pluses:
+ * "Opel Astra *AHK *PDC *AU/HU *KFZ ANKAUF AS FAIR", "Ford Focus *PDC*KLIMA *Wir Kaufen dein KFZ".
+ * The head is the title up to that list (or its first part, for "+++ Autoankauf +++").
+ */
+function headOf(title: string): string {
+  return title.split(/[*+]/).find((part) => normalizeText(part) !== "") ?? "";
+}
+
+/** "Ankauf" also at the end of a compound ("Autoankauf", "KFZ-Ankauf", "Sofortankauf") and as the typo "Anakuf"; not "Ankaufstest". */
+const BUYING_WORD = /\b\w*(?:ankauf|anakuf)\b/;
+/** Sale ads that name buying as a service besides the sale: "Inzahlungnahme und Ankauf möglich", "Ankauf-Check". */
+const BUYING_ASIDE = /\b(?:ankauf|anakuf) (?:moglich|check|test|gutachten|untersuchung)\b|\binzahlungnahme\w*\b|\bin zahlung\b/;
+/** Who a buyer wants to buy from or what: "kauft Ihr Auto", "kaufen alle Fahrzeuge", "kaufe jedes Auto". */
+const BUY_FROM = /\bkauf(?:e|en|t) (?:ihr|ihre|ihren|dein|deine|deinen|euer|eure|alle|jedes|jeden|jede)\b/;
+/** Cars in the plural after "kaufen", as buyers write: "ich suchen und kaufen Autos"; not "Autos zu kaufen". */
+const BUY_CARS = /(?<!\bzu )\bkauf(?:e|en) (?:\S+ )?(?:autos|fahrzeuge|pkws|kfzs|gebrauchtwagen|unfallwagen|unfallautos|wohnmobile)\b/;
+
+/**
+ * Dealers buying up cars: "Autoankauf Unfallautos Ankauf Kfz Ankauf Wohnmobil", "BMW X5 & BMW X3
+ * ANKAUF AB BAUJAHR 2012", "Toyota Corolla, Yaris, Auris - Ankauf - Wir kaufen Ihren Toyota!",
+ * "Ihr Auto verkaufen?". Only the head of the title counts (see headOf), and buying named as a
+ * service beside the sale ("Inzahlungnahme und Ankauf möglich") does not.
+ */
+export function isBuyerAd(title: string): boolean {
+  const head = normalizeText(headOf(title));
+  const words = head.split(" ");
+  const buying = words.filter((word) => BUYING_WORD.test(word)).length;
+  // "Autoankauf & Inzahlungnahme" or "Ankauf Unfallwagen Ankauf Motorschaden" buy whatever else they say.
+  if (buying >= 2 || words.slice(0, 2).some((word) => BUYING_WORD.test(word))) return true;
+  if (buying === 1 && !BUYING_ASIDE.test(head)) return true;
+  return (
+    /\bwir kaufen\b(?! uns\b)/.test(head) ||
+    BUY_FROM.test(head) ||
+    BUY_CARS.test(head) ||
+    /\b(?:ihr|ihren|dein|deinen) (?:altes |gebrauchtes )?(?:auto|altauto|fahrzeug|pkw|kfz|wagen|wohnmobil|gebrauchtwagen|unfallwagen) (?:verkaufen|loswerden)\b/.test(head)
+  );
+}
+
+/**
+ * Wanted ads that name the search later in the title: "Skoda Octavia gesucht Motorschaden
+ * Getriebeschaden", "Volvo V70 von privat gesucht", "Porsche 992 Turbo S Cabriolet SUCHE , SUCHE",
+ * "Mercedes-Benz E 220 ich suchen und kaufen Autos". Not when the search is for a buyer ("neuer
+ * Besitzer gesucht", "suche Käufer") or a question ("Weihnachtsgeschenk gesucht? Smart fortwo"),
+ * and not in swap ads, which offer a car as well ("TAUSCH bevorzugt / 7-Sitzer gesucht").
+ */
+export function seeksCar(title: string): boolean {
+  const text = normalizeText(title);
+  if (/\btausch\w*\b/.test(text)) return false;
+  const words = text.split(" ");
+  const questions = new Set(
+    [...title.matchAll(/\b(?:gesucht|suche|suchen)\b\s*\?/gi)].map((match) => normalizeText(match[0])),
+  );
+  return words.some((word, i) => {
+    const seeking = word === "gesucht" || (word === "suche" && i > 1) || ((word === "suche" || word === "suchen") && words[i - 1] === "ich");
+    if (!seeking || questions.has(word) || SEARCH_NOUN_BEFORE.has(words[i - 1])) return false;
+    // Who is sought stands before "gesucht" ("neuer Besitzer gesucht") and after or before "suche"
+    // ("suche neuen Besitzer", "Käufer suche"); "gesucht für Bastler" still seeks a car.
+    const sought = [...words.slice(Math.max(0, i - 3), i), ...(word === "gesucht" ? [] : words.slice(i + 1, i + 4))].join(" ");
+    return !new RegExp(String.raw`(?:^| )${BUYER_WORDS}(?: |$)`).test(sought);
+  });
+}
+
+/**
+ * The start of a seller's description, as dealers buying up cars write it: "KFZ Handel Berlin
+ * kauft ihr Auto auf. Wir kaufen Gebrauchtwagen …", "Autoankauf aller Marken", "Ankauf von
+ * Unfallwagen". Only the opening counts: dealers' sale ads often end with "Wir kaufen auch Ihr
+ * Fahrzeug". The text is looked at, never kept.
+ */
+export function isBuyerText(description: string | null | undefined): boolean {
+  if (!description) return false;
+  // Sentence by sentence: "… ein neues kaufe. Ihr bekommt …" is no "kaufe Ihr".
+  return description
+    .slice(0, 300)
+    .split(/[.!?;:\n]+/)
+    .map(normalizeText)
+    .some(
+      (sentence) =>
+        /\bkauf(?:e|en|t) (?:\S+ )?(?:ihr|ihre|ihren|dein|deine|deinen|euer|eure|alle|jedes|jeden|jede)\b/.test(sentence) ||
+        /\bwir kaufen\b(?! (?:uns|mir|ein|eine|einen)\b)/.test(sentence) ||
+        /\b\w+(?:ankauf|anakuf)\b/.test(sentence) ||
+        /\b(?:ankauf|anakuf) (?:von|aller|alle|jeglicher|ihres|deines|gegen)\b/.test(sentence),
+    );
+}
+
+/**
+ * A listing whose description opens like a buyer's (see isBuyerText) and whose title names no
+ * make: "Unfallwagen | Motorschaden | Getriebeschaden" with "Wir kaufen Ihr Auto …". A title that
+ * names a car keeps the listing, since dealers' sale ads may open with their buying slogan too.
+ */
+export function isBuyerListing(title: string, description: string | null | undefined): boolean {
+  return isBuyerText(description) && findMakeInTitle(headOf(title)) === null;
 }
 
 /** "*Suche*", "(Suche)", "[SUCHE]", "!!Suche!!": sellers mark wanted ads like this anywhere in the title. */
@@ -277,7 +385,8 @@ export function hasWantedMarker(text: string): boolean {
 const SEEKS_BUYER = /(?:^| )(?:besitzer|eigentumer|liebhaber|bastler|schrauber|abholer|zuhause|heim|kaufer|kaeufer|abnehmer|interessent\w*|nachfolger|halter|tausch\w*) suche$/;
 
 function endsWithSuche(text: string): boolean {
-  return / suche$/.test(text) && !SEEKS_BUYER.test(text);
+  const before = text.split(" ").at(-2) ?? "";
+  return / suche$/.test(text) && !SEEKS_BUYER.test(text) && !SEARCH_NOUN_BEFORE.has(before);
 }
 
 const SWAP = /^(.*?)\b(?:tausch|tausche|tauschen|wechsel|wechsle|wechseln|weschel|weschle)\b((?: \S+){0,4}?) gegen\b/;

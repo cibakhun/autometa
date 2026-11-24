@@ -117,6 +117,11 @@ describe.skipIf(!url)("reviewing stored listings against the import rules", () =
         }),
         car(PORTAL, "corsa", { title: "Opel Corsa A GSI", makeSlug: "opel", modelSlug: "corsa", priceEur: 6500, mileageKm: 0, firstRegistration: "1984-05-01" }),
         car(PORTAL, "future", { title: "Hyundai IONIQ 3 Trend", makeSlug: "hyundai", modelSlug: null, firstRegistration: "2027-01-01" }),
+        // A dealer buying up cars (live on 2026-11-24), and a dealer's sale ad that ends in its slogan.
+        car(PORTAL, "ankauf", { title: "Autoankauf Unfallautos Ankauf Kfz Ankauf Wohnmobil Ankauf SUV", priceEur: 2000, mileageKm: 99_999 }),
+        car(PORTAL, "slogan", { title: "Opel Astra *AHK *PDC *AU/HU *KFZ ANKAUF AS FAIR", makeSlug: "opel", modelSlug: "astra", priceEur: 3799 }),
+        car(PORTAL, "gesucht", { title: "Volvo V70 von privat gesucht", priceEur: 3200 }),
+        car(PORTAL, "99999", { title: "Toyota iQ 1.0", makeSlug: "toyota", modelSlug: null, priceEur: 3210, mileageKm: 99_999 }),
       ]),
     );
     await runIngest(pool, portal(DEMO, [car(DEMO, "demo-wanted", { title: "Suche Golf 7" })]));
@@ -126,11 +131,13 @@ describe.skipIf(!url)("reviewing stored listings against the import rules", () =
     await pool.query("update listings set status = 'gone', gone_reason = 'missed' where external_id = 'puma'");
 
     const first = await reviewStoredListings(pool, NOW);
-    expect(first).toEqual({ ran: true, reviewed: 8, filtered: 3, corrected: 3 });
+    expect(first).toEqual({ ran: true, reviewed: 12, filtered: 5, corrected: 4 });
 
     expect(await row("ok")).toMatchObject({ status: "active", gone_reason: null, first_registration: "2020-03-01", mileage_km: 50_000 });
     expect(await row("swap-ok")).toMatchObject({ status: "active" });
-    for (const id of ["wanted", "swap", "962"]) expect(await row(id), id).toMatchObject({ status: "gone", gone_reason: "filtered" });
+    for (const id of ["wanted", "swap", "962", "ankauf", "gesucht"]) expect(await row(id), id).toMatchObject({ status: "gone", gone_reason: "filtered" });
+    expect(await row("slogan")).toMatchObject({ status: "active", mileage_km: 50_000 });
+    expect(await row("99999")).toMatchObject({ status: "active", mileage_km: null });
     expect(await row("puma")).toMatchObject({ status: "gone", gone_reason: "missed" });
     expect(await row("997")).toMatchObject({ status: "active", first_registration: null, first_registration_year_only: false, hu_basis: null });
     expect(await row("corsa")).toMatchObject({ status: "active", first_registration: "1984-05-01", mileage_km: null });

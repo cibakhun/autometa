@@ -3,6 +3,7 @@ import {
   detectFuel,
   detectTransmission,
   findMakeInTitle,
+  isBuyerListing,
   normalizeText,
   isYearOnlyRegistration,
   parseFirstRegistration,
@@ -30,7 +31,9 @@ import { checkListingPages, portalText } from "./listing-check";
  * neither seen nor confirmed for staleAfterDays leaves the search.
  *
  * The result list does not say whether a seller is a dealer or a private person, so the seller
- * type stays unknown. Description texts and seller names are never stored.
+ * type stays unknown. Description texts and seller names are never stored; the opening of a
+ * description is only looked at for dealers buying up cars (see isBuyerListing), and only that
+ * yes or no is kept.
  */
 
 export const KLEINANZEIGEN: SourceInfo = {
@@ -112,6 +115,15 @@ export interface KleinanzeigenItem {
   listMake: string | null;
   /** Address of the list's preview photo on Kleinanzeigen's image server. */
   image: string | null;
+  /** Set when the description's opening is a dealer's buying up cars (see isBuyerListing); the text itself is never kept. */
+  buyerAd?: true;
+}
+
+/** Text of a seller's description fragment, with line breaks and paragraphs kept as line breaks. */
+export function descriptionText(html: string): string {
+  return decodeEntities(html.replace(/<br\s*\/?>|<\/p\s*>/gi, "\n").replace(/<[^>]*>/g, " "))
+    .replace(/[ \t]+/g, " ")
+    .trim();
 }
 
 /** Reads the result entries of a list page. Entries without an id or link are left out. */
@@ -131,7 +143,9 @@ export function parseKleinanzeigenPage(html: string, listMake: string | null = n
       .map((m) => textOf(m[1]))
       .filter((text) => /^(\d{1,3}(\.\d{3})*|\d+) €( VB)?$|^VB$|^Zu verschenken$/.test(text));
     // Facts come from the short text nodes outside the seller's description, which can hold
-    // anything (names, phone numbers) and is never read.
+    // anything (names, phone numbers). The description is only looked at for a buyer's opening.
+    const description = article.match(/<(p|div)\b[^>]*class="[^"]*description[^"]*"[^>]*>([\s\S]*?)<\/\1>/)?.[2];
+    const buyerAd = description !== undefined && isBuyerListing(title, descriptionText(description));
     const withoutDescription = article.replace(/<(p|div)\b[^>]*class="[^"]*description[^"]*"[^>]*>[\s\S]*?<\/\1>/g, "");
     const texts = [...withoutDescription.matchAll(/>([^<>]+)</g)].map((m) => decodeEntities(m[1]).trim()).filter(Boolean);
     // "10115 Berlin", "80331 München - Altstadt": a place name has no digits.
@@ -154,6 +168,7 @@ export function parseKleinanzeigenPage(html: string, listMake: string | null = n
       city: place ? place[2].trim() : null,
       listMake,
       image: image ? decodeEntities(image) : null,
+      ...(buyerAd ? { buyerAd: true as const } : {}),
     });
   }
   return items;
@@ -202,12 +217,19 @@ export function parseKleinanzeigenPrice(text: string | null): number | null {
   return price !== null && price >= 100 ? price : null;
 }
 
+/** The seller's description on an ad's own page. */
+const DESCRIPTION = /<(\w+)\b[^>]*\bid="viewad-description-text"[^>]*>([\s\S]*?)<\/\1\s*>/i;
+
 /**
  * The price an ad's own page asks and the day it was put online, from the boxes under its title.
  * Anything not shown in the expected form is left out, so a changed page changes no listing.
+ * Whether the ad is a dealer's buying up cars comes from its description's opening (see
+ * isBuyerListing), which is looked at and dropped.
  */
-export function kleinanzeigenFacts(page: FetchedPage, now = Date.now()): PageFacts {
+export function kleinanzeigenFacts(page: FetchedPage, now = Date.now(), ref?: ListingRef): PageFacts {
   const facts: PageFacts = {};
+  const description = page.text.match(DESCRIPTION)?.[2];
+  if (ref?.title && description !== undefined && isBuyerListing(ref.title, descriptionText(description))) facts.notForSale = true;
   // Without scripts and the seller's description: only the portal's own boxes count.
   const html = portalText(page.text);
   const box = html.match(PRICE_BOX);
@@ -230,6 +252,7 @@ export function kleinanzeigenFacts(page: FetchedPage, now = Date.now()): PageFac
 
 export function normalizeKleinanzeigen(raw: RawListing): NormalizedListing | null {
   const item = raw.payload as unknown as KleinanzeigenItem;
+  if (item.buyerAd) return null;
   // Cars given away ("Zu verschenken") are kept at 0 €; other prices under 100 € are placeholders.
   const giveaway = item.price === "Zu verschenken";
   const price = giveaway ? 0 : item.price && /\d/.test(item.price) ? parseInteger(item.price) : null;
@@ -317,7 +340,7 @@ export function createKleinanzeigenAdapter(options: KleinanzeigenOptions): Sourc
     staleAfterDays: options.staleAfterDays ?? 2,
     normalize: normalizeKleinanzeigen,
     checkListings: (due) =>
-      checkListingPages(due, { fetcher, log, verdict: kleinanzeigenVerdict, facts: (_ref, page) => kleinanzeigenFacts(page) }),
+      checkListingPages(due, { fetcher, log, verdict: kleinanzeigenVerdict, facts: (ref, page) => kleinanzeigenFacts(page, Date.now(), ref) }),
     async *fetch() {
       failuresInARow = 0;
       const seen = new Set<string>();

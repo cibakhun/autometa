@@ -9,7 +9,7 @@ import type { NormalizedListing } from "./types";
  * cannot be right becomes unknown. The same rules review the listings already stored (see
  * src/ingest/review.ts); bump LISTING_RULES_VERSION when one of them changes, so they do.
  */
-export const LISTING_RULES_VERSION = 1;
+export const LISTING_RULES_VERSION = 2;
 
 export type Rejection = "not_for_sale" | "placeholder_price" | "implausible_price";
 
@@ -153,9 +153,27 @@ export function plausibleRegistration(
   return registration;
 }
 
-/** 0 km on a car registered a year ago or earlier is an empty field, not a new car: unknown. */
+/** From this mileage on a car's odometer reading is a typo or a placeholder (1,260,900 km for a BMW 528). */
+const MAX_MILEAGE_KM = 1_000_000;
+
+/**
+ * Mileages sellers type when they do not want to name one: the same digit five times or more
+ * (99,999 km, 222,222 km), 9,999 km and runs of 1234… (1,234 km, 123,456 km).
+ */
+export function isPlaceholderMileage(mileageKm: number): boolean {
+  const digits = String(mileageKm);
+  return (digits.length >= 5 && /^(\d)\1+$/.test(digits)) || digits === "9999" || (mileageKm >= 1234 && "123456789".startsWith(digits));
+}
+
+/**
+ * Unknown instead of a mileage that cannot be right: 0 km on a car registered a year ago or
+ * earlier (an empty field, not a new car), a placeholder (see isPlaceholderMileage) or a million
+ * kilometres and more.
+ */
 export function plausibleMileage(mileageKm: number | null, firstRegistration: string | null, now = new Date()): number | null {
+  if (mileageKm === null) return null;
   if (mileageKm === 0 && firstRegistration !== null && firstRegistration < monthStart(now, -USED_CAR_MONTHS)) return null;
+  if (isPlaceholderMileage(mileageKm) || mileageKm >= MAX_MILEAGE_KM) return null;
   return mileageKm;
 }
 
