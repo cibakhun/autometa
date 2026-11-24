@@ -142,6 +142,25 @@ describe.skipIf(!url)("reviewing stored listings against the import rules", () =
     expect(await reviewStoredListings(pool, NOW)).toEqual({ ran: false, reviewed: 0, filtered: 0, corrected: 0 });
   });
 
+  it("writes place names as the postal code data does where the portal's are cut or misspelled", async () => {
+    await runIngest(
+      pool,
+      portal(PORTAL, [
+        car(PORTAL, "kreutz", { zip: "14550", city: "Gross kreutz" }),
+        car(PORTAL, "vohburg", { zip: "85088", city: "Vohburg a.d.Donau, St" }),
+        car(PORTAL, "kreuznach", { zip: "55543", city: "Bad Kreuznach, Stadt" }),
+        car(PORTAL, "elsewhere", { zip: "85088", city: "Ingolstadt" }),
+      ]),
+    );
+    const { rows } = await pool.query<{ external_id: string; city: string }>("select external_id, city from listings order by external_id");
+    expect(Object.fromEntries(rows.map((r) => [r.external_id, r.city]))).toEqual({
+      kreutz: "Groß Kreutz",
+      vohburg: "Vohburg an der Donau",
+      kreuznach: "Bad Kreuznach",
+      elsewhere: "Ingolstadt",
+    });
+  });
+
   it("leaves listings taken out by the rules out of the market values", async () => {
     // Six comparable Golfs and a wanted ad at a giveaway price, all within the gone window.
     const golfs = [17_000, 18_000, 19_000, 20_000, 21_000, 22_000].map((price, i) => car(PORTAL, `golf-${i}`, { priceEur: price }));

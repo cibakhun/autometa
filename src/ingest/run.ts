@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 import { detectDamage, type DamageKind } from "@/core/damage";
 import { detectInspection, type Inspection } from "@/core/inspection";
+import { cleanCity } from "@/core/places";
 import type { NormalizedListing } from "@/core/types";
 import type { CheckResult, RawListing, SourceAdapter } from "./adapter";
 import { BlockedError } from "./http/fetcher";
@@ -233,8 +234,8 @@ async function ingestLocked(client: PoolClient, adapter: SourceAdapter): Promise
   const runId = Number(run.rows[0].id);
   const startedAt = run.rows[0].started_at;
 
-  const postal = await client.query<{ zip: string; lat: number; lng: number }>("select zip, lat, lng from postal_codes");
-  const coords = new Map(postal.rows.map((row) => [row.zip, { lat: row.lat, lng: row.lng }]));
+  const postal = await client.query<{ zip: string; city: string; lat: number; lng: number }>("select zip, city, lat, lng from postal_codes");
+  const places = new Map(postal.rows.map((row) => [row.zip, row]));
 
   const result: IngestResult = { runId, fetched: 0, upserted: 0, skipped: 0, gone: 0, checked: 0 };
   let raws: RawListing[] = [];
@@ -254,11 +255,12 @@ async function ingestLocked(client: PoolClient, adapter: SourceAdapter): Promise
         if (!listing) {
           result.skipped += 1;
         } else {
-          if (listing.lat === null && listing.zip && coords.has(listing.zip)) {
-            const point = coords.get(listing.zip)!;
-            listing.lat = point.lat;
-            listing.lng = point.lng;
+          const place = listing.zip ? places.get(listing.zip) : undefined;
+          if (listing.lat === null && place) {
+            listing.lat = place.lat;
+            listing.lng = place.lng;
           }
+          listing.city = cleanCity(listing.city, place?.city);
           pending.push({
             listing: { ...listing, sourceId: source.id },
             segment: raw.segment ?? null,

@@ -60,3 +60,59 @@ export const PLACES: Place[] = [
   { zip: "37073", city: "Göttingen", lat: 51.5413, lng: 9.9158 },
   { zip: "87435", city: "Kempten (Allgäu)", lat: 47.7286, lng: 10.3158 },
 ];
+
+/**
+ * Designations official place names carry after a comma, as AutoScout24 passes them on:
+ * "Bad Kreuznach, Stadt", "Beilngries, St", "Pöttmes, M" (Markt), "Erding, GKSt", "Lübeck, Hansestadt".
+ */
+const DESIGNATION = /,\s*(?:st\.?|m\.?|gkst|gem\.?|stadt|markt|gemeinde|flecken|\p{L}*stadt)\s*$/iu;
+/** Words that stay lower case inside a place name: "Frankfurt am Main", "Weil der Stadt". */
+const LOWER_CASE_WORDS = new Set(["am", "an", "auf", "bei", "das", "dem", "den", "der", "die", "im", "in", "ob", "unter", "vom", "von", "vor", "zu", "zum", "zur"]);
+
+/**
+ * A place name as people write it. Drops designations after a comma, and takes the name the
+ * postal code data has for the listing's postal code when it is the same place written another
+ * way ("Gross kreutz" → "Groß Kreutz", "viersen" → "Viersen") or when the portal's name was cut or
+ * abbreviated and starts like it ("Vohburg a.d.Donau" → "Vohburg an der Donau", "Pfaffenhofen
+ * (bei Münche" → "Pfaffenhofen an der Ilm"). A name of its own stays, since the postal code data
+ * often names the district ("Dresden", not "Dresden Innere Altstadt"). Names written all in lower
+ * or upper case get capitals.
+ */
+export function cleanCity(city: string | null | undefined, placeName?: string | null): string | null {
+  const place = placeName?.trim() || null;
+  const name = (city ?? "").replace(/\s+/g, " ").trim().replace(DESIGNATION, "").trim();
+  if (!name) return place;
+  if (place) {
+    if (placeKey(name) === placeKey(place)) return place;
+    if (looksCut(name) && placeKey(firstWord(name)) === placeKey(firstWord(place))) return place;
+  }
+  return /\p{Ll}/u.test(name) && /\p{Lu}/u.test(name) ? name : capitalize(name);
+}
+
+/** Compares place names without case, accents, "ß" and "ue" spellings, or punctuation. */
+function placeKey(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/ß/g, "ss")
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .replace(/([aou])e/g, "$1")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+const firstWord = (name: string) => name.split(/[\s(/.,-]/)[0];
+
+/** An opened bracket that is never closed, or abbreviations like "a.d.", "a.Main", "i. OB". */
+function looksCut(name: string): boolean {
+  const opened = (name.match(/\(/g) ?? []).length;
+  const closed = (name.match(/\)/g) ?? []).length;
+  return opened !== closed || /(?:^|[\s(])[abdiouv]\.\s?\p{L}/iu.test(name);
+}
+
+function capitalize(name: string): string {
+  return name
+    .toLowerCase()
+    .split(/(\s+|-|\()/)
+    .map((word, i) => (i > 0 && LOWER_CASE_WORDS.has(word) ? word : word.charAt(0).toUpperCase() + word.slice(1)))
+    .join("");
+}
