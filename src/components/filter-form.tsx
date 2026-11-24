@@ -16,6 +16,7 @@ import {
   SORTS,
 } from "@/search/filters";
 import type { MakeFacet, SourceFacet } from "@/search/query";
+import { activeFilters, slugName } from "./active-filters";
 import { SearchLink, Spinner, useSearchNavigation } from "./search-transition";
 
 const KM_STEPS = [10_000, 25_000, 50_000, 75_000, 100_000, 150_000, 200_000];
@@ -41,7 +42,18 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
   const searching = pendingOrigin === "form";
   const [make, setMake] = useState(filters.make ?? "");
   const [open, setOpen] = useState(false);
-  const models = facets.find((f) => f.slug === make)?.models ?? [];
+  const activeCount = activeFilters(filters).length;
+  // A make or model from the URL without active listings (e.g. from an old saved search) stays
+  // selectable, so the form shows the filter that is actually applied instead of "Alle".
+  const makes =
+    filters.make && !facets.some((f) => f.slug === filters.make)
+      ? [...facets, { slug: filters.make, name: slugName(filters.make), count: 0, models: [] }]
+      : facets;
+  const knownModels = makes.find((f) => f.slug === make)?.models ?? [];
+  const models =
+    make === filters.make && filters.model && !knownModels.some((m) => m.slug === filters.model)
+      ? [...knownModels, { slug: filters.model, name: slugName(filters.model), count: 0 }]
+      : knownModels;
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -57,14 +69,26 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
 
   return (
     <>
+      {/* Phones: the long form stays folded away above the results until it is needed. */}
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-controls="filters"
-        className="w-full rounded-md border border-line bg-surface px-3 py-2 text-sm font-medium md:hidden"
+        className="flex w-full items-center justify-between gap-2 rounded-md border border-line bg-surface px-3 py-2.5 text-sm font-medium md:hidden"
       >
-        {open ? "Filter ausblenden" : "Filter anzeigen"}
+        <span className="inline-flex items-center gap-2">
+          <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M4 6h16M7 12h10M10 18h4" />
+          </svg>
+          {open ? "Filter ausblenden" : "Filter anzeigen"}
+          {activeCount > 0 && (
+            <span className="rounded-full bg-accent px-2 py-0.5 text-xs font-semibold text-on-accent">{activeCount} aktiv</span>
+          )}
+        </span>
+        <svg viewBox="0 0 24 24" className={`h-4 w-4 text-muted transition-transform ${open ? "rotate-180" : ""}`} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M6 9l6 6 6-6" />
+        </svg>
       </button>
       <form
         id="filters"
@@ -83,7 +107,7 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
             <label htmlFor="make" className={labelClass}>Marke</label>
             <select id="make" name="make" value={make} onChange={(e) => setMake(e.target.value)} className={fieldClass}>
               <option value="">Alle</option>
-              {facets.map((f) => (
+              {makes.map((f) => (
                 <option key={f.slug} value={f.slug}>
                   {f.name} ({nf.format(f.count)})
                 </option>
@@ -159,7 +183,7 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
             <label htmlFor="psMin" className={labelClass}>Leistung ab</label>
             <select id="psMin" name="psMin" defaultValue={filters.psMin ?? ""} className={fieldClass}>
               <option value="">Beliebig</option>
-              {PS_STEPS.map((ps) => <option key={ps} value={ps}>{ps} PS</option>)}
+              {withCurrent(PS_STEPS, filters.psMin).map((ps) => <option key={ps} value={ps}>{ps} PS</option>)}
             </select>
           </div>
         </div>
@@ -278,7 +302,8 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
           </select>
         </div>
 
-        <div className="flex gap-2 pt-1">
+        {/* Stays at the bottom of the screen while the long form scrolls by. */}
+        <div className="sticky bottom-0 -mx-4 -mb-4 flex gap-2 rounded-b-xl border-t border-line bg-surface px-4 py-3">
           <button
             type="submit"
             className="inline-flex flex-1 items-center justify-center gap-2 rounded-md bg-accent px-3 py-2 text-sm font-semibold text-on-accent hover:bg-accent-strong"
