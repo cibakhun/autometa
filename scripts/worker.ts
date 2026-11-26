@@ -2,6 +2,7 @@ import "./env";
 import type { Pool } from "pg";
 import { getPool } from "@/lib/db";
 import { ADAPTERS } from "@/ingest/adapters";
+import { reviewBodyTypes } from "@/ingest/body-review";
 import { refreshDefectProfiles } from "@/ingest/defects/refresh";
 import { intervalMinutes, readBoolean, readList, runMinutes } from "@/ingest/http/config";
 import { ingestSources } from "@/ingest/pipeline";
@@ -23,6 +24,9 @@ import { runAlerts } from "@/alerts/run";
  *
  * And every ALERT_INTERVAL_MINUTES (default 5) the alert job pushes what saved searches found and
  * what changed on watch lists (src/alerts/run.ts); ALERTS=false switches it off.
+ *
+ * Once after new body type rules, the stored listings get their body type again
+ * (src/ingest/body-review.ts), next to the first round.
  */
 
 const log = (message: string) => console.log(`[worker] ${new Date().toISOString()} ${message}`);
@@ -42,9 +46,9 @@ async function main() {
   const fetchMinutes = runMinutes();
   const alertMs = alertIntervalMs();
   // Each source holds one connection for its whole run; the defect refresh and the repair
-  // estimates need one each besides, the alert job two, plus one to spare. Otherwise they wait
-  // for a source to end.
-  process.env.DATABASE_POOL_MAX ??= String(sources.length + 5);
+  // estimates need one each besides, the alert job two, the body type review one, plus one to
+  // spare. Otherwise they wait for a source to end.
+  process.env.DATABASE_POOL_MAX ??= String(sources.length + 6);
   const pool = getPool();
   let stopping = false;
   const stop = () => {
@@ -57,6 +61,12 @@ async function main() {
   log(`importing ${sources.join(", ")} every ${intervalMs / 60_000} minutes, fetching up to ${fetchMinutes} minutes each`);
   const defects = readBoolean("RDW_PROFILES", true) ? defectLoop(pool, () => stopping) : Promise.resolve();
   const alerts = readBoolean("ALERTS", true) ? alertLoop(pool, alertMs, () => stopping) : Promise.resolve();
+  const bodies = reviewBodyTypes(pool, () => stopping).then(
+    (result) => {
+      if (result.ran) log(`body types: ${result.changed} of ${result.reviewed} active listings changed`);
+    },
+    (error) => log(`body types: review failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`),
+  );
   while (!stopping) {
     const started = Date.now();
     try {
@@ -69,7 +79,7 @@ async function main() {
     log(`next round in ${Math.round(wait / 60_000)} minutes`);
     await pause(wait);
   }
-  await Promise.all([defects, alerts]);
+  await Promise.all([defects, alerts, bodies]);
   await pool.end();
 }
 
