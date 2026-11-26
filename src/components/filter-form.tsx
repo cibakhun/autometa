@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { BODY_TYPE_LABELS, BODY_TYPES, FUEL_LABELS, FUELS, SELLER_TYPE_LABELS, SELLER_TYPES, TRANSMISSION_LABELS, TRANSMISSIONS } from "@/core/types";
 import { DEAL_FILTER_LABELS, DEAL_FILTERS } from "@/core/deal";
+import { VERDICT_FILTER_LABELS, VERDICT_FILTERS, VERDICT_RULES } from "@/core/verdict";
 import { DIFFICULTY_LABELS, type Difficulty } from "@/core/repairs";
 import type { SearchFilters } from "@/search/filters";
 import {
@@ -144,6 +145,17 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
             <label htmlFor="priceMax" className={labelClass}>Preis bis (€)</label>
             <input id="priceMax" name="priceMax" type="number" min={0} step={1} inputMode="numeric" defaultValue={filters.priceMax} className={fieldClass} />
           </div>
+        </div>
+
+        <div>
+          <label htmlFor="urteil" className={labelClass}>Urteil</label>
+          <select id="urteil" name="urteil" defaultValue={filters.urteil ?? ""} aria-describedby="urteil-hint" className={fieldClass}>
+            <option value="">Beliebig</option>
+            {VERDICT_FILTERS.map((v) => <option key={v} value={v}>{VERDICT_FILTER_LABELS[v]}</option>)}
+          </select>
+          <p id="urteil-hint" className="mt-1 text-xs text-muted">
+            Anschauen: ohne Schaden, mind. {VERDICT_RULES.goodDealPct} % unter einem verlässlichen Marktwert, HU nicht abgelaufen. Schrauber: Schaden genannt, die Flip-Rechnung erreicht deine Mindestmarge bei deinem Level (Einstellungen).
+          </p>
         </div>
 
         <div>

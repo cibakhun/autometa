@@ -63,7 +63,7 @@ async function WatchList() {
     <ul className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {listings.map((listing) => (
         <li key={listing.id}>
-          <ResultCard listing={listing} minMarginEur={settings.minMarginEur} favorite note={<SavedNote listing={listing} />} />
+          <ResultCard listing={listing} settings={settings} favorite note={<SavedNote listing={listing} />} />
         </li>
       ))}
     </ul>

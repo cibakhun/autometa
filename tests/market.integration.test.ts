@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { DEFAULT_FLIP_SETTINGS } from "@/core/flip";
+import { listingVerdict } from "@/core/verdict";
 import { backfillDamage, updateMarketValues } from "@/ingest/market";
 import { migrate } from "@/ingest/migrate";
 import { seedReferenceData } from "@/ingest/seed";
@@ -173,6 +175,39 @@ describe.skipIf(!url)("market values against Postgres", () => {
     const deals = await searchListings(pool, parseFilters({ deal: "10" }), null);
     expect(deals.items.map((item) => item.id).sort()).toEqual([good, better].sort());
     expect((await searchListings(pool, parseFilters({ deal: "20" }), null)).items.map((item) => item.id)).toEqual([better]);
+  });
+
+  it("filters by verdict as the card judges it", async () => {
+    for (let i = 0; i < 20; i++) await addCar({ price: 9000 + i * 100 });
+    const good = await addCar({ price: 8000 });
+    const goodNoHu = await addCar({ price: 8000, huBasis: "expired" });
+    const fair = await addCar({ price: 9800 });
+    const broken = await addCar({ title: "VW Golf Motorschaden", price: 2000, damage: ["engine"] });
+    const hard = await addCar({ title: "VW Golf Getriebeschaden", price: 2000, damage: ["gearbox"] });
+    const dear = await addCar({ title: "VW Golf Motorschaden", price: 8800, damage: ["engine"] });
+    await updateMarketValues(pool);
+    // Repair estimates as src/ingest/repairs.ts stores them.
+    await pool.query(
+      `update listings set vehicle_class = 'compact', repair_parts_min_eur = 300, repair_parts_max_eur = 500, repair_hours_min = 4,
+              repair_hours_max = 6, repair_difficulty = case when id = $2 then 5 else 2 end, repair_confidence = 'high', repair_needs_tow = false
+        where id = any($1::int8[])`,
+      [[broken, hard, dear], hard],
+    );
+
+    const ids = async (urteil: string) => (await searchListings(pool, parseFilters({ urteil }), null)).items;
+    const look = await ids("anschauen");
+    expect(look.map((item) => item.id)).toEqual([good]);
+    const repair = await ids("schrauber");
+    expect(repair.map((item) => item.id)).toEqual([broken]);
+    // The card says the same.
+    for (const item of [...look, ...repair]) {
+      expect(listingVerdict(item, DEFAULT_FLIP_SETTINGS).verdict).toBe(item.id === good ? "anschauen" : "schrauber");
+    }
+    const all = new Map((await searchListings(pool, parseFilters({ priceMax: "9800", sort: "price_asc" }), null)).items.map((item) => [item.id, item]));
+    expect(listingVerdict(all.get(goodNoHu)!, DEFAULT_FLIP_SETTINGS).verdict).toBe("fair");
+    expect(listingVerdict(all.get(hard)!, DEFAULT_FLIP_SETTINGS).verdict).toBe("eher_nicht");
+    expect(listingVerdict(all.get(dear)!, DEFAULT_FLIP_SETTINGS).verdict).toBe("eher_nicht");
+    expect(listingVerdict(all.get(fair)!, DEFAULT_FLIP_SETTINGS).verdict).toBe("fair");
   });
 
   it("calls a market value unsure with few comparable cars or a wide price range", async () => {
