@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { BODY_TYPE_LABELS, BODY_TYPES, FUEL_LABELS, FUELS, SELLER_TYPE_LABELS, SELLER_TYPES, TRANSMISSION_LABELS, TRANSMISSIONS } from "@/core/types";
+import { DEAL_FILTER_LABELS, DEAL_FILTERS } from "@/core/deal";
 import { DIFFICULTY_LABELS, type Difficulty } from "@/core/repairs";
 import type { SearchFilters } from "@/search/filters";
 import {
@@ -143,6 +144,17 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
             <label htmlFor="priceMax" className={labelClass}>Preis bis (€)</label>
             <input id="priceMax" name="priceMax" type="number" min={0} step={1} inputMode="numeric" defaultValue={filters.priceMax} className={fieldClass} />
           </div>
+        </div>
+
+        <div>
+          <label htmlFor="deal" className={labelClass}>Schnäppchen</label>
+          <select id="deal" name="deal" defaultValue={filters.deal ?? ""} aria-describedby="deal-hint" className={fieldClass}>
+            <option value="">Beliebig</option>
+            {DEAL_FILTERS.map((d) => <option key={d} value={d}>{DEAL_FILTER_LABELS[d]}</option>)}
+          </select>
+          <p id="deal-hint" className="mt-1 text-xs text-muted">
+            Nur Autos ohne Schadenshinweis, deren Marktwert auf genug ähnlichen Angeboten beruht. Über 50 % darunter zählt nicht: Da steckt fast immer etwas dahinter.
+          </p>
         </div>
 
         <div>

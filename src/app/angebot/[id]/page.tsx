@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { cache, Suspense } from "react";
 import { DAMAGE_LABELS } from "@/core/damage";
+import { isTooCheap, MARKET_CONFIDENCE_LABELS } from "@/core/deal";
 import { coveredComponents, hiddenDefectRisk, type DefectProfile } from "@/core/defects";
 import { onlineSpan, priceStory, type OnlineSpan, type PricePoint } from "@/core/price-history";
 import type { FlipSettings } from "@/core/flip";
@@ -27,6 +28,8 @@ import {
   formatPrice,
   formatRegistration,
   formatSignedPrice,
+  TOO_CHEAP_WARNING,
+  unsureMarketReason,
 } from "@/lib/format";
 import { currentDevice } from "@/lib/profile";
 import { favoriteIds } from "@/profiles/favorites";
@@ -150,7 +153,12 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
                 gesenkt am {formatDayTime(listing.priceDroppedAt)}, vorher <s>{formatPrice(listing.priceBeforeDropEur)}</s>
               </p>
             )}
-            {gap && <p className={`text-sm ${gap.below ? "font-medium text-good-text" : "text-muted"}`}>{gap.text}</p>}
+            {gap && (
+              <p className={`text-sm ${gap.below && !isTooCheap(listing) && listing.marketConfidence !== "low" ? "font-medium text-good-text" : "text-muted"}`}>
+                {gap.text}
+                {listing.marketConfidence === "low" && " (Marktwert unsicher)"}
+              </p>
+            )}
             <Actions listing={listing} saved={favorites.has(listing.id)} />
           </div>
         </div>
@@ -286,7 +294,18 @@ function ConditionAndMarket({ listing }: { listing: ListingDetail }) {
         {listing.marketPriceEur !== null && gap ? (
           <>
             <p className="mt-1 text-xl font-bold">ca. {formatEuro(listing.marketPriceEur)}</p>
-            <p className={gap.below ? "font-medium text-good-text" : "text-muted"}>Dieses Angebot: {gap.text}</p>
+            <p className={gap.below && !damaged && !isTooCheap(listing) && listing.marketConfidence !== "low" ? "font-medium text-good-text" : "text-muted"}>
+              Dieses Angebot: {gap.text}
+            </p>
+            {isTooCheap(listing) && (
+              <p className="mt-2 rounded-md border border-warn-line bg-warn-bg px-3 py-2 text-sm font-medium text-warn-text">{TOO_CHEAP_WARNING}</p>
+            )}
+            {listing.marketConfidence && (
+              <p className="mt-1">
+                Verlässlichkeit des Marktwerts: <span className="font-medium">{MARKET_CONFIDENCE_LABELS[listing.marketConfidence]}</span>
+                {listing.marketConfidence === "low" && <span className="text-muted"> ({unsureMarketReason(listing.marketComps)})</span>}
+              </p>
+            )}
             {listing.marketLowEur !== null && listing.marketHighEur !== null && (
               <p className="mt-1">
                 Übliche Spanne {formatEuro(listing.marketLowEur)} bis {formatEuro(listing.marketHighEur)}, die mittlere Hälfte von{" "}

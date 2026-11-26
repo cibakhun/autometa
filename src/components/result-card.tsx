@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { DAMAGE_LABELS } from "@/core/damage";
+import { isTooCheap } from "@/core/deal";
 import { FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
 import type { FlipResult } from "@/core/flip";
 import {
@@ -16,6 +17,8 @@ import {
   formatPrice,
   formatRegistration,
   formatSignedPrice,
+  TOO_CHEAP_WARNING,
+  unsureMarketReason,
 } from "@/lib/format";
 import type { ListingSummary, RepairSummary } from "@/search/query";
 import { FavoriteButton } from "./favorite-button";
@@ -58,6 +61,8 @@ export function ResultCard({
   ].filter(Boolean);
   const gap = formatMarketGap(listing.priceEur, listing.marketPriceEur);
   const damaged = listing.damage.length > 0;
+  const tooCheap = isTooCheap(listing);
+  const unsure = listing.marketConfidence === "low";
   const isNew = newSince !== undefined && listing.firstSeenAt > newSince;
   const dropped =
     listing.priceDroppedAt !== null &&
@@ -122,12 +127,21 @@ export function ResultCard({
             ))}
           </ul>
         )}
+        {tooCheap && (
+          <p className="mt-2 rounded-md border border-warn-line bg-warn-bg px-2 py-1 text-xs font-medium text-warn-text">{TOO_CHEAP_WARNING}</p>
+        )}
         {gap && listing.marketPriceEur !== null && (
           <p className="mt-2 text-sm">
             <span className="whitespace-nowrap text-muted">
               {damaged ? "Intakt" : "Marktwert"} ca. {formatPrice(listing.marketPriceEur)}&nbsp;·
             </span>{" "}
-            <span className={`whitespace-nowrap ${gap.below ? "font-medium text-good-text" : "text-muted"}`}>{gap.text}</span>
+            <span className={`whitespace-nowrap ${gap.below && !damaged && !tooCheap && !unsure ? "font-medium text-good-text" : "text-muted"}`}>{gap.text}</span>
+            {unsure && (
+              <span className="whitespace-nowrap text-muted" title={`Marktwert unsicher: ${unsureMarketReason(listing.marketComps)}`}>
+                {" "}
+                · unsicher
+              </span>
+            )}
           </p>
         )}
         {listing.flip && listing.repair && <FlipLine flip={listing.flip} repair={listing.repair} minMarginEur={minMarginEur} />}

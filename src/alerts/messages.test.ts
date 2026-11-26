@@ -31,6 +31,7 @@ const listing = (overrides: Partial<ListingSummary>): ListingSummary => ({
   damage: [],
   marketPriceEur: null,
   marketComps: null,
+  marketConfidence: null,
   repair: null,
   flip: null,
   checkedAt: "2026-11-23T10:00:00.000Z",

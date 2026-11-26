@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
 import { detectDamage } from "@/core/damage";
+import { DEAL_RULES } from "@/core/deal";
 
 /**
  * What a listing is worth comes from comparable intact listings of the same vehicle type:
@@ -29,8 +30,9 @@ export interface MarketResult {
 }
 
 /**
- * Recomputes the market value of every active listing. Listings with too few comparable ones get
- * null. Runs after each import round and at start-up.
+ * Recomputes the market value of every active listing, how far it can be trusted and, for intact
+ * listings, how many percent below it the price is (src/core/deal.ts). Listings with too few
+ * comparable ones get null. Runs after each import round and at start-up.
  */
 export async function updateMarketValues(pool: Pool): Promise<MarketResult> {
   const r = MARKET_RULES;
@@ -106,7 +108,7 @@ export async function updateMarketValues(pool: Pool): Promise<MarketResult> {
          having count(*) >= $5
        ),
        result as (
-         select l.id,
+         select l.id, l.price_eur, l.damage,
                 (round(s.median / 50) * 50)::int as price,
                 (round(s.low / 50) * 50)::int as low,
                 (round(s.high / 50) * 50)::int as high,
@@ -114,15 +116,43 @@ export async function updateMarketValues(pool: Pool): Promise<MarketResult> {
                 case when s.day_samples >= $6 then round(s.days)::int end as days
            from listings l left join stats s on s.id = l.id
           where l.status = 'active'
+       ),
+       -- How far the market value can be trusted, as marketConfidence in src/core/deal.ts.
+       judged as (
+         select r.*,
+                case when r.price is null or r.price <= 0 then null
+                     when r.comps >= $7 and (r.high - r.low) <= $8::float8 * r.price then 'high'
+                     when r.comps >= $9 and (r.high - r.low) <= $10::float8 * r.price then 'medium'
+                     else 'low' end as confidence
+           from result r
+       ),
+       -- Percent below the market value of an intact listing, as dealPercent (Math.round = floor(x + 0.5)).
+       dealt as (
+         select j.*,
+                case when j.confidence in ('high', 'medium') and j.damage = '{}' and j.price_eur > j.price * $11::float8
+                     then floor((j.price - j.price_eur) * 100.0 / j.price + 0.5)::int end as deal
+           from judged j
        )
        update listings l
           set market_price_eur = r.price, market_low_eur = r.low, market_high_eur = r.high,
-              market_comps = r.comps, market_days = r.days
-         from result r
+              market_comps = r.comps, market_days = r.days, market_confidence = r.confidence, deal_pct = r.deal
+         from dealt r
         where l.id = r.id
-          and (l.market_price_eur, l.market_low_eur, l.market_high_eur, l.market_comps, l.market_days)
-              is distinct from (r.price, r.low, r.high, r.comps, r.days)`,
-      [r.yearSpan, r.mileageShare, r.mileageMinSpanKm, r.powerShare, r.minComps, r.minDaySamples],
+          and (l.market_price_eur, l.market_low_eur, l.market_high_eur, l.market_comps, l.market_days, l.market_confidence, l.deal_pct)
+              is distinct from (r.price, r.low, r.high, r.comps, r.days, r.confidence, r.deal)`,
+      [
+        r.yearSpan,
+        r.mileageShare,
+        r.mileageMinSpanKm,
+        r.powerShare,
+        r.minComps,
+        r.minDaySamples,
+        DEAL_RULES.highComps,
+        DEAL_RULES.highSpread,
+        DEAL_RULES.mediumComps,
+        DEAL_RULES.mediumSpread,
+        DEAL_RULES.tooCheapShare,
+      ],
     );
     changed = updated.rowCount ?? 0;
     await client.query("commit");
