@@ -373,7 +373,7 @@ export function isBuyerText(description: string | null | undefined): boolean {
  * names a car keeps the listing, since dealers' sale ads may open with their buying slogan too.
  */
 export function isBuyerListing(title: string, description: string | null | undefined): boolean {
-  return isBuyerText(description) && findMakeInTitle(headOf(title)) === null;
+  return isBuyerText(description) && !namesMake(headOf(title));
 }
 
 /** "*Suche*", "(Suche)", "[SUCHE]", "!!Suche!!": sellers mark wanted ads like this anywhere in the title. */
@@ -416,6 +416,24 @@ function offersNoCarInSwap(text: string): boolean {
 
 let carKeys: { makes: string[][]; models: string[][] } | null = null;
 
+/** Makes and models of the taxonomy as word lists, built once. */
+function keysOfCars(): { makes: string[][]; models: string[][] } {
+  carKeys ??= {
+    makes: toKeys(MAKES.flatMap((make) => [make.slug, make.name, ...(make.aliases ?? [])])),
+    models: toKeys(MAKES.flatMap((make) => make.models.flatMap((model) => [model.slug, model.name, ...(model.aliases ?? [])]))),
+  };
+  return carKeys;
+}
+
+/** Whether one of the word lists stands somewhere in `within`, word for word. */
+const found = (keys: string[][], within: string[]) =>
+  keys.some((key) => within.some((_, start) => key.every((word, i) => within[start + i] === word)));
+
+/** Whether a text names a make anywhere, not only near its start: "Sehr schöner gepflegter Wagen VW Golf". */
+export function namesMake(text: string): boolean {
+  return found(keysOfCars().makes, normalizeText(text).split(" ").filter(Boolean));
+}
+
 /**
  * Things offered in a swap that are no car, whose names a model shares: "Xbox One" (MINI One),
  * "Samsung Galaxy S24" (Ford Galaxy). Next to one of them only a make or a word like "Auto" counts.
@@ -442,12 +460,7 @@ export function mentionsCar(text: string): boolean {
   const words = normalizeText(text).split(" ").filter(Boolean);
   const joined = words.join(" ");
   if (CAR_WORDS.test(joined)) return true;
-  carKeys ??= {
-    makes: toKeys(MAKES.flatMap((make) => [make.slug, make.name, ...(make.aliases ?? [])])),
-    models: toKeys(MAKES.flatMap((make) => make.models.flatMap((model) => [model.slug, model.name, ...(model.aliases ?? [])]))),
-  };
-  const found = (keys: string[][], within: string[]) =>
-    keys.some((key) => within.some((_, start) => key.every((word, i) => within[start + i] === word)));
+  const carKeys = keysOfCars();
   if (found(carKeys.makes, words)) return true;
   // A product and its model words after it ("xbox one", "samsung galaxy note 10") are no model;
   // the rest still is, before or after the product ("golf 4 mit e bike", "e bike und golf 4").

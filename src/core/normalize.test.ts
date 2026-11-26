@@ -373,6 +373,8 @@ describe("isBuyerText and isBuyerListing", () => {
   it("keeps a listing whose title names a car", () => {
     expect(isBuyerListing("Unfallwagen | Motorschaden | Getriebeschaden", "Wir kaufen Ihr Auto, Barzahlung sofort")).toBe(true);
     expect(isBuyerListing("Opel Astra *AHK *TÜV *KFZ ANKAUF AS FAIR", "KFZ Ankaufstation AS Fair: Wir kaufen Ihr Auto! Opel Astra mit TÜV")).toBe(false);
+    // The make may stand anywhere in the title.
+    expect(isBuyerListing("Sehr schöner gepflegter Wagen VW Golf", "Wir kaufen Ihr Auto! Hier ein gepflegter Golf")).toBe(false);
   });
 });
 
