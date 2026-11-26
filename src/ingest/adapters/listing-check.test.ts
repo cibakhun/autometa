@@ -189,18 +189,20 @@ describe("checkListingPages reading the price on Kleinanzeigen's ad pages", () =
       // Nothing is read from an ad that is taken down.
       { externalId: "3", outcome: "gone" },
     ]);
-    expect(logs.at(-1)).toBe("checked 3 listing pages: 2 online, 1 taken down, 0 unclear, 1 new prices");
+    expect(logs.at(-1)).toBe("checked 3 listing pages: 2 online, 1 taken down, 0 unclear, 1 new prices, 0 with vehicle facts");
   });
 
   it("does not believe prices when too many in a group changed, but keeps the outcomes", async () => {
     const due = Array.from({ length: CHECK_GROUP }, (_, i) => ref(String(i + 1), 12500));
     const changed = MAX_PRICE_CHANGES_IN_GROUP + 1;
-    const routes = Object.fromEntries(due.map((r, i) => [r.url, adPage(r.externalId, priceBoxes(i < changed ? "2.019 €" : "12.500 € VB"))]));
+    const details = `<li class="addetailslist--detail">Kraftstoffart<span class="addetailslist--detail--value">Diesel</span></li>`;
+    const routes = Object.fromEntries(due.map((r, i) => [r.url, adPage(r.externalId, priceBoxes(i < changed ? "2.019 €" : "12.500 € VB") + details)]));
     const logs: string[] = [];
     const site = fakeSite({ [`${KA}/robots.txt`]: { body: "User-agent: *\n" }, ...routes });
     const results = await collect(checkListingPages(due, { fetcher: site.fetcher, log: (m) => logs.push(m), verdict: kleinanzeigenVerdict, facts }));
     expect(results).toHaveLength(CHECK_GROUP);
-    expect(results.every((r) => r.outcome === "active" && r.priceEur === undefined && r.listedOn === "2026-11-18")).toBe(true);
+    // The other facts of the page stay.
+    expect(results.every((r) => r.outcome === "active" && r.priceEur === undefined && r.listedOn === "2026-11-18" && r.fuel === "diesel")).toBe(true);
     expect(logs.some((line) => line.startsWith(`prices ignored: ${changed} of ${CHECK_GROUP} listing pages`))).toBe(true);
   });
 

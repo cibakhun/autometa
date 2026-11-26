@@ -6,7 +6,9 @@ import {
   firstPageUrl,
   giveawayPageUrl,
   kleinanzeigenFacts,
+  kleinanzeigenVehicleFacts,
   normalizeKleinanzeigen,
+  parseMonthYear,
   pageUrl,
   parseKleinanzeigenPage,
   parseKleinanzeigenPrice,
@@ -452,6 +454,68 @@ describe("the facts on a Kleinanzeigen ad page", () => {
       <div id="viewad-extra-info"><div><span id="viewad-cntr-num"></span></div></div>
       <p id="viewad-description-text" itemprop="description">TÜV neu seit 01.10.2026</p>`;
     expect(facts(page)).toEqual({ priceEur: 6500 });
+  });
+
+  it("reads the vehicle facts of the details box and whether the seller is a dealer", () => {
+    // Shaped like the live page (checked 2026-11-26), with synthetic values.
+    const detail = (label: string, value: string) =>
+      `<li class="addetailslist--detail">\n  ${label}<span class="addetailslist--detail--value">\n   ${value}</span>\n</li>`;
+    const details = (...lines: [string, string][]) =>
+      `<div class="splitlinebox l-container-row" id="viewad-details"><div class="addetailslist"><ul class="addetailslist--split">${lines
+        .map(([label, value]) => detail(label, value))
+        .join("")}</ul></div></div>`;
+    const seller = (kind: string) =>
+      `<span class="userprofile-vip-details text-body-regular text-light"><i class="icon icon-small icon-meins-gray"></i> <span class="userprofile-vip-details-text">${kind}</span></span>
+       <span class="userprofile-vip-details text-body-regular text-light"><span class="userprofile-vip-details-text">Aktiv seit 19.01.2017</span></span>`;
+    const page = details(
+      ["Marke", "BMW"],
+      ["Kilometerstand", "222.000 km"],
+      ["Fahrzeugzustand", "Unbeschädigtes Fahrzeug"],
+      ["Erstzulassung", "Dezember 2010"],
+      ["Kraftstoffart", "Benzin"],
+      ["Leistung", "204 PS"],
+      ["Getriebe", "Automatik"],
+      ["Fahrzeugtyp", "Limousine"],
+      ["HU bis", "Juli 2027"],
+    );
+    expect(facts(boxes("6.500 € VB") + page + seller("Privater Nutzer"))).toEqual({
+      priceEur: 6500,
+      listedOn: "2026-11-18",
+      fuel: "petrol",
+      transmission: "automatic",
+      powerKw: 150,
+      bodyType: "sedan",
+      huUntil: "2027-07-01",
+      sellerType: "private",
+    });
+    const dealer = details(["Kraftstoffart", "Diesel"], ["Getriebe", "Manuell"], ["Fahrzeugtyp", "SUV / Gel&auml;ndewagen"], ["Fahrzeugzustand", "Beschädigtes Fahrzeug"]);
+    expect(kleinanzeigenVehicleFacts(dealer + seller("Gewerblicher Nutzer"), NOW)).toEqual({
+      fuel: "diesel",
+      transmission: "manual",
+      bodyType: "suv",
+      damage: ["defect"],
+      sellerType: "dealer",
+    });
+    expect(kleinanzeigenVehicleFacts(details(["Fahrzeugtyp", "Kombi"], ["Kraftstoffart", "Hybrid (Benzin/Elektro)"]), NOW)).toEqual({ bodyType: "estate", fuel: "hybrid" });
+  });
+
+  it("leaves out vehicle facts that say nothing or are not plausible", () => {
+    const detail = (label: string, value: string) => `<li class="addetailslist--detail">${label}<span class="addetailslist--detail--value">${value}</span></li>`;
+    const read = (...lines: [string, string][]) => kleinanzeigenVehicleFacts(lines.map(([label, value]) => detail(label, value)).join(""), NOW);
+    expect(read(["Kraftstoffart", "Andere"], ["Fahrzeugtyp", "Andere"], ["Getriebe", "Bitte wählen"])).toEqual({});
+    expect(read(["Leistung", "5 PS"], ["Leistung ", "2000 PS"])).toEqual({});
+    expect(read(["HU bis", "Juli 2035"])).toEqual({});
+    // The same words in the seller's text are no field.
+    expect(kleinanzeigenVehicleFacts(`<p id="viewad-description-text">Kraftstoffart: Diesel, Privater Nutzer</p>`, NOW)).toEqual({});
+  });
+
+  it("parses the month and year the details box writes", () => {
+    expect(parseMonthYear("Juli 2027", NOW)).toBe("2027-07-01");
+    expect(parseMonthYear("März 2026", NOW)).toBe("2026-03-01");
+    expect(parseMonthYear("07/2027", NOW)).toBe("2027-07-01");
+    expect(parseMonthYear("13/2027", NOW)).toBeNull();
+    expect(parseMonthYear("Sommer 2027", NOW)).toBeNull();
+    expect(parseMonthYear("Juli 2030", NOW)).toBeNull();
   });
 
   it("parses prices as the lists write them", () => {

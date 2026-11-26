@@ -1,10 +1,14 @@
+import type { DamageKind } from "@/core/damage";
 import {
   detectBodyType,
   detectFuel,
   detectTransmission,
   findMakeInTitle,
   isBuyerListing,
+  normalizeBodyType,
+  normalizeFuel,
   normalizeText,
+  normalizeTransmission,
   isYearOnlyRegistration,
   parseFirstRegistration,
   parseInteger,
@@ -30,10 +34,12 @@ import { checkListingPages, portalText } from "./listing-check";
  * its own page (/s-anzeige/, which robots.txt allows), the longest unchecked first. One that is
  * neither seen nor confirmed for staleAfterDays leaves the search.
  *
- * The result list does not say whether a seller is a dealer or a private person, so the seller
- * type stays unknown. Description texts and seller names are never stored; the opening of a
- * description is only looked at for dealers buying up cars (see isBuyerListing), and only that
- * yes or no is kept.
+ * The result list shows only title, price, mileage, first registration and place. Fuel, gearbox,
+ * power, body type, HU, condition and whether the seller is a dealer or a private person come from
+ * the ad's own page when it is checked (see kleinanzeigenVehicleFacts), so a listing has them from
+ * its first check on, about a day after it dropped out of the newest pages. Description texts and
+ * seller names are never stored; the opening of a description is only looked at for dealers buying
+ * up cars (see isBuyerListing), and only that yes or no is kept.
  */
 
 export const KLEINANZEIGEN: SourceInfo = {
@@ -221,10 +227,84 @@ export function parseKleinanzeigenPrice(text: string | null): number | null {
 const DESCRIPTION = /<(\w+)\b[^>]*\bid="viewad-description-text"[^>]*>([\s\S]*?)<\/\1\s*>/i;
 
 /**
+ * One line of the ad page's details box, e.g.
+ * <li class="addetailslist--detail">Leistung<span class="addetailslist--detail--value">204 PS</span></li>.
+ * The seller picks each value from the portal's own list (checked live 2026-11-26).
+ */
+const DETAIL =
+  /<li\b[^>]*\bclass="[^"]*\baddetailslist--detail(?=["\s])[^"]*"[^>]*>([^<]*)<span\b[^>]*\bclass="[^"]*\baddetailslist--detail--value(?=["\s])[^"]*"[^>]*>([^<]*)<\/span>/gi;
+/** The seller box under the contact button: "Privater Nutzer" or "Gewerblicher Nutzer". */
+const SELLER_KIND = /\bclass="[^"]*\buserprofile-vip-details-text(?=["\s])[^"]*"[^>]*>\s*(Privater|Gewerblicher) Nutzer\s*</;
+const MONTHS = ["januar", "februar", "marz", "april", "mai", "juni", "juli", "august", "september", "oktober", "november", "dezember"];
+/** A new car's first HU is due after three years, so no HU runs further ahead than that. */
+const MAX_HU_YEARS_AHEAD = 3;
+
+/** "Juli 2027" or "07/2027" as the first day of that month; null for anything else or an implausible year. */
+export function parseMonthYear(value: string, now = Date.now()): string | null {
+  const text = normalizeText(value);
+  let match = text.match(/^([a-z]+) (\d{4})$/);
+  let month = match ? MONTHS.indexOf(match[1] === "maerz" ? "marz" : match[1]) + 1 : 0;
+  if (!match) {
+    match = text.match(/^(\d{1,2}) (\d{4})$/);
+    month = match ? Number(match[1]) : 0;
+  }
+  if (!match || month < 1 || month > 12) return null;
+  const year = Number(match[2]);
+  if (year < 1990 || year > new Date(now).getUTCFullYear() + MAX_HU_YEARS_AHEAD) return null;
+  return `${year}-${String(month).padStart(2, "0")}-01`;
+}
+
+/** Damage a page's condition field ("Fahrzeugzustand") names; empty for an intact car or a value we do not know. */
+function conditionDamage(value: string): DamageKind[] {
+  const text = normalizeText(value);
+  if (/\bunfall/.test(text)) return ["accident"];
+  if (/\bnicht (fahrtauglich|fahrbereit|fahrfahig)/.test(text)) return ["not_running"];
+  if (/(^| )beschadigt/.test(text)) return ["defect"];
+  return [];
+}
+
+/**
+ * The vehicle facts of an ad's own page: the details box the seller fills from the portal's lists
+ * and the seller box's dealer or private person. "Andere" and values we do not know are left out,
+ * so a listing keeps what its title or model says.
+ */
+export function kleinanzeigenVehicleFacts(html: string, now = Date.now()): PageFacts {
+  const details = new Map<string, string>();
+  for (const [, label, value] of html.matchAll(DETAIL)) {
+    details.set(normalizeText(decodeEntities(label)), decodeEntities(value).replace(/\s+/g, " ").trim());
+  }
+  const facts: PageFacts = {};
+  const fuel = details.get("kraftstoffart");
+  if (fuel) {
+    const normalized = normalizeFuel(fuel);
+    if (normalized && normalized !== "other") facts.fuel = normalized;
+  }
+  const gearbox = details.get("getriebe");
+  const transmission = gearbox ? normalizeTransmission(gearbox) : null;
+  if (transmission) facts.transmission = transmission;
+  const power = details.get("leistung");
+  const kw = power ? parsePowerKw(power) : null;
+  if (kw !== null && kw >= 20 && kw <= 1000) facts.powerKw = kw;
+  const body = details.get("fahrzeugtyp");
+  const bodyType = body ? normalizeBodyType(body) : null;
+  if (bodyType && bodyType !== "other") facts.bodyType = bodyType;
+  const hu = details.get("hu bis");
+  const huUntil = hu ? parseMonthYear(hu, now) : null;
+  if (huUntil) facts.huUntil = huUntil;
+  const condition = details.get("fahrzeugzustand");
+  const damage = condition ? conditionDamage(condition) : [];
+  if (damage.length > 0) facts.damage = damage;
+  const seller = html.match(SELLER_KIND)?.[1];
+  if (seller) facts.sellerType = seller === "Privater" ? "private" : "dealer";
+  return facts;
+}
+
+/**
  * The price an ad's own page asks and the day it was put online, from the boxes under its title.
- * Anything not shown in the expected form is left out, so a changed page changes no listing.
- * Whether the ad is a dealer's buying up cars comes from its description's opening (see
- * isBuyerListing), which is looked at and dropped.
+ * plus the vehicle facts of its details box (see kleinanzeigenVehicleFacts). Anything not shown
+ * in the expected form is left out, so a changed page changes no listing. Whether the ad is a
+ * dealer's buying up cars comes from its description's opening (see isBuyerListing), which is
+ * looked at and dropped.
  */
 export function kleinanzeigenFacts(page: FetchedPage, now = Date.now(), ref?: ListingRef): PageFacts {
   const facts: PageFacts = {};
@@ -247,7 +327,7 @@ export function kleinanzeigenFacts(page: FetchedPage, now = Date.now(), ref?: Li
       facts.listedOn = iso;
     }
   }
-  return facts;
+  return { ...facts, ...kleinanzeigenVehicleFacts(html, now) };
 }
 
 export function normalizeKleinanzeigen(raw: RawListing): NormalizedListing | null {

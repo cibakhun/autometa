@@ -59,6 +59,8 @@ export const MAX_NOT_FOR_SALE_IN_GROUP = 5;
 
 type Attempt = { outcome: CheckOutcome; facts?: PageFacts } | "stop";
 
+const VEHICLE_FACTS = ["fuel", "transmission", "powerKw", "bodyType", "sellerType"] as const satisfies readonly (keyof PageFacts)[];
+
 /**
  * Elements the seller writes or the portal fills from the seller's text: scripts and meta tags
  * (JSON-LD, og:description) and any element whose id, class or itemprop names the description.
@@ -83,6 +85,8 @@ export async function* checkListingPages(due: ListingRef[], options: ListingChec
   const counts: Record<CheckOutcome, number> = { active: 0, gone: 0, unclear: 0 };
   const storedPrice = new Map(due.map((ref) => [ref.externalId, ref.priceEur]));
   let newPrices = 0;
+  /** Online pages that showed vehicle facts: none at all means the page layout probably changed. */
+  let withVehicleFacts = 0;
   let failures = 0;
   let unclearInARow = 0;
   let group: CheckResult[] = [];
@@ -139,11 +143,11 @@ export async function* checkListingPages(due: ListingRef[], options: ListingChec
     const changed = results.filter((r) => r.priceEur !== undefined && r.priceEur !== storedPrice.get(r.externalId));
     if (changed.length > MAX_PRICE_CHANGES_IN_GROUP) {
       log(`prices ignored: ${changed.length} of ${results.length} listing pages show another price than stored; did the price on the page change?`);
-      return results.map((r) => ({
-        externalId: r.externalId,
-        outcome: r.outcome,
-        ...withoutEmpty({ listedOn: r.listedOn, notForSale: r.notForSale }),
-      }));
+      return results.map((r) => {
+        const kept = { ...r };
+        delete kept.priceEur;
+        return kept;
+      });
     }
     newPrices += changed.length;
     return results;
@@ -163,6 +167,7 @@ export async function* checkListingPages(due: ListingRef[], options: ListingChec
       if (tried === "stop") break;
       const { outcome, facts } = tried;
       counts[outcome] += 1;
+      if (facts && VEHICLE_FACTS.some((key) => facts[key] !== undefined)) withVehicleFacts += 1;
       group.push({ externalId: ref.externalId, outcome, ...withoutEmpty(facts) });
       if (outcome === "unclear") {
         unclearInARow += 1;
@@ -183,7 +188,7 @@ export async function* checkListingPages(due: ListingRef[], options: ListingChec
   } finally {
     log(
       `checked ${counts.active + counts.gone + counts.unclear} listing pages: ${counts.active} online, ${counts.gone} taken down, ${counts.unclear} unclear` +
-        (options.facts ? `, ${newPrices} new prices` : ""),
+        (options.facts ? `, ${newPrices} new prices, ${withVehicleFacts} with vehicle facts` : ""),
     );
   }
 }
@@ -191,8 +196,10 @@ export async function* checkListingPages(due: ListingRef[], options: ListingChec
 /** The facts the page showed, without keys for those it did not. */
 function withoutEmpty(facts: PageFacts | undefined): PageFacts {
   const result: PageFacts = {};
-  if (facts?.priceEur !== undefined) result.priceEur = facts.priceEur;
-  if (facts?.listedOn !== undefined) result.listedOn = facts.listedOn;
-  if (facts?.notForSale) result.notForSale = true;
+  if (!facts) return result;
+  for (const [key, value] of Object.entries(facts) as [keyof PageFacts, PageFacts[keyof PageFacts]][]) {
+    if (value === undefined || (Array.isArray(value) && value.length === 0)) continue;
+    (result as Record<string, unknown>)[key] = value;
+  }
   return result;
 }
