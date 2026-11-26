@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import { DEFAULT_FLIP_SETTINGS, parseFlipSettings, type FlipSettings } from "@/core/flip";
 import { findMake, findModel } from "@/core/taxonomy";
 import { BODY_TYPE_LABELS, FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
+import { VERDICT_FILTER_LABELS } from "@/core/verdict";
 import { formatNumber } from "@/lib/format";
 import { CONDITION_LABELS, filtersToQuery, parseFilters, SORT_LABELS, type SearchFilters } from "@/search/filters";
 import { countListings, resolveZip } from "@/search/query";
@@ -58,6 +59,7 @@ export function describeSearch(filters: SearchFilters, sourceNames: Record<strin
     filters.transmission ? TRANSMISSION_LABELS[filters.transmission] : null,
     filters.seller ? SELLER_TYPE_LABELS[filters.seller] : null,
     filters.hu ? (filters.hu === "neu" ? "TÜV neu" : `TÜV mind. ${filters.hu} Monate`) : null,
+    filters.urteil ? VERDICT_FILTER_LABELS[filters.urteil] : null,
     filters.deal ? `mind. ${filters.deal} % unter Marktwert` : null,
     filters.gesenkt ? (filters.gesenkt === "ja" ? "Preis gesenkt" : `Preis gesenkt (${filters.gesenkt} Tage)`) : null,
     filters.zustand && !flipList ? CONDITION_LABELS[filters.zustand].split(" (")[0] : null,

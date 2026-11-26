@@ -9,10 +9,12 @@ import type { FlipSettings } from "@/core/flip";
 import { CONFIDENCE_LABELS, DIFFICULTY_LABELS, estimateRepairs, VEHICLE_CLASS_LABELS } from "@/core/repairs";
 import { findMake, findModel } from "@/core/taxonomy";
 import { BODY_TYPE_LABELS, FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
+import { listingVerdict, VERDICT_LABELS, type VerdictReason } from "@/core/verdict";
 import { FavoriteButton } from "@/components/favorite-button";
 import { FlipCalculator } from "@/components/flip-calculator";
 import { ListingPhoto } from "@/components/listing-photo";
 import { ModelFileSection } from "@/components/model-file";
+import { VERDICT_BADGE } from "@/components/result-card";
 import { MARKET_RULES } from "@/ingest/market";
 import { getPool } from "@/lib/db";
 import { getFlipSettings } from "@/lib/flip-settings";
@@ -163,6 +165,7 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
           </div>
         </div>
         <CheaperElsewhere listing={listing} />
+        {!gone && <WorthALook listing={listing} settings={settings} file={file} />}
         <dl className="mt-6 grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
           {rows
             .filter((row): row is [string, string] => Boolean(row[1]))
@@ -186,6 +189,44 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
         )}
       </article>
     </div>
+  );
+}
+
+/** How often the model at this age had HU defects compared with all cars of its age (Modell-Akte), as the recommendation sort uses it. */
+function reliabilityRatio(file: ModelFile | null): number | null {
+  if (!file?.profile || !file.average || file.profile.sample === 0 || file.average.sample === 0 || file.average.anyDefect === 0) return null;
+  return file.profile.anyDefect / file.profile.sample / (file.average.anyDefect / file.average.sample);
+}
+
+const REASON_MARKS: Record<VerdictReason["tone"], { mark: string; className: string }> = {
+  plus: { mark: "+", className: "text-good-text" },
+  minus: { mark: "−", className: "text-warn-text" },
+  info: { mark: "·", className: "text-muted" },
+};
+
+/** "Lohnt sich?": the verdict (src/core/verdict.ts) with all its reasons. */
+function WorthALook({ listing, settings, file }: { listing: ListingDetail; settings: FlipSettings; file: ModelFile | null }) {
+  const verdict = listingVerdict({ ...listing, reliabilityRatio: reliabilityRatio(file) }, settings, new Date(listing.checkedAt));
+  return (
+    <section className="mt-5 rounded-lg border border-line p-4" aria-labelledby="verdict-heading">
+      <h2 id="verdict-heading" className="flex flex-wrap items-center gap-2 font-semibold">
+        Lohnt sich?
+        <span className={`rounded-full border px-2.5 py-0.5 text-sm font-semibold ${VERDICT_BADGE[verdict.verdict]}`}>{VERDICT_LABELS[verdict.verdict]}</span>
+      </h2>
+      <ul className="mt-2 space-y-1 text-sm">
+        {verdict.reasons.map((reason, i) => (
+          <li key={i} className="flex gap-2">
+            <span aria-hidden="true" className={`w-3 shrink-0 text-center font-bold ${REASON_MARKS[reason.tone].className}`}>
+              {REASON_MARKS[reason.tone].mark}
+            </span>
+            <span className={reason.tone === "info" ? "text-muted" : ""}>{reason.text}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-xs text-muted">
+        Aus Preis gegen Marktwert, Schadenshinweisen, Flip-Rechnung, HU, Modell-Akte und wie lange das Angebot schon online ist. Ersetzt keine Besichtigung und Probefahrt.
+      </p>
+    </section>
   );
 }
 

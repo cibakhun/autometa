@@ -3,7 +3,8 @@ import type { ReactNode } from "react";
 import { DAMAGE_LABELS } from "@/core/damage";
 import { isTooCheap } from "@/core/deal";
 import { FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
-import type { FlipResult } from "@/core/flip";
+import { DEFAULT_FLIP_SETTINGS, type FlipResult, type FlipSettings } from "@/core/flip";
+import { listingVerdict, VERDICT_LABELS, type ListingVerdict, type Verdict, type VerdictReason } from "@/core/verdict";
 import {
   compareOffers,
   formatDayTime,
@@ -29,14 +30,15 @@ const RECENT_DROP_MS = 14 * 24 * 3600_000;
 
 export function ResultCard({
   listing,
-  minMarginEur,
+  settings = DEFAULT_FLIP_SETTINGS,
   favorite = false,
   newSince,
   note,
   allDrops = false,
 }: {
   listing: ListingSummary;
-  minMarginEur?: number;
+  /** The visitor's flip settings: minimum margin and level, for the flip line and the verdict. */
+  settings?: FlipSettings;
   /** Whether the listing is on the visitor's watch list (the heart). */
   favorite?: boolean;
   /** "Neu" badge for listings first seen after this moment (ISO), e.g. what a saved search found. */
@@ -64,6 +66,8 @@ export function ResultCard({
   const tooCheap = isTooCheap(listing);
   const unsure = listing.marketConfidence === "low";
   const isNew = newSince !== undefined && listing.firstSeenAt > newSince;
+  // Judged as of the last check, like the price drop above: the same page always shows the same.
+  const verdict = listingVerdict(listing, settings, new Date(listing.checkedAt));
   const dropped =
     listing.priceDroppedAt !== null &&
     listing.priceBeforeDropEur !== null &&
@@ -118,6 +122,7 @@ export function ResultCard({
             <Joined parts={place} wrap />
           </p>
         )}
+        <VerdictLine verdict={verdict} />
         {damaged && (
           <ul className="mt-2 flex flex-wrap gap-1" aria-label="Schadenshinweise im Titel">
             {listing.damage.map((kind) => (
@@ -144,7 +149,7 @@ export function ResultCard({
             )}
           </p>
         )}
-        {listing.flip && listing.repair && <FlipLine flip={listing.flip} repair={listing.repair} minMarginEur={minMarginEur} />}
+        {listing.flip && listing.repair && <FlipLine flip={listing.flip} repair={listing.repair} minMarginEur={settings.minMarginEur} />}
         {listing.reliabilityRatio !== null && <ReliabilityLine ratio={listing.reliabilityRatio} />}
         {listing.otherOffers.length > 0 && <OtherOffers listing={listing} />}
         <div className="mt-auto flex items-center justify-between gap-2 pt-4">
@@ -188,6 +193,40 @@ function Joined({ parts, wrap = false }: { parts: (string | null | false)[]; wra
       {i < values.length - 1 && " "}
     </span>
   ));
+}
+
+/** Colors of the verdict badge (src/core/verdict.ts). */
+export const VERDICT_BADGE: Record<Verdict, string> = {
+  anschauen: "border-good-text bg-surface text-good-text",
+  schrauber: "border-good-text bg-surface text-good-text",
+  fair: "border-line bg-accent-soft text-accent-strong",
+  eher_nicht: "border-warn-line bg-warn-bg text-warn-text",
+  unklar: "border-line bg-surface text-muted",
+};
+
+/** Reasons the card shows elsewhere already: the market gap and its warning, damage chips, the flip line, the price drop badge, the seller. */
+const SHOWN_ON_CARD = new Set<VerdictReason["kind"]>(["price", "damage", "flip", "drop", "seller"]);
+
+/**
+ * "Lohnt sich anzuschauen · seit 40 Tagen online: Verhandlungsspielraum": the verdict and the
+ * reasons the card does not show otherwise (a long HU is in the facts line); all on hover.
+ */
+function VerdictLine({ verdict }: { verdict: ListingVerdict }) {
+  const reasons = verdict.reasons.filter((reason) => !SHOWN_ON_CARD.has(reason.kind) && !(reason.kind === "hu" && reason.tone === "plus")).slice(0, 2);
+  return (
+    <p className="mt-2 text-sm" title={verdict.reasons.map((reason) => reason.text).join(" · ")}>
+      <span className={`mr-1.5 inline-block whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-semibold ${VERDICT_BADGE[verdict.verdict]}`}>
+        {VERDICT_LABELS[verdict.verdict]}
+      </span>
+      {reasons.length > 0 && " "}
+      {reasons.map((reason, i) => (
+        <span key={i} className={reason.tone === "plus" ? "text-good-text" : reason.tone === "minus" ? "text-warn-text" : "text-muted"}>
+          {reason.text}
+          {i < reasons.length - 1 && <span className="text-muted"> · </span>}
+        </span>
+      ))}
+    </p>
+  );
 }
 
 /** "Modell-Akte: 23 % weniger HU-Mängel als gleich alte Autos" (shown when sorted by recommendation). */

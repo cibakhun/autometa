@@ -115,6 +115,11 @@ describe("parseNaturalSearch", () => {
     expect(await query("unfallfrei, nicht vom Händler")).toMatchObject({ zustand: "intakt", seller: "private" });
   });
 
+  it("asks for the verdict when the car should be worth it", async () => {
+    expect(await query("Golf bis 8000 der sich lohnt")).toMatchObject({ make: "volkswagen", model: "golf", priceMax: 8000, urteil: "anschauen" });
+    expect(await query("lohnenswertes Bastlerauto")).toMatchObject({ zustand: "defekt", urteil: "schrauber", sort: "flip" });
+  });
+
   it("sorts flip searches by flip and keeps their margin", async () => {
     expect(await query("Bastlerauto zum Flippen, Marge ab 1.000 €")).toEqual({ zustand: "defekt", margeMin: 1000, sort: "flip" });
     expect(await query("Motorschaden Audi A4 einfach zu reparieren")).toMatchObject({

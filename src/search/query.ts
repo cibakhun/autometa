@@ -8,6 +8,7 @@ import type { InspectionBasis } from "@/core/inspection";
 import type { PricePoint } from "@/core/price-history";
 import type { Confidence, Difficulty, VehicleClass } from "@/core/repairs";
 import { psToKw } from "@/core/normalize";
+import { VERDICT_RULES, type VerdictFilter } from "@/core/verdict";
 import type { BodyType, Fuel, SellerType, Transmission } from "@/core/types";
 import { Params } from "@/lib/db";
 import { huFilterMonths, PAGE_SIZE, priceDropDays, type SearchFilters, type Sort } from "./filters";
@@ -130,6 +131,23 @@ function flipSql(settings: FlipSettings, params: Params, l = "l") {
       - coalesce(${l}.repair_risk_hidden_eur, 0) - coalesce(${l}.repair_risk_unclear_eur, 0)
       - case when ${l}.repair_needs_tow then ${tow}::int else ${transport}::int end)`;
   return { margin, perHour: `(${margin} / nullif((${l}.repair_hours_min + ${l}.repair_hours_max) / 2.0, 0))` };
+}
+
+/**
+ * The verdict filter in SQL, as listingVerdict (src/core/verdict.ts) decides anschauen and
+ * schrauber. deal_pct already means intact, a trusted market value and not too cheap to be true.
+ */
+function verdictSql(verdict: VerdictFilter, settings: FlipSettings, params: Params, l = "l") {
+  if (verdict === "anschauen") {
+    const pct = params.add(VERDICT_RULES.goodDealPct);
+    return `(${l}.deal_pct >= ${pct}::int and ${l}.hu_basis is distinct from 'expired'
+      and (${l}.hu_until is null or ${l}.hu_until >= date_trunc('month', current_date)::date))`;
+  }
+  const { margin } = flipSql(settings, params, l);
+  const level = params.add(settings.level);
+  const min = params.add(settings.minMarginEur);
+  // Rounded to 10 euros like the margin shown (calculateFlip).
+  return `(cardinality(${l}.damage) > 0 and ${l}.repair_difficulty <= ${level}::int and floor(${margin} / 10 + 0.5) * 10 >= ${min}::int)`;
 }
 
 /** One portal's listing of a vehicle. */
@@ -263,6 +281,7 @@ function buildConditions(
   if (filters.zustand === "defekt") where.push(`cardinality(${l}.damage) > 0`);
   if (filters.zustand === "intakt") where.push(`${l}.damage = '{}'`);
   if (filters.deal) add((p) => `${l}.deal_pct >= ${p(Number(filters.deal))}::int`);
+  if (filters.urteil) where.push(verdictSql(filters.urteil, settings, params, l));
   if (filters.schwierigkeit !== undefined) add((p) => `${l}.repair_difficulty <= ${p(filters.schwierigkeit)}`);
   if (filters.margeMin !== undefined) {
     const { margin } = flipSql(settings, params, l);

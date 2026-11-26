@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { DEAL_FILTERS } from "@/core/deal";
+import { VERDICT_FILTERS } from "@/core/verdict";
 import { BODY_TYPES, FUELS, SELLER_TYPES, TRANSMISSIONS } from "@/core/types";
 
 export const SORTS = [
@@ -104,6 +105,8 @@ const schema = z.object({
   zustand: oneOf(CONDITIONS),
   /** Schnäppchen: intact, at least this many percent below a trusted market value (src/core/deal.ts). */
   deal: oneOf(DEAL_FILTERS),
+  /** Verdict (src/core/verdict.ts): worth a look, or worth it for a DIY repairer. */
+  urteil: oneOf(VERDICT_FILTERS),
   /** Flip filters: hardest repair job at most this difficulty, margin at least this many euros. */
   schwierigkeit: int(1, 5),
   margeMin: int(-1_000_000, 10_000_000),

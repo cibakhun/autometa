@@ -1,5 +1,6 @@
 import { kwToPs, normalizeText } from "@/core/normalize";
 import { MAKES, type MakeDef, type ModelDef } from "@/core/taxonomy";
+import type { VerdictFilter } from "@/core/verdict";
 import { BODY_TYPE_LABELS, BODY_TYPES, FUEL_LABELS, FUELS, type BodyType, type Fuel, type SellerType, type Transmission } from "@/core/types";
 import { formatNumber } from "@/lib/format";
 import { RADII_KM, type Condition, type HuFilter, type Sort } from "./filters";
@@ -32,6 +33,7 @@ export interface NaturalQuery {
   seller?: SellerType;
   hu?: HuFilter;
   zustand?: Condition;
+  urteil?: VerdictFilter;
   schwierigkeit?: number;
   margeMin?: number;
   zip?: string;
@@ -262,6 +264,8 @@ interface Draft {
   reliable: boolean;
   deal: boolean;
   flip: boolean;
+  /** "lohnt sich": the verdict filter, for repairers when damaged cars are wanted. */
+  worth: boolean;
   family: boolean;
   understood: { at: number; text: string; label: string }[];
   ignored: { at: number; text: string; reason: string }[];
@@ -280,6 +284,7 @@ export async function parseNaturalSearch(input: string, findPlace: PlaceLookup |
     reliable: false,
     deal: false,
     flip: false,
+    worth: false,
     family: false,
     understood: [],
     ignored: [],
@@ -660,6 +665,11 @@ export async function parseNaturalSearch(input: string, findPlace: PlaceLookup |
     draft.deal = true;
     return understood(m, "günstig → beste Schnäppchen zuerst");
   });
+  text.scan(words("lohnt sich", "sich lohnt", "sich lohnen", "lohnenswert", "lohnenswerte", "lohnenswerter", "lohnenswertes", "lohnenswerten",
+    "lohnende", "lohnender", "lohnendes", "lohnenden", "lohnt", "wert anzuschauen", "anschauen lohnt"), (m) => {
+    draft.worth = true;
+    return understood(m, "lohnt sich → Urteil „lohnt sich“");
+  });
   const explicitSort = (phrases: string[], sort: Sort, label: string) =>
     text.scan(words(...phrases), (m) => {
       draft.sort = sort;
@@ -770,6 +780,7 @@ function finish(draft: Draft, year: number): NaturalQuery {
   if (draft.q.length > 0) q.q = draft.q.join(" ");
   if (draft.flip) q.zustand = "defekt";
   if (draft.reliable && !q.zustand) q.zustand = "intakt";
+  if (draft.worth) q.urteil = q.zustand === "defekt" ? "schrauber" : "anschauen";
   if (q.yearMin !== undefined && q.yearMax !== undefined && q.yearMin > q.yearMax) [q.yearMin, q.yearMax] = [q.yearMax, q.yearMin];
   if (q.yearMax !== undefined && q.yearMax > year + 1) q.yearMax = undefined;
   if (q.priceMin !== undefined && q.priceMax !== undefined && q.priceMin > q.priceMax) [q.priceMin, q.priceMax] = [q.priceMax, q.priceMin];

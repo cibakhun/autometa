@@ -62,7 +62,7 @@ export async function SearchView({ searchParams }: { searchParams: PageProps<"/"
                   <li key={item.id}>
                     <ResultCard
                       listing={item}
-                      minMarginEur={settings.minMarginEur}
+                      settings={settings}
                       favorite={favorites.has(item.id)}
                       newSince={filters.seit}
                       allDrops={filters.gesenkt !== undefined || filters.sort === "price_drop"}
