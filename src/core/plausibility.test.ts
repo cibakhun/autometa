@@ -235,9 +235,10 @@ describe("plausibleListing", () => {
   });
 
   it("corrects what cannot be right and keeps the rest", () => {
-    expect(plausibleListing(listing(), NOW)).toEqual(listing({ mileageKm: null }));
+    // The body comes from the model (src/core/body-types.ts) when the title does not name it.
+    expect(plausibleListing(listing(), NOW)).toEqual(listing({ mileageKm: null, bodyType: "small" }));
     expect(plausibleListing(listing({ firstRegistration: "2099-01-01" }), NOW)).toEqual(
-      listing({ firstRegistration: null, firstRegistrationYearOnly: false }),
+      listing({ firstRegistration: null, firstRegistrationYearOnly: false, bodyType: "small" }),
     );
   });
 

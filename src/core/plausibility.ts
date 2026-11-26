@@ -1,3 +1,4 @@
+import { defaultBodyType } from "./body-types";
 import { detectDamage } from "./damage";
 import { isNotForSale, normalizeText } from "./normalize";
 import { findModel, GENERATIONS } from "./taxonomy";
@@ -198,6 +199,8 @@ export function plausibleListing(listing: NormalizedListing, now = new Date()): 
   if (verdict.rejection) return null;
   return {
     ...listing,
+    // What the source or the title says wins; else the body the model is usually sold with.
+    bodyType: listing.bodyType ?? defaultBodyType(listing.makeSlug, listing.modelSlug),
     firstRegistration: verdict.firstRegistration,
     firstRegistrationYearOnly: verdict.firstRegistration !== null && listing.firstRegistrationYearOnly === true,
     mileageKm: verdict.mileageKm,

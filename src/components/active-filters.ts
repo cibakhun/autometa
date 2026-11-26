@@ -1,3 +1,4 @@
+import { DEAL_FILTER_LABELS } from "@/core/deal";
 import { BODY_TYPE_LABELS, FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
 import { filtersToQuery, HU_FILTER_LABELS, PRICE_DROP_FILTER_LABELS, type Condition, type SearchFilters } from "@/search/filters";
 
@@ -48,6 +49,7 @@ export function activeFilters(filters: SearchFilters, names: FilterNames = {}): 
   if (filters.priceMin !== undefined || filters.priceMax !== undefined) {
     add("price", range(filters.priceMin, filters.priceMax, euro), { priceMin: undefined, priceMax: undefined });
   }
+  if (filters.deal) add("deal", `Schnäppchen ${DEAL_FILTER_LABELS[filters.deal]}`, { deal: undefined });
   if (filters.gesenkt) {
     add("gesenkt", filters.gesenkt === "ja" ? "Preis gesenkt" : `Preis gesenkt ${PRICE_DROP_FILTER_LABELS[filters.gesenkt]}`, { gesenkt: undefined });
   }

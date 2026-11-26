@@ -16,7 +16,8 @@ const SORT_NOTES: Partial<Record<Sort, string>> = {
   empfehlung:
     "Modelle mit weniger HU-Mängeln als gleich alte Autos (Modell-Akte) und Preise unter Marktwert kommen zuerst.",
   flip: "Angebote mit dem höchsten Stundenlohn nach Reparatur und Weiterverkauf kommen zuerst.",
-  below_market: "Angebote mit dem größten Abstand zum Marktwert kommen zuerst.",
+  below_market:
+    "Autos ohne Schadenshinweis, die am meisten Prozent unter einem verlässlichen Marktwert liegen, kommen zuerst. Auffällig billige (über 50 % darunter) zählen nicht.",
 };
 
 const kiHref = (text: string) => `/ki?text=${encodeURIComponent(text)}`;

@@ -5,6 +5,7 @@ import type { NormalizedListing } from "@/core/types";
 import type { RawListing, SourceAdapter, SourceInfo } from "@/ingest/adapter";
 import { updateMarketValues } from "@/ingest/market";
 import { migrate } from "@/ingest/migrate";
+import { BODY_RULES_VERSION, reviewBodyTypes } from "@/ingest/body-review";
 import { reviewStoredListings } from "@/ingest/review";
 import { runIngest } from "@/ingest/run";
 import { seedReferenceData } from "@/ingest/seed";
@@ -166,6 +167,39 @@ describe.skipIf(!url)("reviewing stored listings against the import rules", () =
       kreuznach: "Bad Kreuznach",
       elsewhere: "Ingolstadt",
     });
+  });
+
+  it("gives stored listings the body type of their title or model, once per rules version", async () => {
+    const AUTODE: SourceInfo = { id: "autode", name: "auto.de", kind: "scrape", websiteUrl: "https://auto.de" };
+    await runIngest(
+      pool,
+      portal(PORTAL, [
+        car(PORTAL, "tiguan", { title: "Volkswagen Tiguan 2.0 TDI", modelSlug: "tiguan" }),
+        car(PORTAL, "octavia", { title: "Skoda Octavia Combi 2.0 TDI", makeSlug: "skoda", modelSlug: "octavia" }),
+        car(PORTAL, "vito", { title: "Mercedes-Benz Vito 110 CDI Kasten", makeSlug: "mercedes-benz", modelSlug: "vito" }),
+        car(PORTAL, "unknown", { title: "Lada Niva", makeSlug: null, modelSlug: null }),
+        // Stored by the old rules: "Wagon R" read as an estate.
+        car(PORTAL, "wagon-r", { title: "Suzuki Wagon R+", makeSlug: "suzuki", modelSlug: "wagon-r", bodyType: "estate" }),
+      ]),
+    );
+    // auto.de names the body itself; its value stays.
+    await runIngest(pool, portal(AUTODE, [car(AUTODE, "autode-golf", { bodyType: "estate" }), car(AUTODE, "autode-none")]));
+    await pool.query("update listings set body_type = null where external_id <> 'wagon-r' and external_id <> 'autode-golf'");
+
+    expect(await reviewBodyTypes(pool)).toEqual({ ran: true, reviewed: 7, changed: 5 });
+    const { rows } = await pool.query<{ external_id: string; body_type: string | null }>("select external_id, body_type from listings");
+    expect(Object.fromEntries(rows.map((r) => [r.external_id, r.body_type]))).toEqual({
+      tiguan: "suv",
+      octavia: "estate",
+      vito: "other",
+      unknown: null,
+      "wagon-r": "small",
+      "autode-golf": "estate",
+      "autode-none": "sedan",
+    });
+    const versions = await pool.query("select version from listing_reviews where name = 'body-types'");
+    expect(versions.rows).toEqual([{ version: BODY_RULES_VERSION }]);
+    expect(await reviewBodyTypes(pool)).toEqual({ ran: false, reviewed: 0, changed: 0 });
   });
 
   it("leaves listings taken out by the rules out of the market values", async () => {

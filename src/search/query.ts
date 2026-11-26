@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 import { boundingBox, distanceSql } from "@/core/geo";
 import type { DamageKind } from "@/core/damage";
+import { DEAL_RULES, type MarketConfidence } from "@/core/deal";
 import { AGE_BUCKETS, MIN_SAMPLE } from "@/core/defects";
 import { calculateFlip, DEFAULT_FLIP_SETTINGS, type FlipResult, type FlipSettings } from "@/core/flip";
 import type { InspectionBasis } from "@/core/inspection";
@@ -55,6 +56,8 @@ export interface ListingSummary {
   marketPriceEur: number | null;
   /** How many comparable listings the market value is based on. */
   marketComps: number | null;
+  /** How far the market value can be trusted (src/core/deal.ts); null without one. */
+  marketConfidence: MarketConfidence | null;
   /** What repairing it probably takes (src/core/repairs.ts), null until computed. */
   repair: RepairSummary | null;
   /** Margin when bought, repaired and sold again; null without a market value or repair estimate. */
@@ -154,8 +157,8 @@ const ORDER_BY: Record<Exclude<Sort, "flip" | "margin" | "empfehlung" | "distanc
   price_desc: "l.price_eur desc, l.id desc",
   km_asc: "l.mileage_km asc nulls last, l.id asc",
   year_desc: "l.first_registration desc nulls last, l.id desc",
-  // The biggest gap in euros: what a repaired car could be worth minus what it costs now.
-  below_market: "l.market_price_eur - l.price_eur desc nulls last, l.id desc",
+  // "Bestes Schnäppchen": percent below a trusted market value, intact listings only (src/core/deal.ts).
+  below_market: "l.deal_pct desc nulls last, l.id desc",
   price_drop: "l.price_dropped_at desc nulls last, l.id desc",
 };
 
@@ -174,24 +177,33 @@ export function ageBucketSql(column = "l.first_registration"): string {
  * Recommendation ("Empfehlung"): points for a model with fewer HU defects than cars of its age
  * (1 point per percent, ±50) plus points for a price below market value (1 point per percent,
  * ±30). Listings whose title names damage get the lowest price points, since their market value
- * is that of an intact car. Unknown parts count 0. Kept in step with recommendationScore.
+ * is that of an intact car, and so do intact ones too cheap to be true (src/core/deal.ts). An
+ * unsure market value gives no price points. Unknown parts count 0. Kept in step with
+ * recommendationScore.
  */
 // greatest() and least() skip nulls in Postgres, hence the explicit case for an unknown ratio.
 const recommendationSql = (ratio: string) => `(case when ${ratio} is null then 0 else greatest(-50, least(50, (1 - ${ratio}) * 100)) end
   + case when cardinality(l.damage) > 0 then -30
-         when l.market_price_eur > 0 then greatest(-30, least(30, (l.market_price_eur - l.price_eur) * 100.0 / l.market_price_eur))
+         when l.market_price_eur > 0 and l.price_eur <= l.market_price_eur * ${DEAL_RULES.tooCheapShare} then -30
+         when l.market_price_eur > 0 and l.market_confidence in ('high', 'medium')
+           then greatest(-30, least(30, (l.market_price_eur - l.price_eur) * 100.0 / l.market_price_eur))
          else 0 end)`;
 
 /** The recommendation points of a listing, as recommendationSql. */
-export function recommendationScore(listing: Pick<ListingSummary, "reliabilityRatio" | "damage" | "marketPriceEur" | "priceEur">): number {
+export function recommendationScore(
+  listing: Pick<ListingSummary, "reliabilityRatio" | "damage" | "marketPriceEur" | "marketConfidence" | "priceEur">,
+): number {
   const clamp = (value: number, limit: number) => Math.max(-limit, Math.min(limit, value));
   const reliability = listing.reliabilityRatio === null ? 0 : clamp((1 - listing.reliabilityRatio) * 100, 50);
+  const market = listing.marketPriceEur;
   const price =
     listing.damage.length > 0
       ? -30
-      : listing.marketPriceEur !== null && listing.marketPriceEur > 0
-        ? clamp(((listing.marketPriceEur - listing.priceEur) * 100) / listing.marketPriceEur, 30)
-        : 0;
+      : market !== null && market > 0 && listing.priceEur <= market * DEAL_RULES.tooCheapShare
+        ? -30
+        : market !== null && market > 0 && (listing.marketConfidence === "high" || listing.marketConfidence === "medium")
+          ? clamp(((market - listing.priceEur) * 100) / market, 30)
+          : 0;
   return reliability + price;
 }
 
@@ -250,6 +262,7 @@ function buildConditions(
   }
   if (filters.zustand === "defekt") where.push(`cardinality(${l}.damage) > 0`);
   if (filters.zustand === "intakt") where.push(`${l}.damage = '{}'`);
+  if (filters.deal) add((p) => `${l}.deal_pct >= ${p(Number(filters.deal))}::int`);
   if (filters.schwierigkeit !== undefined) add((p) => `${l}.repair_difficulty <= ${p(filters.schwierigkeit)}`);
   if (filters.margeMin !== undefined) {
     const { margin } = flipSql(settings, params, l);
@@ -397,7 +410,7 @@ export function summaryColumns(distanceKm = "null::float8") {
            to_char(l.first_registration, 'YYYY-MM-DD') as first_registration, l.first_registration_year_only,
            l.fuel, l.transmission, l.power_kw, l.body_type, l.seller_type, l.zip, l.city, l.cluster_id,
            to_char(l.hu_until, 'YYYY-MM-DD') as hu_until, l.hu_basis,
-           l.damage, l.market_price_eur, l.market_comps,
+           l.damage, l.market_price_eur, l.market_comps, l.market_confidence,
            l.vehicle_class, l.repair_parts_min_eur, l.repair_parts_max_eur, l.repair_hours_min, l.repair_hours_max,
            l.repair_difficulty, l.repair_confidence, l.repair_needs_tow,
            l.repair_risk_hidden_eur, l.repair_risk_unclear_eur, l.last_seen_at,
@@ -555,6 +568,7 @@ export function summaryFromRow(row: Record<string, any>, offers: Map<number, Off
     damage: row.damage ?? [],
     marketPriceEur: row.market_price_eur,
     marketComps: row.market_comps,
+    marketConfidence: row.market_confidence ?? null,
     repair,
     flip: flipFromRow(row.price_eur, row.market_price_eur, repair, settings),
     checkedAt: new Date(row.last_seen_at).toISOString(),
@@ -836,6 +850,7 @@ export async function getListing(pool: Pool, id: number, settings = DEFAULT_FLIP
     damage: row.damage ?? [],
     marketPriceEur: row.market_price_eur,
     marketComps: row.market_comps,
+    marketConfidence: row.market_confidence ?? null,
     repair,
     flip: flipFromRow(row.price_eur, row.market_price_eur, repair, settings),
     marketLowEur: row.market_low_eur,

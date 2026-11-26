@@ -658,7 +658,7 @@ export async function parseNaturalSearch(input: string, findPlace: PlaceLookup |
     "preiswerte", "preiswerter", "preiswertes", "preiswerten", "schnäppchen", "unter marktwert", "unter wert", "guter preis", "gutem preis",
     "preis leistung", "preisleistung", "bezahlbar", "bezahlbare", "bezahlbaren", "erschwinglich", "deal", "deals", "low budget"), (m) => {
     draft.deal = true;
-    return understood(m, "günstig → weit unter Marktwert zuerst");
+    return understood(m, "günstig → beste Schnäppchen zuerst");
   });
   const explicitSort = (phrases: string[], sort: Sort, label: string) =>
     text.scan(words(...phrases), (m) => {

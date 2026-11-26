@@ -179,6 +179,25 @@ describe("detectBodyType", () => {
     ["BMW 420i Coupé", "coupe"],
     ["VW T5 Bus", "van"],
     ["Mercedes E 220 Limousine", "sedan"],
+    // Estate words of other makes, seen live without a body type (2026-11-26).
+    ["Skoda Octavia Combi 2.0 TDI", "estate"],
+    ["Ford Mondeo 2.0 TDCi Turnier", "estate"],
+    ["Opel Astra J Caravan", "estate"],
+    ["Opel Insignia Sports Tourer", "estate"],
+    ["Renault Megane Grandtour", "estate"],
+    ["Audi A6 allroad quattro", "estate"],
+    ["Dacia Logan MCV", "estate"],
+    // Vans with estate-sounding names, and vans for goods.
+    ["BMW 218i Active Tourer", "van"],
+    ["BMW 216d Gran Tourer", "van"],
+    ["VW Golf Sportsvan 1.5 TSI", "van"],
+    ["Mitsubishi Space Wagon", "van"],
+    ["Mercedes-Benz Vito 110 CDI Kasten lang", "other"],
+    ["Ford Transit Pritsche", "other"],
+    ["Porsche 911 Targa 4S", "convertible"],
+    ["Ford Mustang Mach-E AWD", "suv"],
+    ["Toyota Yaris Cross Hybrid", "suv"],
+    ["Ford Ranger Pick-up Doppelkabine", "suv"],
   ])("%s -> %s", (title, body) => {
     expect(detectBodyType(title)).toBe(body);
   });
@@ -189,6 +208,9 @@ describe("detectBodyType", () => {
     expect(detectBodyType("Panda 4x4")).toBeNull();
     expect(detectBodyType("Kleinwagen 4x4")).toBe("small");
     expect(detectBodyType("Vanden Plas")).toBeNull();
+    // A model name, not an estate.
+    expect(detectBodyType("Suzuki Wagon R+ 1.3")).toBeNull();
+    expect(detectBodyType("Kofferraum groß")).toBeNull();
     expect(detectBodyType(null)).toBeNull();
   });
 });

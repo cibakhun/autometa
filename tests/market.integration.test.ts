@@ -125,7 +125,7 @@ describe.skipIf(!url)("market values against Postgres", () => {
     expect(await market(target)).toMatchObject({ market_price_eur: null, market_comps: null });
   });
 
-  it("filters by condition and sorts by the gap to the market value", async () => {
+  it("filters by condition", async () => {
     for (const price of [5000, 6000, 7000, 8000, 9000, 10_000]) await addCar({ price });
     const broken = await addCar({ title: "VW Golf springt nicht an", price: 1000, damage: ["not_running"] });
     await updateMarketValues(pool);
@@ -136,9 +136,58 @@ describe.skipIf(!url)("market values against Postgres", () => {
 
     const intakt = await searchListings(pool, parseFilters({ zustand: "intakt" }), null);
     expect(intakt.total).toBe(6);
+  });
+
+  const deal = async (id: number) =>
+    (await pool.query("select market_confidence, deal_pct from listings where id = $1", [id])).rows[0];
+
+  it("ranks deals by percent below a trusted market value, never damaged, unsure or too cheap ones", async () => {
+    // 20 comparable cars from 9,000 to 10,900 €: a close market (median about 10,000 €).
+    for (let i = 0; i < 20; i++) await addCar({ price: 9000 + i * 100 });
+    const good = await addCar({ price: 8000 });
+    const better = await addCar({ price: 7000 });
+    const pricey = await addCar({ price: 12_000 });
+    // More than half below: a scam, a leasing fee or hidden damage, not a deal.
+    const tooCheap = await addCar({ price: 4500 });
+    const broken = await addCar({ title: "VW Golf Motorschaden", price: 2000, damage: ["engine"] });
+    await updateMarketValues(pool);
+
+    // As dealPercent: the percent below the listing's own market value, rounded.
+    for (const id of [good, better, pricey]) {
+      const { market_price_eur: value } = await market(id);
+      const { rows } = await pool.query("select price_eur from listings where id = $1", [id]);
+      expect(await deal(id)).toEqual({ market_confidence: "high", deal_pct: Math.round(((value - rows[0].price_eur) * 100) / value) });
+    }
+    expect((await deal(good)).deal_pct).toBeGreaterThan(15);
+    expect((await deal(pricey)).deal_pct).toBeLessThan(-15);
+    expect(await deal(tooCheap)).toEqual({ market_confidence: "high", deal_pct: null });
+    expect((await deal(broken)).deal_pct).toBeNull();
 
     const sorted = await searchListings(pool, parseFilters({ sort: "below_market" }), null);
-    expect(sorted.items[0].id).toBe(broken);
+    expect(sorted.items.slice(0, 2).map((item) => item.id)).toEqual([better, good]);
+    // Without a credible deal at the end (the 25 listings fill one page and one more).
+    const second = await searchListings(pool, parseFilters({ sort: "below_market", page: "2" }), null);
+    const order = [...sorted.items, ...second.items].map((item) => item.id);
+    expect(order.slice(-2).sort()).toEqual([tooCheap, broken].sort());
+
+    const deals = await searchListings(pool, parseFilters({ deal: "10" }), null);
+    expect(deals.items.map((item) => item.id).sort()).toEqual([good, better].sort());
+    expect((await searchListings(pool, parseFilters({ deal: "20" }), null)).items.map((item) => item.id)).toEqual([better]);
+  });
+
+  it("calls a market value unsure with few comparable cars or a wide price range", async () => {
+    // Six cars: enough for a value, too few to trust it.
+    for (const price of [9000, 9500, 10_000, 10_500, 11_000, 11_500]) await addCar({ price, year: 2012 });
+    const fewComps = await addCar({ price: 7000, year: 2012 });
+    // Twenty cars spread from 3,000 to 22,000 €: the middle half spans most of the median.
+    for (let i = 0; i < 20; i++) await addCar({ price: 3000 + i * 1000, year: 2018 });
+    const wide = await addCar({ price: 9000, year: 2018 });
+    await updateMarketValues(pool);
+
+    expect(await deal(fewComps)).toEqual({ market_confidence: "low", deal_pct: null });
+    expect(await deal(wide)).toEqual({ market_confidence: "low", deal_pct: null });
+    const listing = await getListing(pool, wide);
+    expect(listing?.marketConfidence).toBe("low");
   });
 
   it("keeps every price a listing had", async () => {
@@ -190,5 +239,27 @@ describe.skipIf(!url)("market values against Postgres", () => {
     expect(await unchecked()).toEqual([null, null, null, null, ["project"], ["gearbox"]]);
     expect(await backfillDamage(pool)).toBe(4);
     expect(await unchecked()).toEqual([[], [], [], [], ["project"], ["gearbox"]]);
+  });
+
+  it("rechecks intact titles with words the detector learnt for the deal lists", async () => {
+    const titles: [string, string[]][] = [
+      ["Beschädigte BMW X1", []],
+      ["BMW 218i Gran Tourer MOTORSTÖRUNG", []],
+      ["Ford S-Max Getriebe Problem", []],
+      ["Ford Transit Injektor def.", []],
+      ["BMW 216d beschaedigt, auch TEILEVERKAUF", []],
+      ["VW Golf 7 Defender-Grau", []],
+      ["VW Golf 7 TÜV neu", []],
+      ["VW Golf Motorschaden", ["engine"]],
+    ];
+    const ids: number[] = [];
+    for (const [title, damage] of titles) ids.push(await addCar({ title, price: 5000, damage }));
+    const sql = readFileSync(join(process.cwd(), "supabase/migrations/20261126220100_damage_recheck_beschaedigt.sql"), "utf8");
+    await pool.query(sql);
+    const damage = async () =>
+      (await pool.query("select id, damage from listings where id = any($1) order by id", [ids])).rows.map((row) => row.damage);
+    expect(await damage()).toEqual([null, null, null, null, null, [], [], ["engine"]]);
+    expect(await backfillDamage(pool)).toBe(5);
+    expect(await damage()).toEqual([["defect"], ["engine"], ["gearbox"], ["defect"], ["project"], [], [], ["engine"]]);
   });
 });

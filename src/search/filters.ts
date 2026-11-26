@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DEAL_FILTERS } from "@/core/deal";
 import { BODY_TYPES, FUELS, SELLER_TYPES, TRANSMISSIONS } from "@/core/types";
 
 export const SORTS = [
@@ -25,7 +26,7 @@ export const SORT_LABELS: Record<Sort, string> = {
   km_asc: "Kilometer aufsteigend",
   year_desc: "Erstzulassung, neueste zuerst",
   distance: "Entfernung",
-  below_market: "Am weitesten unter Marktwert",
+  below_market: "Bestes Schnäppchen: % unter Marktwert",
   flip: "Flip: höchster Stundenlohn",
   margin: "Flip: höchste Marge",
 };
@@ -101,6 +102,8 @@ const schema = z.object({
   hu: oneOf(HU_FILTERS),
   gesenkt: oneOf(PRICE_DROP_FILTERS),
   zustand: oneOf(CONDITIONS),
+  /** Schnäppchen: intact, at least this many percent below a trusted market value (src/core/deal.ts). */
+  deal: oneOf(DEAL_FILTERS),
   /** Flip filters: hardest repair job at most this difficulty, margin at least this many euros. */
   schwierigkeit: int(1, 5),
   margeMin: int(-1_000_000, 10_000_000),

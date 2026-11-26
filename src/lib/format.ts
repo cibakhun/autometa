@@ -1,3 +1,4 @@
+import { DEAL_RULES } from "@/core/deal";
 import type { InspectionBasis } from "@/core/inspection";
 import { kwToPs } from "@/core/normalize";
 
@@ -77,14 +78,25 @@ export function formatInspection(until: string | null, basis: InspectionBasis | 
 }
 
 /**
- * How a price compares to the market value: "1.200 € unter Marktwert", "300 € über Marktwert",
- * or "im Marktdurchschnitt" within 3 %. Null without a market value.
+ * How a price compares to the market value: "1.200 € (12 %) unter Marktwert", "300 € (3 %) über
+ * Marktwert", or "im Marktdurchschnitt" within 3 %. Null without a market value.
  */
 export function formatMarketGap(priceEur: number, marketEur: number | null): { text: string; below: boolean } | null {
   if (marketEur === null || marketEur <= 0) return null;
   const gap = marketEur - priceEur;
   if (Math.abs(gap) < marketEur * 0.03) return { text: "im Marktdurchschnitt", below: false };
+  const percent = Math.round((Math.abs(gap) * 100) / marketEur);
   return gap > 0
-    ? { text: `${euro.format(gap)} unter Marktwert`, below: true }
-    : { text: `${euro.format(-gap)} über Marktwert`, below: false };
+    ? { text: `${euro.format(gap)} (${percent}\u00a0%) unter Marktwert`, below: true }
+    : { text: `${euro.format(-gap)} (${percent}\u00a0%) über Marktwert`, below: false };
 }
+
+/** Why a market value is unsure, for a hint next to it. */
+export function unsureMarketReason(comps: number | null): string {
+  return comps !== null && comps < DEAL_RULES.mediumComps
+    ? `Nur ${comps} ähnliche Angebote zum Vergleich`
+    : "Die ähnlichen Angebote liegen preislich weit auseinander";
+}
+
+/** The warning for an intact car offered at half its market value or less (src/core/deal.ts). */
+export const TOO_CHEAP_WARNING = "Auffällig billig: über 50 % unter Marktwert. Meist steckt etwas dahinter (Schaden, Leasing, Betrug), genau prüfen.";

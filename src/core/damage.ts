@@ -52,7 +52,8 @@ interface Rule {
 }
 
 const RULES: Rule[] = [
-  { kind: "engine", pattern: /\bmotor(?:schaden|problem|probleme|platzer)\b/g },
+  { kind: "engine", pattern: /\bmotor(?:schaden|problem|probleme|platzer|storung)\b/g },
+  { kind: "engine", pattern: /\bmotor (?:problem|probleme|storung)\b/g },
   { kind: "engine", pattern: new RegExp(String.raw`\bmotor(?:${BROKEN}| (?:ist )?(?:fest|tot)| klopft| macht gerausche)\b`, "g") },
   { kind: "engine", pattern: /\b(?:kolbenfresser|pleuellagerschaden|pleuelschaden|lagerschaden)\b/g },
   { kind: "engine", pattern: /\bohne motor\b/g, negatable: false },
@@ -65,7 +66,8 @@ const RULES: Rule[] = [
   { kind: "head_gasket", pattern: /\bzylinderkopfschaden\b/g },
   { kind: "turbo", pattern: new RegExp(String.raw`\bturbo(?:lader)?(?:${BROKEN})\b`, "g") },
   { kind: "turbo", pattern: /\bturbo(?:lader)?schaden\b/g },
-  { kind: "gearbox", pattern: /\b(?:getriebeschaden|mechatronikschaden)\b/g },
+  { kind: "gearbox", pattern: /\b(?:getriebeschaden|mechatronikschaden|getriebeproblem|getriebeprobleme|getriebestorung)\b/g },
+  { kind: "gearbox", pattern: /\b(?:getriebe|automatikgetriebe|dsg) (?:problem|probleme|storung)\b/g },
   {
     kind: "gearbox",
     pattern: new RegExp(String.raw`\b(?:getriebe|automatikgetriebe|schaltgetriebe|dsg|mechatronik|wandler)(?:${BROKEN}| schaltet nicht| springt raus)\b`, "g"),
@@ -95,12 +97,16 @@ const RULES: Rule[] = [
   {
     kind: "project",
     // "Export T1" is a customs transit document a dealer exports new cars with, not a parts car.
-    pattern: /\b(?:bastler|bastlerfahrzeug|bastlerauto|bastlerwagen|teiletrager|teilespender|ersatzteilspender|schlachtfahrzeug|ausschlachten|schlachten|export(?! t[12]\b))\b/g,
+    pattern: /\b(?:bastler|bastlerfahrzeug|bastlerauto|bastlerwagen|teiletrager|teilespender|ersatzteilspender|teileverkauf|teileauto|schlachtfahrzeug|ausschlachten|schlachten|export(?! t[12]\b))\b/g,
   },
 ];
 
-/** Generic words, used only when no specific kind matched. */
-const GENERIC: RegExp = /\b(?:defekt|defekte|defekter|defektes|kaputt|schaden|mangel|mangeln)\b/g;
+/**
+ * Generic words, used only when no specific kind matched. "def" is "def." with its dot gone
+ * ("Injektor def."); "beschädigt" mostly means the body, but says too little to count as an accident.
+ */
+const GENERIC: RegExp =
+  /\b(?:defekt|defekte|defekter|defektes|def|kaputt|schaden|mangel|mangeln|beschadigt|beschadigte|beschadigter|beschadigtes|beschadigten|problem|probleme|storung)\b/g;
 
 /** Words right before a match that turn it around: "kein Unfall", "ohne Rost", "nichts defekt", "oh. Schäden". */
 const NEGATIONS = new Set(["kein", "keine", "keinen", "keinerlei", "ohne", "o", "oh", "nicht", "nichts"]);

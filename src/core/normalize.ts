@@ -172,12 +172,20 @@ export function normalizeBodyType(value: string | null | undefined): BodyType | 
 }
 
 const TITLE_BODY_RULES: [RegExp, BodyType][] = [
-  [/\b(kombi|estate|touring|avant|variant|sportswagon|sports tourer|tourer|wagon|t modell|sw)\b/, "estate"],
-  [/\b(cabrio|cabriolet|roadster|convertible|spider|spyder)\b/, "convertible"],
+  // Vans whose names sound like estates or other bodies: BMW "Active Tourer", VW "Golf Sportsvan".
+  [/\b(active tourer|gran tourer|sportsvan|golf plus|space ?tourer|space wagon)\b/, "van"],
+  // Vans for goods, not people: a family looking for a van does not mean these.
+  [/\b(kasten|kastenwagen|pritsche|pritschenwagen|koffer|kofferaufbau|kipper)\b/, "other"],
+  [
+    /\b(kombi|combi|estate|touring|avant|variant|sportswagon|sports wagon|sports tourer|tourer|wagon(?! r\b)|t modell|sw|turnier|caravan|grandtour|grand tour|shooting brake|allroad|alltrack|cross country|sportbrake|mcv)\b/,
+    "estate",
+  ],
+  [/\b(cabrio|cabriolet|roadster|convertible|spider|spyder|targa|twintop)\b/, "convertible"],
   [/\b(coupe|coupé)\b/, "coupe"],
-  [/\b(suv|gelandewagen|offroad|crossover)\b/, "suv"],
+  // "Mustang Mach-E" and "Yaris Cross" share their model with a coupé and a small car.
+  [/\b(suv|gelandewagen|offroad|crossover|pick ?up|mach e|yaris cross)\b/, "suv"],
   [/\b(van|kleinbus|bus|bulli|mpv|minivan|camper|wohnmobil)\b/, "van"],
-  [/\b(limousine|lim|sedan|saloon)\b/, "sedan"],
+  [/\b(limousine|lim|sedan|saloon|stufenheck)\b/, "sedan"],
   [/\b(kleinwagen)\b/, "small"],
 ];
 
