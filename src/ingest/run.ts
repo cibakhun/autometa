@@ -69,9 +69,19 @@ const LISTING_COLUMNS = [
 const UPDATE_RULES: Partial<Record<(typeof LISTING_COLUMNS)[number], string>> = {
   // A sighting without a photo keeps the one seen before.
   image_url: "image_url = coalesce(excluded.image_url, listings.image_url)",
-  // "TÜV neu" counts from the first sighting, not from every later one.
+  // Facts a listing's own page gave (see checkDueListings) stay when a list shows only the title.
+  fuel: "fuel = coalesce(excluded.fuel, listings.fuel)",
+  transmission: "transmission = coalesce(excluded.transmission, listings.transmission)",
+  power_kw: "power_kw = coalesce(excluded.power_kw, listings.power_kw)",
+  seller_type: "seller_type = coalesce(excluded.seller_type, listings.seller_type)",
+  // "TÜV neu" counts from the first sighting, not from every later one. A date stated before (in an
+  // earlier title or on the listing's own page) stays while the title says nothing about the HU.
   hu_until: `hu_until = case when excluded.hu_basis = 'relative' and listings.hu_basis = 'relative'
-                             then least(excluded.hu_until, listings.hu_until) else excluded.hu_until end`,
+                             then least(excluded.hu_until, listings.hu_until)
+                             when excluded.hu_basis is null and listings.hu_basis = 'stated' then listings.hu_until
+                             else excluded.hu_until end`,
+  hu_basis: `hu_basis = case when excluded.hu_basis is null and listings.hu_basis = 'stated' then listings.hu_basis
+                             else excluded.hu_basis end`,
 };
 
 interface PendingListing {
@@ -369,7 +379,9 @@ async function markMissed(client: PoolClient, sourceId: string, startedAt: Date,
  * unlooked-at first, and applies what their pages say: online counts as seen now (with the price
  * the page asks, which the price history keeps like a price seen in a list), taken down leaves the
  * search at once, unclear only records the attempt (the listing is due again a day later).
- * Written in small batches, so a run that ends early keeps its checks.
+ * Vehicle facts the page shows (fuel, gearbox, power, body, seller type) replace what the title
+ * gave; its HU date replaces only one we inferred (not one the title states), and its damage only
+ * an intact car's. Written in small batches, so a run that ends early keeps its checks.
  */
 async function checkDueListings(client: PoolClient, adapter: SourceAdapter, totals: IngestResult) {
   const { source } = adapter;
@@ -404,9 +416,22 @@ async function checkDueListings(client: PoolClient, adapter: SourceAdapter, tota
                              then null else l.segment end,
               -- The earliest day any page named: a later one may be the day it was pushed up again.
               listed_on = case when v.outcome = 'active' then least(l.listed_on, v.listed_on) else l.listed_on end,
+              fuel = coalesce(v.fuel, l.fuel),
+              transmission = coalesce(v.transmission, l.transmission),
+              power_kw = coalesce(v.power_kw, l.power_kw),
+              body_type = coalesce(v.body_type, l.body_type),
+              seller_type = coalesce(v.seller_type, l.seller_type),
+              hu_until = case when v.hu_until is not null and (l.hu_basis is null or l.hu_basis in ('registration', 'relative'))
+                              then v.hu_until else l.hu_until end,
+              hu_basis = case when v.hu_until is not null and (l.hu_basis is null or l.hu_basis in ('registration', 'relative'))
+                              then 'stated' else l.hu_basis end,
+              -- unnest cannot hand out arrays as values, so each listing's damage kinds travel as one string.
+              damage = case when v.damage_kinds is not null and l.damage = '{}' then string_to_array(v.damage_kinds, ',') else l.damage end,
               checked_at = now()
-         from unnest($2::text[], $3::text[], $4::int[], $5::date[], $6::boolean[])
-              as v (external_id, outcome, price_eur, listed_on, not_for_sale)
+         from unnest($2::text[], $3::text[], $4::int[], $5::date[], $6::boolean[],
+                     $7::text[], $8::text[], $9::int[], $10::text[], $11::text[], $12::date[], $13::text[])
+              as v (external_id, outcome, price_eur, listed_on, not_for_sale,
+                    fuel, transmission, power_kw, body_type, seller_type, hu_until, damage_kinds)
         where l.source_id = $1 and l.external_id = v.external_id and l.status = 'active'
         returning v.outcome, v.not_for_sale`,
       [
@@ -416,6 +441,13 @@ async function checkDueListings(client: PoolClient, adapter: SourceAdapter, tota
         checks.map((r) => r.priceEur ?? null),
         checks.map((r) => r.listedOn ?? null),
         checks.map((r) => r.notForSale === true),
+        checks.map((r) => r.fuel ?? null),
+        checks.map((r) => r.transmission ?? null),
+        checks.map((r) => r.powerKw ?? null),
+        checks.map((r) => r.bodyType ?? null),
+        checks.map((r) => r.sellerType ?? null),
+        checks.map((r) => r.huUntil ?? null),
+        checks.map((r) => (r.damage && r.damage.length > 0 ? r.damage.join(",") : null)),
       ],
     );
     totals.gone += updated.rows.filter((row) => row.outcome === "gone" || row.not_for_sale).length;

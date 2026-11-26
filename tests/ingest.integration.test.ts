@@ -281,6 +281,56 @@ describe.skipIf(!url)("importing scraped portals", () => {
     expect((await getListing(pool, id))?.priceHistory).toHaveLength(2);
   });
 
+  it("takes the vehicle facts a listing's own page shows, and keeps them when a list shows only the title", async () => {
+    const titleOnly = { fuel: null, transmission: null, powerKw: null, bodyType: null, sellerType: null } as const;
+    await runIngest(
+      pool,
+      fakePortal(PORTAL_A, [
+        { listing: car(PORTAL_A, "1", titleOnly) },
+        // The title states the HU and names a damage.
+        { listing: car(PORTAL_A, "2", { ...titleOnly, title: "VW Golf TÜV 05/2027 Motorschaden" }) },
+        { listing: car(PORTAL_A, "3", { ...titleOnly, title: "VW Golf TÜV neu" }) },
+      ]),
+    );
+    await pool.query("update listings set last_seen_at = now() - interval '30 hours'");
+    const page: PageFacts = {
+      fuel: "diesel",
+      transmission: "automatic",
+      powerKw: 110,
+      bodyType: "estate",
+      sellerType: "private",
+      huUntil: "2028-07-01",
+      damage: ["defect"],
+    };
+    const checks = {
+      outcomes: { "1": "active", "2": "active", "3": "active" } as Record<string, CheckOutcome>,
+      due: [] as ListingRef[],
+      facts: { "1": page, "2": page, "3": { huUntil: "2028-07-01" } } as Record<string, PageFacts>,
+    };
+    await runIngest(pool, fakePortal(PORTAL_A, [], { checks }));
+
+    const facts = async () =>
+      (
+        await pool.query(
+          `select external_id, fuel, transmission, power_kw, body_type, seller_type,
+                  to_char(hu_until, 'YYYY-MM-DD') as hu_until, hu_basis, damage
+             from listings order by external_id`,
+        )
+      ).rows;
+    const fromPage = { fuel: "diesel", transmission: "automatic", power_kw: 110, body_type: "estate", seller_type: "private" };
+    expect(await facts()).toEqual([
+      { external_id: "1", ...fromPage, hu_until: "2028-07-01", hu_basis: "stated", damage: ["defect"] },
+      // The HU the title states and the damage it names stay.
+      { external_id: "2", ...fromPage, hu_until: "2027-05-01", hu_basis: "stated", damage: ["engine"] },
+      // "TÜV neu" counted from the first sighting gives way to the date the page states.
+      { external_id: "3", fuel: null, transmission: null, power_kw: null, body_type: null, seller_type: null, hu_until: "2028-07-01", hu_basis: "stated", damage: [] },
+    ]);
+
+    // Seen in a list again with nothing but the title: the page's facts stay.
+    await runIngest(pool, fakePortal(PORTAL_A, [{ listing: car(PORTAL_A, "1", titleOnly) }]));
+    expect((await facts())[0]).toMatchObject({ fuel: "diesel", transmission: "automatic", power_kw: 110, seller_type: "private", hu_until: "2028-07-01", hu_basis: "stated" });
+  });
+
   it("takes a stored listing out as filtered when the import now leaves it out, and back in once it is kept", async () => {
     const reasonOf = async (id: string) => (await pool.query("select status, gone_reason from listings where external_id = $1", [id])).rows[0];
     await runIngest(pool, fakePortal(PORTAL_A, ["1", "2"].map((id) => ({ listing: car(PORTAL_A, id) }))));

@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from "pg";
-import type { NormalizedListing } from "@/core/types";
+import type { DamageKind } from "@/core/damage";
+import type { BodyType, Fuel, NormalizedListing, SellerType, Transmission } from "@/core/types";
 
 export interface SourceInfo {
   id: string;
@@ -102,6 +103,20 @@ export interface PageFacts {
   listedOn?: string;
   /** The page shows no car for sale after all (a dealer buying up cars): the listing leaves the search as filtered. */
   notForSale?: true;
+  /**
+   * Vehicle facts from the page's own fields (the seller picks them from the portal's lists),
+   * for portals whose result lists show only the title. Each is left out when the page does not
+   * show it in the expected form.
+   */
+  fuel?: Fuel;
+  transmission?: Transmission;
+  powerKw?: number;
+  bodyType?: BodyType;
+  sellerType?: SellerType;
+  /** First day of the last month the HU is valid, YYYY-MM-01. */
+  huUntil?: string;
+  /** Damage the page's condition field names; empty is not used (an intact car leaves it out). */
+  damage?: DamageKind[];
 }
 
 export interface CheckResult extends PageFacts {

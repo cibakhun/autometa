@@ -8,6 +8,8 @@ import type { BodyType } from "@/core/types";
  * to the listings stored before them. AutoScout24 reads every listing again within a day, but
  * Kleinanzeigen's and Quoka's older listings are only checked on their own page and never read
  * from a list again, so without this they would keep an unknown body for as long as they are online.
+ * A body type Kleinanzeigen's own page gave (see src/ingest/run.ts, checkDueListings) may give way
+ * to the rules here, and comes back with the listing's next check a day later.
  *
  * Runs in the worker, next to the imports, once per BODY_RULES_VERSION: it walks the active
  * listings in batches by id and writes the body type where it changes. Bump the version when the
