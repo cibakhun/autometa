@@ -43,6 +43,11 @@ export const DAMAGE_LABELS: Record<DamageKind, string> = {
 // Matching runs on normalizeText output: lower case, umlauts without dots ("fährt" -> "fahrt"),
 // everything else a single space.
 const BROKEN = String.raw`(?: ist| sind)? (?:defekt|kaputt)`;
+/**
+ * The ending of a compound that names harm: "Unfallschaden", "Frontschäden", "Unfallbeschädigt",
+ * "Hagelbeschädigung", also with "ae" for "ä" ("Unfallbeschaedigt", "Heckschaeden").
+ */
+const HARMED = String.raw`(?:schaden|schaeden|(?:besch|gesch)(?:a|ae)dig(?:t|te|ter|tes|ten|ung))`;
 
 interface Rule {
   kind: DamageKind;
@@ -82,12 +87,12 @@ const RULES: Rule[] = [
   { kind: "electrics", pattern: /\bkabelbrand\b/g },
   {
     kind: "accident",
-    pattern: /\b(?:unfall|unfallwagen|unfallfahrzeug|unfallauto|unfallschaden|frontschaden|heckschaden|seitenschaden|totalschaden|karosserieschaden|blechschaden)\b/g,
+    pattern: new RegExp(String.raw`\b(?:unfall|unfallwagen|unfallfahrzeug|unfallauto|(?:unfall|front|heck|seiten|total|karosserie|blech)${HARMED})\b`, "g"),
   },
   { kind: "accident", pattern: /\bnicht unfallfrei\b/g, negatable: false },
   { kind: "rust", pattern: /\b(?:rost|rostschaden|rostloch|rostlocher|rostprobleme|durchgerostet)\b/g },
-  { kind: "hail", pattern: /\b(?:hagel|hagelschaden)\b/g },
-  { kind: "water", pattern: /\b(?:wasserschaden|flutschaden|hochwasser|hochwasserschaden|hochwasserfahrzeug)\b/g },
+  { kind: "hail", pattern: new RegExp(String.raw`\bhagel(?:${HARMED})?\b`, "g") },
+  { kind: "water", pattern: new RegExp(String.raw`\b(?:hochwasser|hochwasserfahrzeug|(?:wasser|flut|hochwasser)${HARMED})\b`, "g") },
   {
     kind: "not_running",
     pattern:
@@ -106,7 +111,7 @@ const RULES: Rule[] = [
  * ("Injektor def."); "beschädigt" mostly means the body, but says too little to count as an accident.
  */
 const GENERIC: RegExp =
-  /\b(?:defekt|defekte|defekter|defektes|def|kaputt|schaden|mangel|mangeln|beschadigt|beschadigte|beschadigter|beschadigtes|beschadigten|problem|probleme|storung)\b/g;
+  /\b(?:defekt|defekte|defekter|defektes|def|kaputt|schaden|schaeden|mangel|mangeln|maengel|maengeln|besch(?:a|ae)dig(?:t|te|ter|tes|ten)|problem|probleme|storung|stoerung)\b/g;
 
 /** Words right before a match that turn it around: "kein Unfall", "ohne Rost", "nichts defekt", "oh. Schäden". */
 const NEGATIONS = new Set(["kein", "keine", "keinen", "keinerlei", "ohne", "o", "oh", "nicht", "nichts"]);
