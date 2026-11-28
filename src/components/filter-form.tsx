@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { BODY_TYPE_LABELS, BODY_TYPES, FUEL_LABELS, FUELS, SELLER_TYPE_LABELS, SELLER_TYPES, TRANSMISSION_LABELS, TRANSMISSIONS } from "@/core/types";
 import { DEAL_FILTER_LABELS, DEAL_FILTERS } from "@/core/deal";
 import { VERDICT_FILTER_LABELS, VERDICT_FILTERS, VERDICT_RULES } from "@/core/verdict";
@@ -19,6 +19,7 @@ import {
 } from "@/search/filters";
 import type { MakeFacet, SourceFacet } from "@/search/query";
 import { activeFilters, slugName } from "./active-filters";
+import { Chevron, InfoIcon } from "./fold";
 import { SearchLink, Spinner, useSearchNavigation } from "./search-transition";
 
 const KM_STEPS = [10_000, 25_000, 50_000, 75_000, 100_000, 150_000, 200_000];
@@ -147,177 +148,164 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
           </div>
         </div>
 
-        <div>
-          <label htmlFor="urteil" className={labelClass}>Urteil</label>
-          <select id="urteil" name="urteil" defaultValue={filters.urteil ?? ""} aria-describedby="urteil-hint" className={fieldClass}>
-            <option value="">Beliebig</option>
-            {VERDICT_FILTERS.map((v) => <option key={v} value={v}>{VERDICT_FILTER_LABELS[v]}</option>)}
-          </select>
-          <p id="urteil-hint" className="mt-1 text-xs text-muted">
-            Anschauen: ohne Schaden, mind. {VERDICT_RULES.goodDealPct} % unter einem verlässlichen Marktwert, HU nicht abgelaufen. Schrauber: Schaden genannt, die Flip-Rechnung erreicht deine Mindestmarge bei deinem Level (Einstellungen).
-          </p>
-        </div>
-
-        <div>
-          <label htmlFor="deal" className={labelClass}>Schnäppchen</label>
-          <select id="deal" name="deal" defaultValue={filters.deal ?? ""} aria-describedby="deal-hint" className={fieldClass}>
-            <option value="">Beliebig</option>
-            {DEAL_FILTERS.map((d) => <option key={d} value={d}>{DEAL_FILTER_LABELS[d]}</option>)}
-          </select>
-          <p id="deal-hint" className="mt-1 text-xs text-muted">
-            Nur Autos ohne Schadenshinweis, deren Marktwert auf genug ähnlichen Angeboten beruht. Über 50 % darunter zählt nicht: Da steckt fast immer etwas dahinter.
-          </p>
-        </div>
-
-        <div>
-          <label htmlFor="gesenkt" className={labelClass}>Preis gesenkt</label>
-          <select id="gesenkt" name="gesenkt" defaultValue={filters.gesenkt ?? ""} aria-describedby="gesenkt-hint" className={fieldClass}>
-            <option value="">Beliebig</option>
-            {PRICE_DROP_FILTERS.map((d) => <option key={d} value={d}>{PRICE_DROP_FILTER_LABELS[d]}</option>)}
-          </select>
-          <p id="gesenkt-hint" className="mt-1 text-xs text-muted">Nur Angebote, deren Preis zuletzt gesunken ist, seit AutoMeta sie kennt.</p>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
+        <Group title="Bewertung durch AutoMeta">
           <div>
-            <label htmlFor="yearMin" className={labelClass}>Erstzulassung ab</label>
-            <select id="yearMin" name="yearMin" defaultValue={filters.yearMin ?? ""} className={fieldClass}>
+            <FieldLabel htmlFor="urteil" name="Urteil" hint={`Anschauen: ohne Schaden, mind. ${VERDICT_RULES.goodDealPct} % unter einem verlässlichen Marktwert, HU nicht abgelaufen. Schrauber: Schaden genannt, die Flip-Rechnung erreicht deine Mindestmarge bei deinem Level (Einstellungen).`} />
+            <select id="urteil" name="urteil" defaultValue={filters.urteil ?? ""} aria-describedby="urteil-hint" className={fieldClass}>
               <option value="">Beliebig</option>
-              {withCurrent(YEARS, filters.yearMin, true).map((y) => <option key={y} value={y}>{y}</option>)}
+              {VERDICT_FILTERS.map((v) => <option key={v} value={v}>{VERDICT_FILTER_LABELS[v]}</option>)}
             </select>
           </div>
+
           <div>
-            <label htmlFor="yearMax" className={labelClass}>bis</label>
-            <select id="yearMax" name="yearMax" defaultValue={filters.yearMax ?? ""} className={fieldClass}>
+            <FieldLabel htmlFor="deal" name="Schnäppchen" hint="Nur Autos ohne Schadenshinweis, deren Marktwert auf genug ähnlichen Angeboten beruht. Über 50 % darunter zählt nicht: Da steckt fast immer etwas dahinter." />
+            <select id="deal" name="deal" defaultValue={filters.deal ?? ""} aria-describedby="deal-hint" className={fieldClass}>
               <option value="">Beliebig</option>
-              {withCurrent(YEARS, filters.yearMax, true).map((y) => <option key={y} value={y}>{y}</option>)}
+              {DEAL_FILTERS.map((d) => <option key={d} value={d}>{DEAL_FILTER_LABELS[d]}</option>)}
             </select>
           </div>
-        </div>
 
-        <div className="grid grid-cols-2 gap-2">
           <div>
-            <label htmlFor="kmMax" className={labelClass}>Kilometer bis</label>
-            <select id="kmMax" name="kmMax" defaultValue={filters.kmMax ?? ""} className={fieldClass}>
+            <FieldLabel htmlFor="gesenkt" name="Preis gesenkt" hint="Nur Angebote, deren Preis zuletzt gesunken ist, seit AutoMeta sie kennt." />
+            <select id="gesenkt" name="gesenkt" defaultValue={filters.gesenkt ?? ""} aria-describedby="gesenkt-hint" className={fieldClass}>
               <option value="">Beliebig</option>
-              {withCurrent(KM_STEPS, filters.kmMax).map((km) => <option key={km} value={km}>{nf.format(km)} km</option>)}
+              {PRICE_DROP_FILTERS.map((d) => <option key={d} value={d}>{PRICE_DROP_FILTER_LABELS[d]}</option>)}
             </select>
           </div>
+
           <div>
-            <label htmlFor="psMin" className={labelClass}>Leistung ab</label>
-            <select id="psMin" name="psMin" defaultValue={filters.psMin ?? ""} className={fieldClass}>
+            <FieldLabel htmlFor="zustand" name="Zustand laut Titel" hint="Erkennt Hinweise wie „Motorschaden“, „springt nicht an“ oder „Bastler“ im Anzeigentitel." />
+            <select id="zustand" name="zustand" defaultValue={filters.zustand ?? ""} aria-describedby="zustand-hint" className={fieldClass}>
               <option value="">Beliebig</option>
-              {withCurrent(PS_STEPS, filters.psMin).map((ps) => <option key={ps} value={ps}>{ps} PS</option>)}
+              {CONDITIONS.map((c) => <option key={c} value={c}>{CONDITION_LABELS[c]}</option>)}
             </select>
           </div>
-        </div>
+        </Group>
 
-        <fieldset>
-          <legend className={labelClass}>Kraftstoff</legend>
-          <div className="grid grid-cols-2 gap-x-2 gap-y-1">
-            {FUELS.map((fuel) => (
-              <label key={fuel} className="flex items-center gap-2 text-sm">
-                <input type="checkbox" name="fuel" value={fuel} defaultChecked={filters.fuel.includes(fuel)} className="accent-accent" />
-                {FUEL_LABELS[fuel]}
-              </label>
-            ))}
-          </div>
-        </fieldset>
-
-        <fieldset>
-          <legend className={labelClass}>Fahrzeugtyp</legend>
-          <div className="grid grid-cols-2 gap-x-2 gap-y-1">
-            {BODY_TYPES.map((body) => (
-              <label key={body} className="flex items-center gap-2 text-sm">
-                <input type="checkbox" name="body" value={body} defaultChecked={filters.body.includes(body)} className="accent-accent" />
-                {BODY_TYPE_LABELS[body]}
-              </label>
-            ))}
-          </div>
-        </fieldset>
-
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label htmlFor="transmission" className={labelClass}>Getriebe</label>
-            <select id="transmission" name="transmission" defaultValue={filters.transmission ?? ""} className={fieldClass}>
-              <option value="">Beliebig</option>
-              {TRANSMISSIONS.map((t) => <option key={t} value={t}>{TRANSMISSION_LABELS[t]}</option>)}
-            </select>
-          </div>
-          <div>
-            <label htmlFor="seller" className={labelClass}>Anbieter</label>
-            <select id="seller" name="seller" defaultValue={filters.seller ?? ""} className={fieldClass}>
-              <option value="">Beliebig</option>
-              {SELLER_TYPES.map((s) => <option key={s} value={s}>{SELLER_TYPE_LABELS[s]}</option>)}
-            </select>
-          </div>
-        </div>
-
-        <div>
-          <label htmlFor="zustand" className={labelClass}>Zustand laut Titel</label>
-          <select id="zustand" name="zustand" defaultValue={filters.zustand ?? ""} aria-describedby="zustand-hint" className={fieldClass}>
-            <option value="">Beliebig</option>
-            {CONDITIONS.map((c) => <option key={c} value={c}>{CONDITION_LABELS[c]}</option>)}
-          </select>
-          <p id="zustand-hint" className="mt-1 text-xs text-muted">
-            Erkennt Hinweise wie „Motorschaden“, „springt nicht an“ oder „Bastler“ im Anzeigentitel.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label htmlFor="schwierigkeit" className={labelClass}>Schwierigkeit bis</label>
-            <select id="schwierigkeit" name="schwierigkeit" defaultValue={filters.schwierigkeit ?? ""} aria-describedby="flip-hint" className={fieldClass}>
-              <option value="">Beliebig</option>
-              {DIFFICULTIES.map((d) => <option key={d} value={d} title={DIFFICULTY_LABELS[d]}>{d} von 5</option>)}
-            </select>
-          </div>
-          <div>
-            <label htmlFor="margeMin" className={labelClass}>Flip-Marge ab (€)</label>
-            <input id="margeMin" name="margeMin" type="number" step={1} inputMode="numeric" defaultValue={filters.margeMin} aria-describedby="flip-hint" className={fieldClass} />
-          </div>
-          <p id="flip-hint" className="col-span-2 text-xs text-muted">
-            Nur Angebote mit Schadenshinweis haben eine Reparaturschätzung. Schwierigkeit 1: {DIFFICULTY_LABELS[1]}, 5: {DIFFICULTY_LABELS[5]}.
-          </p>
-        </div>
-
-        <div>
-          <label htmlFor="hu" className={labelClass}>TÜV/HU</label>
-          <select id="hu" name="hu" defaultValue={filters.hu ?? ""} aria-describedby="hu-hint" className={fieldClass}>
-            <option value="">Beliebig</option>
-            {HU_FILTERS.map((h) => <option key={h} value={h}>{HU_FILTER_LABELS[h]}</option>)}
-          </select>
-          <p id="hu-hint" className="mt-1 text-xs text-muted">
-            Zählt nur Angebote, deren Titel die HU nennt („TÜV 05/2027“, „TÜV neu“), und Autos unter 3 Jahren.
-          </p>
-        </div>
-
-        {sources.length > 1 && (
-          <fieldset>
-            <legend className={labelClass}>Börsen</legend>
-            <div className="grid grid-cols-1 gap-y-1">
-              {sources.map((source) => (
-                <label key={source.id} className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" name="source" value={source.id} defaultChecked={filters.source.includes(source.id)} className="accent-accent" />
-                  {source.name} <span className="text-muted">({nf.format(source.count)})</span>
-                </label>
-              ))}
+        <Group title="Fahrzeug">
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label htmlFor="yearMin" className={labelClass}>Erstzulassung ab</label>
+              <select id="yearMin" name="yearMin" defaultValue={filters.yearMin ?? ""} className={fieldClass}>
+                <option value="">Beliebig</option>
+                {withCurrent(YEARS, filters.yearMin, true).map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
             </div>
-          </fieldset>
-        )}
-
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label htmlFor="zip" className={labelClass}>PLZ</label>
-            <input id="zip" name="zip" inputMode="numeric" pattern="\d{5}" maxLength={5} placeholder="z. B. 10115" defaultValue={filters.zip} className={fieldClass} />
+            <div>
+              <label htmlFor="yearMax" className={labelClass}>bis</label>
+              <select id="yearMax" name="yearMax" defaultValue={filters.yearMax ?? ""} className={fieldClass}>
+                <option value="">Beliebig</option>
+                {withCurrent(YEARS, filters.yearMax, true).map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </div>
           </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label htmlFor="kmMax" className={labelClass}>Kilometer bis</label>
+              <select id="kmMax" name="kmMax" defaultValue={filters.kmMax ?? ""} className={fieldClass}>
+                <option value="">Beliebig</option>
+                {withCurrent(KM_STEPS, filters.kmMax).map((km) => <option key={km} value={km}>{nf.format(km)} km</option>)}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="psMin" className={labelClass}>Leistung ab</label>
+              <select id="psMin" name="psMin" defaultValue={filters.psMin ?? ""} className={fieldClass}>
+                <option value="">Beliebig</option>
+                {withCurrent(PS_STEPS, filters.psMin).map((ps) => <option key={ps} value={ps}>{ps} PS</option>)}
+              </select>
+            </div>
+          </div>
+
+          <CheckGroup
+            legend="Kraftstoff"
+            name="fuel"
+            options={FUELS.map((fuel) => ({ value: fuel, label: FUEL_LABELS[fuel] }))}
+            selected={filters.fuel}
+          />
+          <CheckGroup
+            legend="Fahrzeugtyp"
+            name="body"
+            options={BODY_TYPES.map((body) => ({ value: body, label: BODY_TYPE_LABELS[body] }))}
+            selected={filters.body}
+          />
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label htmlFor="transmission" className={labelClass}>Getriebe</label>
+              <select id="transmission" name="transmission" defaultValue={filters.transmission ?? ""} className={fieldClass}>
+                <option value="">Beliebig</option>
+                {TRANSMISSIONS.map((t) => <option key={t} value={t}>{TRANSMISSION_LABELS[t]}</option>)}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="seller" className={labelClass}>Anbieter</label>
+              <select id="seller" name="seller" defaultValue={filters.seller ?? ""} className={fieldClass}>
+                <option value="">Beliebig</option>
+                {SELLER_TYPES.map((s) => <option key={s} value={s}>{SELLER_TYPE_LABELS[s]}</option>)}
+              </select>
+            </div>
+          </div>
+
           <div>
-            <label htmlFor="radius" className={labelClass}>Umkreis</label>
-            <select id="radius" name="radius" defaultValue={filters.radius ?? 50} className={fieldClass}>
-              {RADII_KM.map((r) => <option key={r} value={r}>{r} km</option>)}
+            <FieldLabel htmlFor="hu" name="TÜV/HU" hint="Zählt nur Angebote, deren Titel die HU nennt („TÜV 05/2027“, „TÜV neu“), und Autos unter 3 Jahren." />
+            <select id="hu" name="hu" defaultValue={filters.hu ?? ""} aria-describedby="hu-hint" className={fieldClass}>
+              <option value="">Beliebig</option>
+              {HU_FILTERS.map((h) => <option key={h} value={h}>{HU_FILTER_LABELS[h]}</option>)}
             </select>
           </div>
-        </div>
+        </Group>
+
+        {/* For people who repair cars themselves; folded away unless one of its filters is set. */}
+        <details open={filters.schwierigkeit !== undefined || filters.margeMin !== undefined} className="border-t border-line pt-3">
+          <summary className="fold flex cursor-pointer select-none items-center justify-between gap-2 text-sm font-semibold hover:text-accent">
+            Für Schrauber (Flip)
+            <Chevron />
+          </summary>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <div>
+              <FieldLabel
+                htmlFor="schwierigkeit"
+                name="Schwierigkeit bis"
+                hintId="flip-hint"
+                hint={`Nur Angebote mit Schadenshinweis haben eine Reparaturschätzung. Schwierigkeit 1: ${DIFFICULTY_LABELS[1]}, 5: ${DIFFICULTY_LABELS[5]}.`}
+              />
+              <select id="schwierigkeit" name="schwierigkeit" defaultValue={filters.schwierigkeit ?? ""} aria-describedby="flip-hint" className={fieldClass}>
+                <option value="">Beliebig</option>
+                {DIFFICULTIES.map((d) => <option key={d} value={d} title={DIFFICULTY_LABELS[d]}>{d} von 5</option>)}
+              </select>
+            </div>
+            <div className="self-end">
+              <label htmlFor="margeMin" className={labelClass}>Flip-Marge ab (€)</label>
+              <input id="margeMin" name="margeMin" type="number" step={1} inputMode="numeric" defaultValue={filters.margeMin} aria-describedby="flip-hint" className={fieldClass} />
+            </div>
+          </div>
+        </details>
+
+        <Group title="Ort und Börsen">
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label htmlFor="zip" className={labelClass}>PLZ</label>
+              <input id="zip" name="zip" inputMode="numeric" pattern="\d{5}" maxLength={5} placeholder="z. B. 10115" defaultValue={filters.zip} className={fieldClass} />
+            </div>
+            <div>
+              <label htmlFor="radius" className={labelClass}>Umkreis</label>
+              <select id="radius" name="radius" defaultValue={filters.radius ?? 50} className={fieldClass}>
+                {RADII_KM.map((r) => <option key={r} value={r}>{r} km</option>)}
+              </select>
+            </div>
+          </div>
+
+          {sources.length > 1 && (
+            <CheckGroup
+              legend="Börsen"
+              name="source"
+              columns={1}
+              options={sources.map((source) => ({ value: source.id, label: source.name, count: source.count }))}
+              selected={filters.source}
+            />
+          )}
+        </Group>
 
         <div>
           <label htmlFor="sort" className={labelClass}>Sortierung</label>
@@ -341,5 +329,98 @@ export function FilterForm({ facets, sources, filters }: { facets: MakeFacet[]; 
         </div>
       </form>
     </>
+  );
+}
+
+/** A heading over a few related filters, so the long form reads as a handful of topics. */
+function Group({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="space-y-4 border-t border-line pt-3">
+      <h3 className="text-sm font-semibold">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+/**
+ * A field label with an (i) button that shows what the filter does. The text stays the field's
+ * description for screen readers either way (aria-describedby on the field, `${htmlFor}-hint`).
+ */
+function FieldLabel({ htmlFor, name, hint, hintId = `${htmlFor}-hint` }: { htmlFor: string; name: string; hint: string; hintId?: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <div className="mb-1 flex items-center gap-1">
+        <label htmlFor={htmlFor} className="text-xs font-medium text-muted">
+          {name}
+        </label>
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          aria-controls={hintId}
+          aria-label={`Was bedeutet „${name}“?`}
+          title={open ? "Erklärung ausblenden" : "Erklärung anzeigen"}
+          className={`-m-1 rounded-full p-1 hover:text-accent ${open ? "text-accent" : "text-muted"}`}
+        >
+          <InfoIcon />
+        </button>
+      </div>
+      <p id={hintId} hidden={!open} className="mb-1.5 rounded-md bg-background px-2 py-1.5 text-xs text-muted">
+        {hint}
+      </p>
+    </>
+  );
+}
+
+/**
+ * A list of checkboxes folded into one line ("Kraftstoff: Alle" / "Kraftstoff: Diesel, Benzin")
+ * that opens on a tap; open from the start when something is chosen. Folded boxes still count:
+ * they stay in the form.
+ */
+function CheckGroup({
+  legend,
+  name,
+  options,
+  selected,
+  columns = 2,
+}: {
+  legend: string;
+  name: string;
+  options: { value: string; label: string; count?: number }[];
+  selected: readonly string[];
+  columns?: 1 | 2;
+}) {
+  const [chosen, setChosen] = useState<string[]>(() => options.filter((o) => selected.includes(o.value)).map((o) => o.value));
+  const summary = chosen.length === 0 ? "Alle" : options.filter((o) => chosen.includes(o.value)).map((o) => o.label).join(", ");
+  return (
+    <details open={selected.length > 0}>
+      <summary className="fold flex cursor-pointer select-none items-center justify-between gap-2 rounded-md border border-line px-2.5 py-1.5 text-sm hover:border-accent">
+        <span className="min-w-0 truncate">
+          <span className="text-xs font-medium text-muted">{legend}: </span>
+          <span className={chosen.length > 0 ? "font-medium" : ""}>{summary}</span>
+        </span>
+        <Chevron />
+      </summary>
+      <fieldset className={`mt-2 grid gap-x-2 gap-y-1 px-1 ${columns === 2 ? "grid-cols-2" : "grid-cols-1"}`}>
+        <legend className="sr-only">{legend}</legend>
+        {options.map((option) => (
+          <label key={option.value} className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              name={name}
+              value={option.value}
+              defaultChecked={selected.includes(option.value)}
+              onChange={(event) =>
+                setChosen((current) => (event.target.checked ? [...current, option.value] : current.filter((value) => value !== option.value)))
+              }
+              className="accent-accent"
+            />
+            {option.label}
+            {option.count !== undefined && <span className="text-muted">({nf.format(option.count)})</span>}
+          </label>
+        ))}
+      </fieldset>
+    </details>
   );
 }

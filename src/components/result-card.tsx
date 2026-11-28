@@ -1,10 +1,10 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { DAMAGE_LABELS } from "@/core/damage";
-import { isTooCheap } from "@/core/deal";
+import { kwToPs } from "@/core/normalize";
 import { FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
-import { DEFAULT_FLIP_SETTINGS, type FlipResult, type FlipSettings } from "@/core/flip";
-import { listingVerdict, VERDICT_LABELS, type ListingVerdict, type Verdict, type VerdictReason } from "@/core/verdict";
+import { DEFAULT_FLIP_SETTINGS, type FlipSettings } from "@/core/flip";
+import { listingVerdict, VERDICT_LABELS, type ListingVerdict, type VerdictReason } from "@/core/verdict";
 import {
   compareOffers,
   formatDayTime,
@@ -12,22 +12,27 @@ import {
   formatEuro,
   formatInspectionShort,
   formatKm,
-  formatMarketGap,
   formatNumber,
-  formatPower,
   formatPrice,
   formatRegistration,
   formatSignedPrice,
-  TOO_CHEAP_WARNING,
-  unsureMarketReason,
 } from "@/lib/format";
-import type { ListingSummary, RepairSummary } from "@/search/query";
+import type { ListingSummary } from "@/search/query";
 import { FavoriteButton } from "./favorite-button";
 import { ListingPhoto } from "./listing-photo";
+import { Chip, reliabilityChip, sentenceCase, toneOf, VERDICT_STYLE, VerdictIcon, WrenchIcon } from "./verdict-ui";
+
+export { VERDICT_BADGE } from "./verdict-ui";
 
 /** A price drop is worth a note on the card for this long (counted back from the last check). */
 const RECENT_DROP_MS = 14 * 24 * 3600_000;
 
+/**
+ * One listing in the search, the watch list and saved-search results, in three layers:
+ * what it is and costs (photo, title, price), the plain facts (one muted line each for the car
+ * and the place), and one tinted panel with everything AutoMeta thinks about it (verdict, the
+ * number behind it, a few chips). Details and how each number is worked out are on the detail page.
+ */
 export function ResultCard({
   listing,
   settings = DEFAULT_FLIP_SETTINGS,
@@ -51,20 +56,16 @@ export function ResultCard({
   const facts = [
     formatRegistration(listing.firstRegistration, listing.firstRegistrationYearOnly),
     formatKm(listing.mileageKm),
-    formatPower(listing.powerKw),
+    listing.powerKw === null ? null : `${kwToPs(listing.powerKw)} PS`,
     listing.fuel ? FUEL_LABELS[listing.fuel] : null,
     listing.transmission ? TRANSMISSION_LABELS[listing.transmission] : null,
     formatInspectionShort(listing.huUntil, listing.huBasis),
-  ].filter(Boolean);
+  ];
   const place = [
     [listing.zip, listing.city].filter(Boolean).join(" "),
     formatDistance(listing.distanceKm),
     listing.sellerType ? SELLER_TYPE_LABELS[listing.sellerType] : null,
-  ].filter(Boolean);
-  const gap = formatMarketGap(listing.priceEur, listing.marketPriceEur);
-  const damaged = listing.damage.length > 0;
-  const tooCheap = isTooCheap(listing);
-  const unsure = listing.marketConfidence === "low";
+  ];
   const isNew = newSince !== undefined && listing.firstSeenAt > newSince;
   // Judged as of the last check, like the price drop above: the same page always shows the same.
   const verdict = listingVerdict(listing, settings, new Date(listing.checkedAt));
@@ -74,21 +75,20 @@ export function ResultCard({
     (newSince !== undefined
       ? listing.priceDroppedAt > newSince
       : allDrops || Date.parse(listing.priceDroppedAt) > Date.parse(listing.checkedAt) - RECENT_DROP_MS);
+  const droppedTitle = dropped ? `Preis gesenkt am ${formatDayTime(listing.priceDroppedAt!)}` : undefined;
 
   return (
     <article className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-sm transition-shadow hover:shadow-md">
       <div className="relative">
         <Link href={`/angebot/${listing.id}`} tabIndex={-1} aria-hidden="true">
-          <ListingPhoto src={listing.imageUrl} alt="" className="aspect-[4/3] w-full" />
+          {/* Phones: a flatter photo, so a card does not fill the whole screen. */}
+          <ListingPhoto src={listing.imageUrl} alt="" className="aspect-[16/10] w-full sm:aspect-[4/3]" />
         </Link>
         {(isNew || dropped) && (
           <span className="absolute left-2 top-2 flex flex-col items-start gap-1">
             {isNew && <span className="rounded-full bg-accent px-2.5 py-0.5 text-xs font-semibold text-on-accent shadow-sm">Neu</span>}
             {dropped && (
-              <span
-                className="rounded-full bg-good-text px-2.5 py-0.5 text-xs font-semibold text-surface shadow-sm"
-                title={`Preis gesenkt am ${formatDayTime(listing.priceDroppedAt!)}`}
-              >
+              <span className="rounded-full bg-good-text px-2.5 py-0.5 text-xs font-semibold text-surface shadow-sm" title={droppedTitle}>
                 Preis {formatSignedPrice(listing.priceEur - listing.priceBeforeDropEur!)}
               </span>
             )}
@@ -108,49 +108,24 @@ export function ResultCard({
           <div className="shrink-0 text-right">
             <p className="whitespace-nowrap text-lg font-bold leading-snug">{formatPrice(listing.priceEur)}</p>
             {dropped && (
-              <p className="whitespace-nowrap text-xs font-medium text-good-text" title={`Preis gesenkt am ${formatDayTime(listing.priceDroppedAt!)}`}>
+              <p className="whitespace-nowrap text-xs font-medium text-good-text" title={droppedTitle}>
                 vorher <s>{formatPrice(listing.priceBeforeDropEur!)}</s>
               </p>
             )}
           </div>
         </div>
-        <p className="mt-2 text-sm text-muted">
+        <p className="mt-1.5 text-sm text-muted">
           <Joined parts={facts} />
         </p>
-        {place.length > 0 && (
-          <p className="mt-1 text-sm text-muted">
-            <Joined parts={place} wrap />
+        {place.some(Boolean) && (
+          <p className="mt-0.5 flex items-start gap-1 text-sm text-muted">
+            <PinIcon />
+            <span className="min-w-0">
+              <Joined parts={place} wrap />
+            </span>
           </p>
         )}
-        <VerdictLine verdict={verdict} />
-        {damaged && (
-          <ul className="mt-2 flex flex-wrap gap-1" aria-label="Schadenshinweise im Titel">
-            {listing.damage.map((kind) => (
-              <li key={kind} className="rounded-full border border-warn-line bg-warn-bg px-2 py-0.5 text-xs font-medium text-warn-text">
-                {DAMAGE_LABELS[kind]}
-              </li>
-            ))}
-          </ul>
-        )}
-        {tooCheap && (
-          <p className="mt-2 rounded-md border border-warn-line bg-warn-bg px-2 py-1 text-xs font-medium text-warn-text">{TOO_CHEAP_WARNING}</p>
-        )}
-        {gap && listing.marketPriceEur !== null && (
-          <p className="mt-2 text-sm">
-            <span className="whitespace-nowrap text-muted">
-              {damaged ? "Intakt" : "Marktwert"} ca. {formatPrice(listing.marketPriceEur)}&nbsp;·
-            </span>{" "}
-            <span className={`whitespace-nowrap ${gap.below && !damaged && !tooCheap && !unsure ? "font-medium text-good-text" : "text-muted"}`}>{gap.text}</span>
-            {unsure && (
-              <span className="whitespace-nowrap text-muted" title={`Marktwert unsicher: ${unsureMarketReason(listing.marketComps)}`}>
-                {" "}
-                · unsicher
-              </span>
-            )}
-          </p>
-        )}
-        {listing.flip && listing.repair && <FlipLine flip={listing.flip} repair={listing.repair} minMarginEur={settings.minMarginEur} />}
-        {listing.reliabilityRatio !== null && <ReliabilityLine ratio={listing.reliabilityRatio} />}
+        <Assessment listing={listing} verdict={verdict} settings={settings} />
         {listing.otherOffers.length > 0 && <OtherOffers listing={listing} />}
         <div className="mt-auto flex items-center justify-between gap-2 pt-4">
           <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
@@ -178,8 +153,8 @@ export function ResultCard({
 }
 
 /**
- * "EZ 06/2025 · 41.959 km · 142 kW (193 PS)": a line breaks only after a dot, never inside a
- * value (unless `wrap`), and no line starts with a dot.
+ * "EZ 06/2025 · 41.959 km · 193 PS": a line breaks only after a dot, never inside a value
+ * (unless `wrap`), and no line starts with a dot.
  */
 function Joined({ parts, wrap = false }: { parts: (string | null | false)[]; wrap?: boolean }) {
   const values = parts.filter(Boolean);
@@ -188,88 +163,129 @@ function Joined({ parts, wrap = false }: { parts: (string | null | false)[]; wra
       {/* A place ("10623 Berlin Charlottenburg-Wilmersdorf") may wrap between its words. */}
       <span className={wrap ? undefined : "whitespace-nowrap"}>
         {part}
-        {i < values.length - 1 && "\u00a0·"}
+        {i < values.length - 1 && " ·"}
       </span>
       {i < values.length - 1 && " "}
     </span>
   ));
 }
 
-/** Colors of the verdict badge (src/core/verdict.ts). */
-export const VERDICT_BADGE: Record<Verdict, string> = {
-  anschauen: "border-good-text bg-surface text-good-text",
-  schrauber: "border-good-text bg-surface text-good-text",
-  fair: "border-line bg-accent-soft text-accent-strong",
-  eher_nicht: "border-warn-line bg-warn-bg text-warn-text",
-  unklar: "border-line bg-surface text-muted",
-};
-
-/** Reasons the card shows elsewhere already: the market gap and its warning, damage chips, the flip line, the price drop badge, the seller. */
-const SHOWN_ON_CARD = new Set<VerdictReason["kind"]>(["price", "damage", "flip", "drop", "seller"]);
+function PinIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="mt-[3px] h-3.5 w-3.5 shrink-0" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z" />
+      <circle cx="12" cy="10" r="2.3" />
+    </svg>
+  );
+}
 
 /**
- * "Lohnt sich anzuschauen · seit 40 Tagen online: Verhandlungsspielraum": the verdict and the
- * reasons the card does not show otherwise (a long HU is in the facts line); all on hover.
+ * Reasons the panel shows in its own way, or the card elsewhere: the deciding reason is the
+ * panel's main line, damage and flip have their chips and line, the price drop is the photo
+ * badge, the seller is in the place line, a long HU in the facts line.
  */
-function VerdictLine({ verdict }: { verdict: ListingVerdict }) {
-  const reasons = verdict.reasons.filter((reason) => !SHOWN_ON_CARD.has(reason.kind) && !(reason.kind === "hu" && reason.tone === "plus")).slice(0, 2);
+const SHOWN_ELSEWHERE = new Set<VerdictReason["kind"]>(["price", "market", "damage", "flip", "drop", "seller"]);
+
+/**
+ * Everything AutoMeta thinks about the listing, as one block in the verdict's color:
+ * the verdict, the number behind it (price against market value, or the flip margin for a
+ * damaged car), and the other reasons as chips. All reasons on hover.
+ */
+function Assessment({ listing, verdict, settings }: { listing: ListingSummary; verdict: ListingVerdict; settings: FlipSettings }) {
+  const style = VERDICT_STYLE[verdict.verdict];
+  const damaged = listing.damage.length > 0;
+  const lead = verdict.reasons[0];
+  const chips: { key: string; text: string; tone: "good" | "warn" | "neutral"; title?: string; mark?: ReactNode | null }[] = [];
+
+  if (damaged) {
+    for (const kind of listing.damage) chips.push({ key: `damage-${kind}`, text: DAMAGE_LABELS[kind], tone: "warn", mark: <WrenchIcon />, title: "Schadenshinweis im Anzeigentitel" });
+    if (listing.repair) {
+      chips.push({
+        key: "difficulty",
+        text: `Schwierigkeit ${listing.repair.difficulty}/5${listing.repair.difficulty > settings.level ? ": zu schwer" : ""}`,
+        tone: listing.repair.difficulty > settings.level ? "warn" : "neutral",
+        title: listing.repair.difficulty > settings.level ? `Schwerer als dein Level ${settings.level} (Einstellungen)` : undefined,
+      });
+    }
+  }
+  if (listing.reliabilityRatio !== null) {
+    const model = reliabilityChip(listing.reliabilityRatio);
+    chips.push({ key: "model", ...model });
+  }
+  for (const [i, reason] of verdict.reasons.entries()) {
+    if (SHOWN_ELSEWHERE.has(reason.kind)) continue;
+    if (reason.kind === "hu" && reason.tone === "plus") continue;
+    if (reason.kind === "model" && listing.reliabilityRatio !== null) continue;
+    chips.push({ key: `reason-${i}`, text: reason.text, tone: toneOf(reason.tone) });
+  }
+
   return (
-    <p className="mt-2 text-sm" title={verdict.reasons.map((reason) => reason.text).join(" · ")}>
-      <span className={`mr-1.5 inline-block whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-semibold ${VERDICT_BADGE[verdict.verdict]}`}>
+    <div className={`mt-3 rounded-lg border px-3 py-2.5 ${style.panel}`} title={verdict.reasons.map((reason) => reason.text).join(" · ")}>
+      <p className={`flex items-center gap-1.5 text-sm font-semibold ${style.text}`}>
+        <VerdictIcon verdict={verdict.verdict} />
         {VERDICT_LABELS[verdict.verdict]}
-      </span>
-      {reasons.length > 0 && " "}
-      {reasons.map((reason, i) => (
-        <span key={i} className={reason.tone === "plus" ? "text-good-text" : reason.tone === "minus" ? "text-warn-text" : "text-muted"}>
-          {reason.text}
-          {i < reasons.length - 1 && <span className="text-muted"> · </span>}
-        </span>
-      ))}
-    </p>
+      </p>
+      {damaged ? <FlipNumbers listing={listing} settings={settings} /> : <PriceNumbers listing={listing} lead={lead} />}
+      {chips.length > 0 && (
+        <ul className="mt-2 flex flex-wrap gap-1" aria-label="Weitere Gründe">
+          {chips.map((chip) => (
+            <li key={chip.key}>
+              <Chip tone={chip.tone} title={chip.title} mark={chip.mark}>
+                {chip.text}
+              </Chip>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
-/** "Modell-Akte: 23 % weniger HU-Mängel als gleich alte Autos" (shown when sorted by recommendation). */
-function ReliabilityLine({ ratio }: { ratio: number }) {
-  const percent = Math.round(Math.abs(1 - ratio) * 100);
-  const text =
-    percent < 5
-      ? "HU-Mängel wie bei gleich alten Autos"
-      : `${percent} % ${ratio < 1 ? "weniger" : "mehr"} HU-Mängel als gleich alte Autos`;
+/** Intact car: "17 % unter Marktwert" (the verdict's deciding reason) and the market value itself. */
+function PriceNumbers({ listing, lead }: { listing: ListingSummary; lead: VerdictReason | undefined }) {
+  const leadClass = lead?.tone === "plus" ? "font-semibold text-good-text" : lead?.tone === "minus" ? "font-semibold text-warn-text" : "text-foreground";
   return (
-    <p className="mt-2 text-sm" title="Anteil der Autos dieses Modells und Alters mit Mangel bei der Hauptuntersuchung (RDW-Daten), verglichen mit allen gleich alten Autos">
-      <span className="text-muted">Modell-Akte: </span>
-      <span className={percent < 5 ? "" : ratio < 1 ? "font-medium text-good-text" : "font-medium text-warn-text"}>{text}</span>
-    </p>
+    <>
+      {lead && <p className={`mt-1 text-sm leading-snug ${leadClass}`}>{sentenceCase(lead.text)}</p>}
+      {listing.marketPriceEur !== null && listing.marketPriceEur > 0 && (
+        <p className="mt-0.5 text-xs text-muted">
+          Marktwert ca. {formatEuro(listing.marketPriceEur)}
+          {listing.marketComps !== null && <> · {formatNumber(listing.marketComps)} Vergleichsangebote</>}
+        </p>
+      )}
+    </>
   );
 }
 
-/** "Flip ca. +1.310 € · 8 h · 164 €/h · Schwierigkeit 3/5" */
-function FlipLine({ flip, repair, minMarginEur }: { flip: FlipResult; repair: RepairSummary; minMarginEur?: number }) {
-  const good = flip.marginEur > 0 && (minMarginEur === undefined || flip.marginEur >= minMarginEur);
-  const parts = [
-    `${formatNumber(flip.hours)} h`,
+/** Damaged car: the flip margin per the visitor's settings, hours and pay per hour, and what it is worth intact. */
+function FlipNumbers({ listing, settings }: { listing: ListingSummary; settings: FlipSettings }) {
+  const { flip } = listing;
+  if (!flip) {
+    return (
+      <p className="mt-1 text-sm text-muted">
+        {listing.marketPriceEur === null ? "Ohne Marktwert keine Flip-Rechnung" : "Flip-Rechnung folgt beim nächsten Datenabgleich"}
+      </p>
+    );
+  }
+  const good = flip.marginEur > 0 && flip.marginEur >= settings.minMarginEur;
+  const extras = [
     flip.perHourEur !== null && flip.marginEur > 0 ? `${formatEuro(flip.perHourEur)}/h` : null,
-    `Schwierigkeit ${repair.difficulty}/5`,
+    `ca. ${formatNumber(flip.hours)} h Arbeit`,
   ].filter(Boolean);
   return (
-    <p className="mt-2 text-sm">
-      <span className="whitespace-nowrap">
+    <>
+      <p className="mt-1 text-sm leading-snug">
         <span className="text-muted">Flip ca. </span>
-        <span className={good ? "font-medium text-good-text" : flip.marginEur < 0 ? "font-medium text-warn-text" : "font-medium"}>
-          {formatSignedPrice(flip.marginEur)}
-        </span>
-        <span className="text-muted">&nbsp;·</span>
-      </span>{" "}
-      <span className="text-muted">
-        <Joined parts={parts} />
-      </span>
-    </p>
+        <span className={`font-semibold ${good ? "text-good-text" : flip.marginEur < 0 ? "text-warn-text" : ""}`}>{formatSignedPrice(flip.marginEur)}</span>
+        <span className="text-muted"> · {extras.join(" · ")}</span>
+      </p>
+      {listing.marketPriceEur !== null && <p className="mt-0.5 text-xs text-muted">Wert intakt ca. {formatEuro(listing.marketPriceEur)}</p>}
+    </>
   );
 }
 
 /**
- * The same vehicle on other portals: "Hier am günstigsten · auch bei auto.de 29.448 € (+2.048 €)".
+ * The same vehicle on other portals: "Auf 3 Börsen, hier am günstigsten · auch bei auto.de +2.048 €".
  * The card shows the cheapest listing that matches the filters, so with a portal filter another
  * portal can be cheaper: then that comes first.
  */
@@ -277,30 +293,40 @@ function OtherOffers({ listing }: { listing: ListingSummary }) {
   const { cheaper, savingEur, anyDearer } = compareOffers(listing.priceEur, listing.otherOffers);
   const portals = listing.otherOffers.length + 1;
   return (
-    <p className="mt-2 text-sm">
-      {cheaper ? (
-        <span className="font-medium text-good-text">
-          Bei {cheaper.sourceName} {formatPrice(savingEur)} günstiger
-        </span>
-      ) : (
-        <span className="font-medium">{anyDearer ? `Hier am günstigsten von ${portals} Börsen` : `Gleicher Preis auf ${portals} Börsen`}</span>
-      )}
-      <span className="text-muted"> · auch bei </span>
-      {listing.otherOffers.map((offer, i) => (
-        <span key={offer.id}>
-          {i > 0 && ", "}
-          <span className="whitespace-nowrap">
-            <a href={`/go/${offer.id}`} target="_blank" rel="noopener nofollow" className="font-medium text-accent hover:underline">
-              {offer.sourceName} {formatPrice(offer.priceEur)}
-            </a>
-            {offer.priceEur !== listing.priceEur && (
-              <span className={offer.priceEur < listing.priceEur ? "text-good-text" : "text-muted"}>
-                {" "}({formatSignedPrice(offer.priceEur - listing.priceEur)})
-              </span>
-            )}
+    <p className="mt-2 flex items-start gap-1.5 text-sm">
+      <svg viewBox="0 0 24 24" className="mt-[3px] h-3.5 w-3.5 shrink-0 text-muted" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round">
+        <path d="M12 3l9 5-9 5-9-5z" />
+        <path d="M3 13l9 5 9-5" />
+      </svg>
+      <span className="min-w-0">
+        {cheaper ? (
+          <span className="font-medium text-good-text">
+            Bei {cheaper.sourceName} {formatEuro(savingEur)} günstiger
           </span>
-        </span>
-      ))}
+        ) : (
+          <span className="font-medium">{anyDearer ? `Auf ${portals} Börsen, hier am günstigsten` : `Auf ${portals} Börsen zum gleichen Preis`}</span>
+        )}
+        <span className="text-muted"> · auch bei </span>
+        {listing.otherOffers.map((offer, i) => (
+          <span key={offer.id}>
+            {i > 0 && ", "}
+            <span className="whitespace-nowrap">
+              <a
+                href={`/go/${offer.id}`}
+                target="_blank"
+                rel="noopener nofollow"
+                title={`${offer.sourceName}: ${formatPrice(offer.priceEur)}`}
+                className="font-medium text-accent hover:underline"
+              >
+                {offer.sourceName}
+              </a>
+              {offer.priceEur !== listing.priceEur && (
+                <span className={offer.priceEur < listing.priceEur ? "text-good-text" : "text-muted"}> {formatSignedPrice(offer.priceEur - listing.priceEur)}</span>
+              )}
+            </span>
+          </span>
+        ))}
+      </span>
     </p>
   );
 }

@@ -9,6 +9,7 @@ import {
 import type { RepairJob } from "@/core/repairs";
 import { formatEuro, formatNumber } from "@/lib/format";
 import type { ModelFile } from "@/search/defects";
+import { Fold, HowItWorks } from "./fold";
 
 const percent = (share: number) => `${Math.round(share * 100)} %`;
 
@@ -28,31 +29,41 @@ export interface ModelFileProps {
   jobs: RepairJob[];
   /** The hidden-defect risk as the flip estimate uses it (repair jobs' components left out). */
   risk: HiddenRisk | null;
+  className?: string;
 }
 
 /**
  * The "Modell-Akte": how often this model at this age had defects at the Dutch periodic
  * inspection compared with the average car of its age, and links to more about the model.
  */
-export function ModelFileSection({ makeName, modelName, file, jobs, risk }: ModelFileProps) {
+export function ModelFileSection({ makeName, modelName, file, jobs, risk, className = "" }: ModelFileProps) {
   const name = `${makeName} ${modelName}`;
   const [fromYear, toYear] = bucketYears(file.bucket, file.refreshedAt ? new Date(file.refreshedAt) : new Date());
   const rows = file.profile ? compareWithAverage(file.profile, file.average).filter((row) => row.rate >= 0.01) : [];
   const weak = rows.filter((row) => row.weak);
   const videoJobs = jobs.filter((job) => !NO_VIDEO_JOBS.has(job.id));
 
+  const modelShare = file.profile ? file.profile.anyDefect / file.profile.sample : null;
+  const averageShare = file.average ? file.average.anyDefect / file.average.sample : null;
+
   return (
-    <section className="mt-6 border-t border-line pt-5 text-sm">
-      <h2 className="text-base font-semibold">
-        Modell-Akte: {name}, {ageBucketLabel(file.bucket)}
+    <section className={`text-sm ${className}`} aria-labelledby="model-file-heading">
+      <h2 id="model-file-heading" className="text-base font-semibold">
+        Modell-Akte: {name}
       </h2>
-      {file.profile ? (
+      <p className="text-xs text-muted">
+        Erstzulassung {fromYear} bis {toYear} ({ageBucketLabel(file.bucket)}), Mängel bei der Hauptuntersuchung
+      </p>
+      {file.profile && modelShare !== null ? (
         <>
-          <p className="mt-1">
-            Von {formatNumber(file.profile.sample)} {name} mit Erstzulassung {fromYear} bis {toYear} in den Niederlanden hatten{" "}
-            <span className="font-semibold">{percent(file.profile.anyDefect / file.profile.sample)}</span> bei der Hauptuntersuchung der
+          <div className="mt-3 space-y-1.5" role="img" aria-label={`${percent(modelShare)} der ${name} mit Mangel bei der HU${averageShare !== null ? `, gleich alte Autos im Schnitt ${percent(averageShare)}` : ""}`}>
+            <ShareBar label={modelName} share={modelShare} tone={averageShare === null ? "plain" : modelShare <= averageShare * 0.95 ? "good" : modelShare >= averageShare * 1.05 ? "warn" : "plain"} />
+            {averageShare !== null && <ShareBar label="Durchschnitt" share={averageShare} tone="muted" />}
+          </div>
+          <p className="mt-2">
+            <span className="font-semibold">{percent(modelShare)}</span> der {formatNumber(file.profile.sample)} geprüften {name} hatten bei der HU der
             letzten {WINDOW_MONTHS} Monate mindestens einen Mangel
-            {file.average && <> (gleich alte Autos im Schnitt {percent(file.average.anyDefect / file.average.sample)})</>}.
+            {averageShare !== null && <>, gleich alte Autos im Schnitt {percent(averageShare)}</>}.
           </p>
           {weak.length > 0 ? (
             <p className="mt-1">
@@ -63,53 +74,49 @@ export function ModelFileSection({ makeName, modelName, file, jobs, risk }: Mode
             file.average && <p className="mt-1 text-muted">Keine Baugruppe fällt deutlich häufiger auf als beim Durchschnitt.</p>
           )}
           {rows.length > 0 && (
-            // Narrow enough for a phone: the labels wrap, the shares stay in their columns.
-            <table className="mt-2 w-full text-left text-sm">
-              <caption className="sr-only">
-                Anteil mit Mängeln je Baugruppe: {name} und alle gleich alten Autos
-              </caption>
-              <thead className="text-xs text-muted">
-                <tr className="border-b border-line">
-                  <th scope="col" className="py-1.5 pr-3 font-medium">
-                    Mängel an
-                  </th>
-                  <th scope="col" className="w-px py-1.5 pr-3 text-right font-medium">
-                    {modelName}
-                  </th>
-                  <th scope="col" className="w-px whitespace-nowrap py-1.5 text-right font-medium">
-                    Durchschnitt
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr key={row.component} className="border-b border-line last:border-0">
-                    <th scope="row" className="py-1.5 pr-3 font-normal">
-                      {COMPONENT_INFO[row.component].label}
-                      {row.weak && (
-                        <span className="ml-1.5 inline-block rounded-full border border-warn-line bg-warn-bg px-1.5 text-xs text-warn-text">
-                          Schwachstelle
-                        </span>
-                      )}
+            <Fold className="mt-3 border-t border-line pt-2" title="Mängel je Baugruppe" aside={`${rows.length} Baugruppen`}>
+              {/* Narrow enough for a phone: the labels wrap, the shares stay in their columns. */}
+              <table className="w-full text-left text-sm">
+                <caption className="sr-only">
+                  Anteil mit Mängeln je Baugruppe: {name} und alle gleich alten Autos
+                </caption>
+                <thead className="text-xs text-muted">
+                  <tr className="border-b border-line">
+                    <th scope="col" className="py-1.5 pr-3 font-medium">
+                      Mängel an
                     </th>
-                    <td className="whitespace-nowrap py-1.5 pr-3 text-right font-medium">{percent(row.rate)}</td>
-                    <td className="whitespace-nowrap py-1.5 text-right text-muted">{row.averageRate === null ? "–" : percent(row.averageRate)}</td>
+                    <th scope="col" className="w-px py-1.5 pr-3 text-right font-medium">
+                      {modelName}
+                    </th>
+                    <th scope="col" className="w-px whitespace-nowrap py-1.5 text-right font-medium">
+                      Durchschnitt
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.component} className="border-b border-line last:border-0">
+                      <th scope="row" className="py-1.5 pr-3 font-normal">
+                        {COMPONENT_INFO[row.component].label}
+                        {row.weak && (
+                          <span className="ml-1.5 inline-block rounded-full border border-warn-line bg-warn-bg px-1.5 text-xs text-warn-text">
+                            Schwachstelle
+                          </span>
+                        )}
+                      </th>
+                      <td className="whitespace-nowrap py-1.5 pr-3 text-right font-medium">{percent(row.rate)}</td>
+                      <td className="whitespace-nowrap py-1.5 text-right text-muted">{row.averageRate === null ? "–" : percent(row.averageRate)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Fold>
           )}
         </>
       ) : (
-        <p className="mt-1 text-muted">
+        <p className="mt-2 text-muted">
           Für dieses Modell in diesem Alter gibt es noch keine Mängeldaten
           {file.average ? "; der Risikopuffer rechnet mit dem Durchschnitt gleich alter Autos." : "."}
-        </p>
-      )}
-      {risk && risk.eur > 0 && (
-        <p className="mt-2">
-          Risikopuffer für versteckte Mängel im Flip-Rechner: <span className="font-medium">ca. {formatEuro(risk.eur)}</span> (Anteil der
-          Autos mit Mangel × übliche Teilekosten, ohne die Baugruppen, die die Reparatur schon abdeckt).
         </p>
       )}
       <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
@@ -146,12 +153,35 @@ export function ModelFileSection({ makeName, modelName, file, jobs, risk }: Mode
           </li>
         ))}
       </ul>
-      <p className="mt-2 text-xs text-muted">
-        Quelle: Mängel der niederländischen Hauptuntersuchung (APK) und Fahrzeugregister der RDW, offene Daten (CC0)
-        {file.refreshedAt && <>, Stand {new Date(file.refreshedAt).toLocaleDateString("de-DE")}</>}. Gezählt sind zugelassene Autos mit
-        gültiger HU. Niederländische Zahlen zeigen Tendenzen, keine genauen deutschen Quoten. Die Links führen zu Suchen bei Google und
-        YouTube.
-      </p>
+      <HowItWorks label="Woher kommen die Zahlen?">
+        <p>
+          Quelle: Mängel der niederländischen Hauptuntersuchung (APK) und Fahrzeugregister der RDW, offene Daten (CC0)
+          {file.refreshedAt && <>, Stand {new Date(file.refreshedAt).toLocaleDateString("de-DE")}</>}. Gezählt sind zugelassene Autos mit
+          gültiger HU. Niederländische Zahlen zeigen Tendenzen, keine genauen deutschen Quoten. Die Links führen zu Suchen bei Google und
+          YouTube.
+        </p>
+        {risk && risk.eur > 0 && (
+          <p>
+            Risikopuffer für versteckte Mängel im Flip-Rechner: ca. {formatEuro(risk.eur)}, der Anteil der Autos mit Mangel × übliche
+            Teilekosten, ohne die Baugruppen, die die Reparatur schon abdeckt.
+          </p>
+        )}
+      </HowItWorks>
     </section>
+  );
+}
+
+const BAR_TONES = { good: "bg-good-text", warn: "bg-warn-text", plain: "bg-accent", muted: "bg-muted/50" } as const;
+
+/** One horizontal bar: the share of cars with a defect at the inspection. */
+function ShareBar({ label, share, tone }: { label: string; share: number; tone: keyof typeof BAR_TONES }) {
+  return (
+    <div className="flex items-center gap-2 text-xs" aria-hidden="true">
+      <span className="w-24 shrink-0 truncate text-muted">{label}</span>
+      <span className="h-2.5 min-w-0 flex-1 overflow-hidden rounded-full bg-background ring-1 ring-line">
+        <span className={`block h-full rounded-full ${BAR_TONES[tone]}`} style={{ width: `${Math.min(share, 1) * 100}%` }} />
+      </span>
+      <span className="w-9 shrink-0 text-right font-medium">{percent(share)}</span>
+    </div>
   );
 }
