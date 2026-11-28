@@ -4,17 +4,19 @@ import { cache, Suspense } from "react";
 import { DAMAGE_LABELS } from "@/core/damage";
 import { isTooCheap, MARKET_CONFIDENCE_LABELS } from "@/core/deal";
 import { coveredComponents, hiddenDefectRisk, type DefectProfile } from "@/core/defects";
+import { kwToPs } from "@/core/normalize";
 import { onlineSpan, priceStory, type OnlineSpan, type PricePoint } from "@/core/price-history";
 import type { FlipSettings } from "@/core/flip";
 import { CONFIDENCE_LABELS, DIFFICULTY_LABELS, estimateRepairs, VEHICLE_CLASS_LABELS } from "@/core/repairs";
 import { findMake, findModel } from "@/core/taxonomy";
 import { BODY_TYPE_LABELS, FUEL_LABELS, SELLER_TYPE_LABELS, TRANSMISSION_LABELS } from "@/core/types";
-import { listingVerdict, VERDICT_LABELS, type VerdictReason } from "@/core/verdict";
+import { listingVerdict, VERDICT_LABELS, VERDICT_RULES, type VerdictReason } from "@/core/verdict";
 import { FavoriteButton } from "@/components/favorite-button";
 import { FlipCalculator } from "@/components/flip-calculator";
+import { Fold, HowItWorks } from "@/components/fold";
 import { ListingPhoto } from "@/components/listing-photo";
 import { ModelFileSection } from "@/components/model-file";
-import { VERDICT_BADGE } from "@/components/result-card";
+import { Chip, sentenceCase, VERDICT_STYLE, VerdictIcon, WrenchIcon } from "@/components/verdict-ui";
 import { MARKET_RULES } from "@/ingest/market";
 import { getPool } from "@/lib/db";
 import { getFlipSettings } from "@/lib/flip-settings";
@@ -93,7 +95,8 @@ export default function ListingPage({ params }: PageProps<"/angebot/[id]">) {
   );
 }
 
-const sectionClass = "mt-6 border-t border-line pt-5 text-sm";
+/** Each part of the page is its own card, so the eye finds one topic per box. */
+const cardClass = "mt-4 rounded-xl border border-line bg-surface p-4 text-sm sm:p-6";
 const headingClass = "text-base font-semibold";
 const primaryButton =
   "inline-flex items-center justify-center rounded-md bg-accent px-4 py-2 text-center text-sm font-semibold text-on-accent hover:bg-accent-strong";
@@ -114,24 +117,9 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
   ]);
 
   const gone = listing.status === "gone";
-  const online = onlineSpan({ listedOn: listing.listedOn, firstSeenAt: listing.firstSeenAt, endedAt: endedAt(listing), asOf: listing.asOf });
-  const rows: [string, string | null][] = [
-    ["Erstzulassung", formatRegistration(listing.firstRegistration, listing.firstRegistrationYearOnly).replace("EZ ", "")],
-    ["Kilometerstand", formatKm(listing.mileageKm)],
-    ["Leistung", formatPower(listing.powerKw)],
-    ["Kraftstoff", listing.fuel ? FUEL_LABELS[listing.fuel] : null],
-    ["Getriebe", listing.transmission ? TRANSMISSION_LABELS[listing.transmission] : null],
-    ["HU/TÜV", formatInspection(listing.huUntil, listing.huBasis)],
-    ["Fahrzeugtyp", listing.bodyType ? BODY_TYPE_LABELS[listing.bodyType] : null],
-    ["Farbe", listing.color],
-    ["Standort", [listing.zip, listing.city].filter(Boolean).join(" ") || null],
-    ["Anbieter", listing.sellerName ?? (listing.sellerType ? SELLER_TYPE_LABELS[listing.sellerType] : null)],
-    ["Quelle", listing.sourceName],
-    ["Online", formatOnline(online, listing.sourceName)],
-    ["Zuletzt geprüft", formatDayTime(listing.checkedAt)],
-  ];
+  const damaged = listing.damage.length > 0;
   // The market value of a damaged car is that of an intact one, so its gap says nothing about the price.
-  const gap = listing.damage.length === 0 ? formatMarketGap(listing.priceEur, listing.marketPriceEur) : null;
+  const gap = !damaged ? formatMarketGap(listing.priceEur, listing.marketPriceEur) : null;
   const photo = <ListingPhoto src={listing.imageUrl} alt={listing.title} className="aspect-[4/3] w-full shrink-0 rounded-lg sm:w-72" />;
 
   return (
@@ -161,34 +149,101 @@ async function ListingDetails({ params }: { params: PageProps<"/angebot/[id]">["
                 {listing.marketConfidence === "low" && " (Marktwert unsicher)"}
               </p>
             )}
+            {damaged && (
+              <ul className="mt-2 flex flex-wrap items-center gap-1.5" aria-label="Schadenshinweise im Titel">
+                {listing.damage.map((kind) => (
+                  <li key={kind}>
+                    <Chip tone="warn" mark={<WrenchIcon />} title="Aus dem Anzeigentitel erkannt. Was genau kaputt ist, steht in der Originalanzeige.">
+                      {DAMAGE_LABELS[kind]}
+                    </Chip>
+                  </li>
+                ))}
+                <li className="text-xs text-muted">laut Anzeigentitel</li>
+              </ul>
+            )}
             <Actions listing={listing} saved={favorites.has(listing.id)} />
           </div>
         </div>
         <CheaperElsewhere listing={listing} />
-        {!gone && <WorthALook listing={listing} settings={settings} file={file} />}
-        <dl className="mt-6 grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
-          {rows
-            .filter((row): row is [string, string] => Boolean(row[1]))
-            .map(([label, value]) => (
-              <div key={label} className="flex justify-between gap-4 border-b border-line pb-2 text-sm">
-                <dt className="shrink-0 text-muted">{label}</dt>
-                <dd className="min-w-0 text-right font-medium [overflow-wrap:anywhere]">{value}</dd>
-              </div>
-            ))}
-        </dl>
-        <ConditionAndMarket listing={listing} />
-        <Flip listing={listing} settings={settings} file={file} />
-        <ModelFileFor listing={listing} file={file} />
-        <PriceHistory listing={listing} />
-        {listing.otherOffers.length > 0 && <AllOffers listing={listing} />}
-        {!gone && (
-          // The way out once more at the end of a long page; the heart stays at the top.
-          <div className="mt-6 border-t border-line pt-5">
-            <OriginalLink listing={listing} className={`${primaryButton} w-full sm:w-auto`} />
-          </div>
-        )}
       </article>
+      {!gone && <WorthALook listing={listing} settings={settings} file={file} />}
+      <Facts listing={listing} />
+      <Market listing={listing} />
+      {/* For a damaged car the flip estimate is the point; for an intact one it is a calculator for the curious, at the end. */}
+      {damaged && <Flip listing={listing} settings={settings} file={file} />}
+      <PriceHistory listing={listing} />
+      {listing.otherOffers.length > 0 && <AllOffers listing={listing} />}
+      <ModelFileFor listing={listing} file={file} />
+      {!damaged && <Flip listing={listing} settings={settings} file={file} />}
+      {!gone && (
+        // The way out once more at the end of a long page; the heart stays at the top.
+        <div className="mt-4">
+          <OriginalLink listing={listing} className={`${primaryButton} w-full sm:w-auto`} />
+        </div>
+      )}
     </div>
+  );
+}
+
+/** "bis 09/2027 (erste HU 3 Jahre nach Erstzulassung)" -> the value, and its source as a small note under it. */
+function splitNote(value: string): [string, string | null] {
+  const match = /^(.*?) \((.+)\)$/.exec(value);
+  return match ? [match[1], match[2]] : [value, null];
+}
+
+/** The plain facts in two groups: the car itself, and the listing (where, who, since when). */
+function Facts({ listing }: { listing: ListingDetail }) {
+  const online = onlineSpan({ listedOn: listing.listedOn, firstSeenAt: listing.firstSeenAt, endedAt: endedAt(listing), asOf: listing.asOf });
+  const groups: { title: string; rows: [string, string | null][] }[] = [
+    {
+      title: "Fahrzeug",
+      rows: [
+        ["Erstzulassung", formatRegistration(listing.firstRegistration, listing.firstRegistrationYearOnly).replace("EZ ", "")],
+        ["Kilometerstand", formatKm(listing.mileageKm)],
+        // PS first, the kW as the small note under it.
+        ["Leistung", listing.powerKw === null ? null : `${kwToPs(listing.powerKw)} PS (${listing.powerKw} kW)`],
+        ["Kraftstoff", listing.fuel ? FUEL_LABELS[listing.fuel] : null],
+        ["Getriebe", listing.transmission ? TRANSMISSION_LABELS[listing.transmission] : null],
+        ["HU/TÜV", formatInspection(listing.huUntil, listing.huBasis)],
+        ["Fahrzeugtyp", listing.bodyType ? BODY_TYPE_LABELS[listing.bodyType] : null],
+        ["Farbe", listing.color],
+      ],
+    },
+    {
+      title: "Angebot",
+      rows: [
+        ["Standort", [listing.zip, listing.city].filter(Boolean).join(" ") || null],
+        ["Anbieter", listing.sellerName ?? (listing.sellerType ? SELLER_TYPE_LABELS[listing.sellerType] : null)],
+        ["Börse", listing.sourceName],
+        ["Online", formatOnline(online, listing.sourceName)],
+        ["Zuletzt geprüft", formatDayTime(listing.checkedAt)],
+      ],
+    },
+  ];
+  return (
+    <section className={`${cardClass} grid gap-x-8 gap-y-5 sm:grid-cols-2`} aria-label="Fahrzeugdaten">
+      {groups.map((group) => (
+        <div key={group.title}>
+          <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">{group.title}</h2>
+          <dl>
+            {group.rows
+              .filter((row): row is [string, string] => Boolean(row[1]))
+              .map(([label, value]) => {
+                const [main, note] = splitNote(value);
+                return (
+                  <div key={label} className="flex justify-between gap-4 border-b border-line py-2 last:border-0">
+                    <dt className="shrink-0 text-muted">{label}</dt>
+                    <dd className="min-w-0 text-right [overflow-wrap:anywhere]">
+                      <span className="font-medium">{main}</span>
+                      {note && <span className="block text-xs text-muted">{note}</span>}
+                    </dd>
+                  </div>
+                );
+              })}
+          </dl>
+        </div>
+      ))}
+    </section>
   );
 }
 
@@ -198,35 +253,79 @@ function reliabilityRatio(file: ModelFile | null): number | null {
   return file.profile.anyDefect / file.profile.sample / (file.average.anyDefect / file.average.sample);
 }
 
-const REASON_MARKS: Record<VerdictReason["tone"], { mark: string; className: string }> = {
-  plus: { mark: "+", className: "text-good-text" },
-  minus: { mark: "−", className: "text-warn-text" },
-  info: { mark: "·", className: "text-muted" },
-};
-
-/** "Lohnt sich?": the verdict (src/core/verdict.ts) with all its reasons. */
+/**
+ * "Lohnt sich?": the verdict (src/core/verdict.ts) as a tinted panel: the verdict, its deciding
+ * reason, then what speaks for and against it side by side. How the verdict is made folds away.
+ */
 function WorthALook({ listing, settings, file }: { listing: ListingDetail; settings: FlipSettings; file: ModelFile | null }) {
   const verdict = listingVerdict({ ...listing, reliabilityRatio: reliabilityRatio(file) }, settings, new Date(listing.checkedAt));
+  const style = VERDICT_STYLE[verdict.verdict];
+  const [lead, ...rest] = verdict.reasons;
+  const pros = rest.filter((reason) => reason.tone === "plus");
+  const cons = rest.filter((reason) => reason.tone === "minus");
+  const infos = rest.filter((reason) => reason.tone === "info");
   return (
-    <section className="mt-5 rounded-lg border border-line p-4" aria-labelledby="verdict-heading">
-      <h2 id="verdict-heading" className="flex flex-wrap items-center gap-2 font-semibold">
+    <section className={`mt-4 rounded-xl border p-4 text-sm sm:p-6 ${style.panel}`} aria-labelledby="verdict-heading">
+      <h2 id="verdict-heading" className="text-xs font-semibold uppercase tracking-wide text-muted">
         Lohnt sich?
-        <span className={`rounded-full border px-2.5 py-0.5 text-sm font-semibold ${VERDICT_BADGE[verdict.verdict]}`}>{VERDICT_LABELS[verdict.verdict]}</span>
       </h2>
-      <ul className="mt-2 space-y-1 text-sm">
-        {verdict.reasons.map((reason, i) => (
+      <p className={`mt-1 flex items-center gap-2 text-lg font-bold ${style.text}`}>
+        <VerdictIcon verdict={verdict.verdict} className="h-5 w-5" />
+        {VERDICT_LABELS[verdict.verdict]}
+      </p>
+      {lead && <p className="mt-0.5 text-base">{sentenceCase(lead.text)}</p>}
+      {(pros.length > 0 || cons.length > 0) && (
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          {pros.length > 0 && <ReasonList title="Spricht dafür" mark="+" className="text-good-text" reasons={pros} />}
+          {cons.length > 0 && <ReasonList title="Spricht dagegen" mark="−" className="text-warn-text" reasons={cons} />}
+        </div>
+      )}
+      {infos.length > 0 && <p className="mt-3 text-muted">Gut zu wissen: {infos.map((reason) => reason.text).join(", ")}</p>}
+      <HowItWorks label="Wie entsteht das Urteil?">
+        <p>
+          Aus Preis gegen Marktwert, Schadenshinweisen, Flip-Rechnung, HU, Modell-Akte und wie lange das Angebot schon online ist. Es ersetzt
+          keine Besichtigung und Probefahrt.
+        </p>
+        <ul className="space-y-0.5">
+          <li>
+            <span className="font-medium">{VERDICT_LABELS.anschauen}:</span> ohne Schadenshinweis, mindestens {VERDICT_RULES.goodDealPct} % unter
+            einem verlässlichen Marktwert, HU nicht abgelaufen.
+          </li>
+          <li>
+            <span className="font-medium">{VERDICT_LABELS.schrauber}:</span> Schaden genannt, und die Flip-Rechnung erreicht deine Mindestmarge bei
+            deinem Level (<Link href="/einstellungen" className="text-accent hover:underline">Einstellungen</Link>).
+          </li>
+          <li>
+            <span className="font-medium">{VERDICT_LABELS.fair}:</span> höchstens {VERDICT_RULES.overpricedPct} % neben dem Marktwert.
+          </li>
+          <li>
+            <span className="font-medium">{VERDICT_LABELS.eher_nicht}:</span> deutlich über Marktwert, auffällig billig, oder eine Reparatur, die zu
+            schwer ist oder die Marge frisst.
+          </li>
+          <li>
+            <span className="font-medium">{VERDICT_LABELS.unklar}:</span> kein Marktwert oder einer, dem zu wenige ähnliche Angebote zugrunde liegen.
+          </li>
+        </ul>
+      </HowItWorks>
+    </section>
+  );
+}
+
+function ReasonList({ title, mark, className, reasons }: { title: string; mark: string; className: string; reasons: VerdictReason[] }) {
+  return (
+    <div className="rounded-lg border border-line bg-surface px-3 py-2">
+      <h3 className={`text-xs font-semibold ${className}`}>{title}</h3>
+      <ul className="mt-1 space-y-0.5">
+        {reasons.map((reason, i) => (
           <li key={i} className="flex gap-2">
-            <span aria-hidden="true" className={`w-3 shrink-0 text-center font-bold ${REASON_MARKS[reason.tone].className}`}>
-              {REASON_MARKS[reason.tone].mark}
+            <span aria-hidden="true" className={`w-3 shrink-0 text-center font-bold ${className}`}>
+              {mark}
             </span>
-            <span className={reason.tone === "info" ? "text-muted" : ""}>{reason.text}</span>
+            <span>{sentenceCase(reason.text)}</span>
           </li>
         ))}
       </ul>
-      <p className="mt-2 text-xs text-muted">
-        Aus Preis gegen Marktwert, Schadenshinweisen, Flip-Rechnung, HU, Modell-Akte und wie lange das Angebot schon online ist. Ersetzt keine Besichtigung und Probefahrt.
-      </p>
-    </section>
+    </div>
   );
 }
 
@@ -311,70 +410,155 @@ function comparablesQuery(listing: ListingDetail): string | null {
   return `/?${params}`;
 }
 
-function ConditionAndMarket({ listing }: { listing: ListingDetail }) {
+/**
+ * The market value: the number, where this price sits on the usual range (a scale), how far the
+ * value can be trusted, and how it is worked out (folded).
+ */
+function Market({ listing }: { listing: ListingDetail }) {
   const damaged = listing.damage.length > 0;
   const gap = formatMarketGap(listing.priceEur, listing.marketPriceEur);
   const comparables = comparablesQuery(listing);
+  const tooCheap = isTooCheap(listing);
+  const trusted = listing.marketConfidence === "high" || listing.marketConfidence === "medium";
+  const method = (
+    <p>
+      Verglichen mit Angeboten ohne Schadenshinweis: gleiches Modell, Erstzulassung ±{MARKET_RULES.yearSpan} Jahr, ähnlicher Kilometerstand,
+      gleicher Kraftstoff, gleiches Getriebe und ähnliche Leistung. Der Marktwert ist der mittlere Preis dieser Angebote. Es sind
+      Angebotspreise, keine Verkaufspreise.
+    </p>
+  );
+
   return (
-    <section className={`${sectionClass} space-y-5`}>
-      {damaged && (
-        <div>
-          <h2 className={headingClass}>Schadenshinweise im Titel</h2>
-          <ul className="mt-2 flex flex-wrap gap-1.5">
-            {listing.damage.map((kind) => (
-              <li key={kind} className="rounded-full border border-warn-line bg-warn-bg px-2.5 py-0.5 text-xs font-medium text-warn-text">
-                {DAMAGE_LABELS[kind]}
-              </li>
-            ))}
-          </ul>
-          <p className="mt-2 text-xs text-muted">Aus dem Anzeigentitel erkannt. Was genau kaputt ist, steht in der Originalanzeige.</p>
-        </div>
-      )}
-      <div>
-        <h2 className={headingClass}>{damaged ? "Marktwert in intaktem Zustand" : "Marktwert"}</h2>
-        {listing.marketPriceEur !== null && gap ? (
-          <>
-            <p className="mt-1 text-xl font-bold">ca. {formatEuro(listing.marketPriceEur)}</p>
-            <p className={gap.below && !damaged && !isTooCheap(listing) && listing.marketConfidence !== "low" ? "font-medium text-good-text" : "text-muted"}>
+    <section className={cardClass} aria-labelledby="market-heading">
+      <h2 id="market-heading" className={headingClass}>
+        {damaged ? "Marktwert in intaktem Zustand" : "Marktwert"}
+      </h2>
+      {listing.marketPriceEur !== null && gap ? (
+        <>
+          <div className="mt-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+            <p className="text-2xl font-bold">ca. {formatEuro(listing.marketPriceEur)}</p>
+            <p className={gap.below && !damaged && !tooCheap && trusted ? "font-medium text-good-text" : "text-muted"}>
               Dieses Angebot: {gap.text}
             </p>
-            {isTooCheap(listing) && (
-              <p className="mt-2 rounded-md border border-warn-line bg-warn-bg px-3 py-2 text-sm font-medium text-warn-text">{TOO_CHEAP_WARNING}</p>
-            )}
+          </div>
+          {listing.marketLowEur !== null && listing.marketHighEur !== null && (
+            <PriceScale
+              priceEur={listing.priceEur}
+              marketEur={listing.marketPriceEur}
+              lowEur={listing.marketLowEur}
+              highEur={listing.marketHighEur}
+              tone={damaged ? "muted" : tooCheap ? "warn" : gap.below && trusted ? "good" : "plain"}
+            />
+          )}
+          {tooCheap && (
+            <p className="mt-3 rounded-md border border-warn-line bg-warn-bg px-3 py-2 text-sm font-medium text-warn-text">{TOO_CHEAP_WARNING}</p>
+          )}
+          <ul className="mt-3 flex flex-wrap gap-1.5" aria-label="Wie verlässlich der Marktwert ist">
             {listing.marketConfidence && (
-              <p className="mt-1">
-                Verlässlichkeit des Marktwerts: <span className="font-medium">{MARKET_CONFIDENCE_LABELS[listing.marketConfidence]}</span>
-                {listing.marketConfidence === "low" && <span className="text-muted"> ({unsureMarketReason(listing.marketComps)})</span>}
-              </p>
+              <li>
+                <Chip
+                  tone={listing.marketConfidence === "low" ? "warn" : listing.marketConfidence === "high" ? "good" : "neutral"}
+                  mark={null}
+                  title={listing.marketConfidence === "low" ? unsureMarketReason(listing.marketComps) : undefined}
+                >
+                  Verlässlichkeit: {MARKET_CONFIDENCE_LABELS[listing.marketConfidence]}
+                </Chip>
+              </li>
             )}
-            {listing.marketLowEur !== null && listing.marketHighEur !== null && (
-              <p className="mt-1">
-                Übliche Spanne {formatEuro(listing.marketLowEur)} bis {formatEuro(listing.marketHighEur)}, die mittlere Hälfte von{" "}
-                {formatNumber(listing.marketComps ?? 0)} vergleichbaren Angeboten.
-              </p>
+            {listing.marketComps !== null && (
+              <li>
+                <Chip mark={null}>{formatNumber(listing.marketComps)} Vergleichsangebote</Chip>
+              </li>
             )}
             {listing.marketDays !== null && (
-              <p className="mt-1">Vergleichbare Angebote waren im Mittel {formatDays(listing.marketDays)} online.</p>
+              <li>
+                <Chip mark={null} title="So lange waren vergleichbare Angebote im Mittel online, bevor sie verschwanden">
+                  Vergleichbare im Schnitt {formatDays(listing.marketDays)} online
+                </Chip>
+              </li>
             )}
-            <p className="mt-2 text-xs text-muted">
-              Verglichen mit Angeboten ohne Schadenshinweis: gleiches Modell, Erstzulassung ±{MARKET_RULES.yearSpan} Jahr, ähnlicher
-              Kilometerstand, gleicher Kraftstoff, gleiches Getriebe und ähnliche Leistung. Es sind Angebotspreise, keine Verkaufspreise.
-            </p>
+          </ul>
+          {listing.marketConfidence === "low" && <p className="mt-2 text-muted">Unsicher, weil: {unsureMarketReason(listing.marketComps)}.</p>}
+          <div className="mt-3 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+            <HowItWorks label="Wie wird der Marktwert berechnet?" className="">
+              {method}
+              {listing.marketLowEur !== null && listing.marketHighEur !== null && (
+                <p>
+                  Übliche Spanne {formatEuro(listing.marketLowEur)} bis {formatEuro(listing.marketHighEur)}: die mittlere Hälfte der{" "}
+                  {formatNumber(listing.marketComps ?? 0)} vergleichbaren Angebote. Verlässlich heißt mindestens 20 Vergleichsangebote mit nicht zu
+                  weit gestreuten Preisen, brauchbar mindestens 10.
+                </p>
+              )}
+            </HowItWorks>
             {comparables && (
-              <Link href={comparables} className="mt-1 inline-block text-accent hover:underline">
-                Vergleichbare Angebote ansehen
+              <Link href={comparables} className="text-accent hover:underline">
+                Vergleichbare Angebote ansehen →
               </Link>
             )}
-          </>
-        ) : (
-          <p className="mt-1 text-muted">
-            {comparables
-              ? `Zu wenige vergleichbare Angebote für einen Marktwert (mindestens ${MARKET_RULES.minComps} nötig).`
-              : "Ohne Modell, Erstzulassung und Kilometerstand lässt sich kein Marktwert berechnen."}
-          </p>
-        )}
-      </div>
+          </div>
+        </>
+      ) : (
+        <p className="mt-1 text-muted">
+          {comparables
+            ? `Zu wenige vergleichbare Angebote für einen Marktwert (mindestens ${MARKET_RULES.minComps} nötig).`
+            : "Ohne Modell, Erstzulassung und Kilometerstand lässt sich kein Marktwert berechnen."}
+        </p>
+      )}
     </section>
+  );
+}
+
+const SCALE_TONES = { good: "bg-good-text", warn: "bg-warn-text", plain: "bg-foreground", muted: "bg-muted" } as const;
+
+/**
+ * Where the price sits: a bar with the usual range of comparable listings (their middle half),
+ * the market value as a line in it and this listing's price as a dot, both labeled.
+ */
+function PriceScale({
+  priceEur,
+  marketEur,
+  lowEur,
+  highEur,
+  tone,
+}: {
+  priceEur: number;
+  marketEur: number;
+  lowEur: number;
+  highEur: number;
+  tone: keyof typeof SCALE_TONES;
+}) {
+  const lo = Math.min(lowEur, priceEur, marketEur);
+  const hi = Math.max(highEur, priceEur, marketEur);
+  const pad = (hi - lo) * 0.12 || hi * 0.1 || 1;
+  const at = (eur: number) => ((eur - (lo - pad)) / (hi - lo + 2 * pad)) * 100;
+  // A label slides along its mark: left-aligned at the left end, centered in the middle, right-aligned
+  // at the right end, so it never sticks out of the bar on a phone.
+  const label = (eur: number) => ({ left: `${at(eur)}%`, transform: `translateX(-${at(eur)}%)` });
+  return (
+    <figure className="mt-4" aria-label={`Preis ${formatEuro(priceEur)}, Marktwert ca. ${formatEuro(marketEur)}, übliche Spanne ${formatEuro(lowEur)} bis ${formatEuro(highEur)}`}>
+      <div className="relative h-5 text-xs text-muted" aria-hidden="true">
+        <span className="absolute whitespace-nowrap" style={label(marketEur)}>
+          Marktwert
+        </span>
+      </div>
+      <div className="relative h-3 rounded-full bg-background ring-1 ring-line" aria-hidden="true">
+        <div className="absolute inset-y-0 rounded-full bg-accent-soft ring-1 ring-accent/30" style={{ left: `${at(lowEur)}%`, width: `${at(highEur) - at(lowEur)}%` }} />
+        <div className="absolute -inset-y-1 w-0.5 -translate-x-1/2 rounded bg-accent" style={{ left: `${at(marketEur)}%` }} />
+        <div
+          className={`absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-surface shadow ${SCALE_TONES[tone]}`}
+          style={{ left: `${at(priceEur)}%` }}
+        />
+      </div>
+      <div className="relative mt-1.5 h-5 text-xs" aria-hidden="true">
+        <span className="absolute whitespace-nowrap font-semibold" style={label(priceEur)}>
+          Dieses Angebot {formatEuro(priceEur)}
+        </span>
+      </div>
+      <figcaption className="mt-1 flex items-center gap-1.5 text-xs text-muted">
+        <span className="inline-block h-2.5 w-5 rounded-full bg-accent-soft ring-1 ring-accent/30" aria-hidden="true" />
+        Übliche Spanne {formatEuro(lowEur)} bis {formatEuro(highEur)}
+      </figcaption>
+    </figure>
   );
 }
 
@@ -403,7 +587,7 @@ function ModelFileFor({ listing, file }: { listing: ListingDetail; file: ModelFi
   const estimate = estimateRepairs(listing.damage, repairFacts(listing));
   const { profile } = riskProfile(file);
   const risk = hiddenDefectRisk(profile, estimate.vehicleClass, coveredComponents(estimate.jobs.map((j) => j.job.id)));
-  return <ModelFileSection makeName={make.name} modelName={model.name} file={file} jobs={estimate.jobs.map((j) => j.job)} risk={risk} />;
+  return <ModelFileSection makeName={make.name} modelName={model.name} file={file} jobs={estimate.jobs.map((j) => j.job)} risk={risk} className={cardClass} />;
 }
 
 /** "ca. 25 Stunden": the hours are estimates, so whole hours from 10 on and half hours below. */
@@ -412,7 +596,7 @@ function formatHours(hours: number): string {
   return `ca. ${formatNumber(rounded)} ${rounded === 1 ? "Stunde" : "Stunden"}`;
 }
 
-/** The stored flip estimate in two sentences, the same numbers the search list shows. */
+/** The stored flip estimate as four numbers at a glance, the same the search list shows, and the rest in one sentence. */
 function FlipSummary({ listing, settings }: { listing: ListingDetail; settings: FlipSettings }) {
   const { flip, repair } = listing;
   if (!flip || !repair) {
@@ -426,26 +610,36 @@ function FlipSummary({ listing, settings }: { listing: ListingDetail; settings: 
   }
   const risk = riskTotal(repair);
   const marginClass = flip.marginEur >= settings.minMarginEur ? "text-good-text" : flip.marginEur < 0 ? "text-warn-text" : "";
+  const tiles: { label: string; value: string; className?: string; note?: string }[] = [
+    { label: "Marge", value: formatSignedPrice(flip.marginEur), className: marginClass },
+    { label: "Pro Stunde", value: flip.perHourEur !== null && flip.marginEur > 0 ? `ca. ${formatEuro(flip.perHourEur)}` : "–" },
+    { label: "Arbeit", value: formatHours(flip.hours) },
+    { label: "Schwierigkeit", value: `${repair.difficulty} von 5`, note: DIFFICULTY_LABELS[repair.difficulty] },
+  ];
   return (
-    <div data-flip-summary className="mt-1 space-y-1">
-      <p>
-        Geschätzt <span className={`text-base font-bold ${marginClass}`}>{formatSignedPrice(flip.marginEur)}</span> Marge, je nach Teilen{" "}
-        {formatSignedPrice(flip.marginRangeEur[0])} bis {formatSignedPrice(flip.marginRangeEur[1])}.
-        {risk > 0 && <> Der Risikopuffer von {formatEuro(risk)} ist schon abgezogen.</>}
-      </p>
-      <p>
-        Arbeit {formatHours(flip.hours)}
-        {flip.perHourEur !== null && flip.marginEur > 0 && <>, also ca. {formatEuro(flip.perHourEur)} pro Stunde</>}. Schwierigkeit{" "}
-        {repair.difficulty} von 5 ({DIFFICULTY_LABELS[repair.difficulty]}), Sicherheit {CONFIDENCE_LABELS[repair.confidence]}, Teilepreise
-        für {VEHICLE_CLASS_LABELS[repair.vehicleClass]}.
+    <div data-flip-summary className="mt-2">
+      <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {tiles.map((tile) => (
+          <div key={tile.label} className="rounded-lg bg-background px-3 py-2">
+            <dt className="text-xs text-muted">{tile.label}</dt>
+            <dd className={`text-lg font-bold ${tile.className ?? ""}`}>{tile.value}</dd>
+            {tile.note && <dd className="text-xs leading-snug text-muted">{tile.note}</dd>}
+          </div>
+        ))}
+      </dl>
+      <p className="mt-2 text-muted">
+        Je nach Teilen {formatSignedPrice(flip.marginRangeEur[0])} bis {formatSignedPrice(flip.marginRangeEur[1])}.
+        {risk > 0 && <> Der Risikopuffer von {formatEuro(risk)} ist schon abgezogen.</>} Sicherheit der Schätzung{" "}
+        {CONFIDENCE_LABELS[repair.confidence]}, Teilepreise für {VEHICLE_CLASS_LABELS[repair.vehicleClass]}.
       </p>
     </div>
   );
 }
 
 /**
- * The flip estimate from the catalog and the calculator to adjust it. Folded away for intact cars
- * and for listings that are gone, where it is only for comparison.
+ * The flip estimate from the catalog and the calculator to adjust it. For a damaged car the
+ * estimate shows and the calculator folds away; for intact cars and listings that are gone the
+ * whole thing folds away, it is only for comparison there.
  */
 function Flip({ listing, settings, file }: { listing: ListingDetail; settings: FlipSettings; file: ModelFile | null }) {
   const damaged = listing.damage.length > 0;
@@ -463,35 +657,35 @@ function Flip({ listing, settings, file }: { listing: ListingDetail; settings: F
     />
   );
   const note = (
-    <p className="mt-3 text-xs text-muted">
-      Teile und Stunden sind Schätzungen aus dem <Link href="/reparaturen" className="text-accent hover:underline">Reparaturkatalog</Link>{" "}
-      für einen Hobbyschrauber. Der Risikopuffer rechnet mit Mängeln, die die HU bei solchen Autos oft findet, und mit einem schlimmeren
-      Schaden, wenn der Preis weit unter dem Marktwert liegt. Abschlag und Nebenkosten kommen aus deinen{" "}
-      <Link href="/einstellungen" className="text-accent hover:underline">Einstellungen</Link>.
-    </p>
+    <HowItWorks label="Woher kommen Teile, Stunden und Risikopuffer?">
+      <p>
+        Teile und Stunden sind Schätzungen aus dem <Link href="/reparaturen" className="text-accent hover:underline">Reparaturkatalog</Link> für
+        einen Hobbyschrauber. Der Risikopuffer rechnet mit Mängeln, die die HU bei solchen Autos oft findet, und mit einem schlimmeren Schaden,
+        wenn der Preis weit unter dem Marktwert liegt. Abschlag und Nebenkosten kommen aus deinen{" "}
+        <Link href="/einstellungen" className="text-accent hover:underline">Einstellungen</Link>.
+      </p>
+    </HowItWorks>
   );
 
   if (!damaged || gone) {
     return (
-      <details className={sectionClass}>
-        <summary className={`cursor-pointer ${headingClass}`}>
-          {damaged ? "Flip-Bewertung" : "Flip-Rechner"}
-          {gone && <span className="text-sm font-normal text-muted"> (nur zum Vergleich)</span>}
-        </summary>
+      <Fold className={cardClass} title={damaged ? "Flip-Bewertung" : "Flip-Rechner"} aside={gone ? "nur zum Vergleich" : "selbst durchrechnen, falls du flippen willst"}>
         {damaged && <FlipSummary listing={listing} settings={settings} />}
         {calculator}
         {note}
-      </details>
+      </Fold>
     );
   }
 
   return (
-    <section className={sectionClass}>
-      <h2 className={headingClass}>Flip-Bewertung</h2>
+    <section className={cardClass} aria-labelledby="flip-heading">
+      <h2 id="flip-heading" className={headingClass}>
+        Flip-Bewertung
+      </h2>
       <FlipSummary listing={listing} settings={settings} />
-      <h3 className="mt-4 font-semibold">Selbst nachrechnen</h3>
-      <p className="text-xs text-muted">Jeder Wert lässt sich ändern. Der Rechner startet mit der Schätzung oben.</p>
-      {calculator}
+      <Fold className="mt-4 border-t border-line pt-3" title="Selbst nachrechnen" aside="jeder Wert lässt sich ändern">
+        {calculator}
+      </Fold>
       {note}
     </section>
   );
@@ -531,7 +725,7 @@ function PriceHistory({ listing }: { listing: ListingDetail }) {
     .filter(Boolean)
     .join(" und ");
   return (
-    <section className={sectionClass}>
+    <section className={cardClass}>
       <h2 className={headingClass}>Preisverlauf</h2>
       {changes.length === 0 ? (
         <p className="mt-1">
@@ -574,10 +768,12 @@ function PriceHistory({ listing }: { listing: ListingDetail }) {
           </ol>
         </>
       )}
-      <p className="mt-2 text-xs text-muted">
-        Preise, wie AutoMeta sie bei {listing.sourceName} gesehen hat. Jedes Angebot wird etwa einmal am Tag geprüft; eine Änderung, die
-        innerhalb eines Tages wieder zurückgenommen wurde, kann fehlen.
-      </p>
+      <HowItWorks label="Wie genau ist der Verlauf?">
+        <p>
+          Preise, wie AutoMeta sie bei {listing.sourceName} gesehen hat. Jedes Angebot wird etwa einmal am Tag geprüft; eine Änderung, die
+          innerhalb eines Tages wieder zurückgenommen wurde, kann fehlen.
+        </p>
+      </HowItWorks>
     </section>
   );
 }
@@ -682,7 +878,7 @@ function AllOffers({ listing }: { listing: ListingDetail }) {
   ].sort((a, b) => a.priceEur - b.priceEur || a.id - b.id);
   const lowest = offers[0].priceEur;
   return (
-    <section className={sectionClass}>
+    <section className={cardClass}>
       <h2 className={headingClass}>
         {listing.status === "active" ? `Dieses Fahrzeug auf ${offers.length} Börsen` : "Dieses Fahrzeug gibt es noch bei"}
       </h2>
@@ -712,10 +908,12 @@ function AllOffers({ listing }: { listing: ListingDetail }) {
           );
         })}
       </ul>
-      <p className="mt-2 text-xs text-muted">
-        Erkannt an Marke, Modell, Erstzulassung, Kilometerstand, Preis und Standort. Bei Börsen ohne Standort muss der
-        Kilometerstand auf den Kilometer gleich sein. Ein Treffer kann in seltenen Fällen ein anderes Fahrzeug sein.
-      </p>
+      <HowItWorks label="Wie erkennt AutoMeta dasselbe Auto?">
+        <p>
+          An Marke, Modell, Erstzulassung, Kilometerstand, Preis und Standort. Bei Börsen ohne Standort muss der Kilometerstand auf den
+          Kilometer gleich sein. Ein Treffer kann in seltenen Fällen ein anderes Fahrzeug sein.
+        </p>
+      </HowItWorks>
     </section>
   );
 }

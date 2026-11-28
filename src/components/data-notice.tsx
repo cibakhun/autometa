@@ -2,6 +2,7 @@ import { connection } from "next/server";
 import { getPool } from "@/lib/db";
 import { formatDayTime, formatShare } from "@/lib/format";
 import { getSourceStatus, type SourceStatus } from "@/search/query";
+import { Chevron } from "./fold";
 
 const berlinDay = new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", year: "numeric", month: "2-digit", day: "2-digit" });
 const berlinTime = new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" });
@@ -23,9 +24,9 @@ const lagging = (source: SourceStatus, now: Date) =>
   (source.checkedShare !== null && source.checkedShare < 0.5);
 
 /**
- * The line under the header: demo warning, or which portals the listings come from, how fresh they
- * are and what share of each portal's listings was seen or confirmed in the last 24 hours, as one
- * small chip per portal that wraps on phones.
+ * The line under the header: demo warning, or in one sentence how many portals the listings come
+ * from, how fresh they are and what share was seen or confirmed in the last 24 hours, with a
+ * warning when a portal lags. The numbers per portal open on a tap.
  */
 export async function DataNotice() {
   await connection();
@@ -48,37 +49,47 @@ export async function DataNotice() {
   }
 
   const now = new Date();
+  const counted = sources.filter((source) => source.checkedShare !== null && (source.activeListings ?? 0) > 0);
+  const total = counted.reduce((sum, source) => sum + source.activeListings!, 0);
+  const overall = total > 0 ? counted.reduce((sum, source) => sum + source.checkedShare! * source.activeListings!, 0) / total : null;
+  const latest = sources.reduce<string | null>((last, source) => (source.lastImportAt && (!last || source.lastImportAt > last) ? source.lastImportAt : last), null);
+  const behind = sources.filter((source) => lagging(source, now));
   return (
     <div className="border-b border-line bg-surface">
-      {/* Phones: two narrow columns of plain text; wider screens: one row of chips. */}
-      <div className="mx-auto max-w-7xl px-4 py-2 text-[11px] sm:flex sm:flex-wrap sm:items-center sm:gap-1.5 sm:text-xs">
-        <p className="mb-0.5 text-muted sm:mb-0 sm:mr-1">
-          <span className="font-medium text-foreground">Datenstand</span> (Stand · in 24 h geprüft):
-        </p>
-        <ul className="grid grid-cols-2 gap-x-3 gap-y-0.5 sm:flex sm:flex-wrap sm:gap-1.5">
+      {/* One plain sentence; the numbers per portal open on a tap. */}
+      <details className="mx-auto max-w-7xl px-4 text-xs">
+        <summary className="fold flex cursor-pointer select-none items-center gap-2 py-2 text-muted hover:text-accent">
+          <span className={`h-2 w-2 shrink-0 rounded-full ${behind.length > 0 ? "bg-warn-text" : "bg-good-text"}`} aria-hidden="true" />
+          <span className="min-w-0">
+            <span className="font-medium text-foreground">Datenstand:</span> {sources.length} {sources.length === 1 ? "Börse" : "Börsen"}
+            {latest && <>, zuletzt aktualisiert {shortStand(latest, now)}</>}
+            {overall !== null && <>, {formatShare(overall)} der Angebote in 24&nbsp;h geprüft</>}
+            {behind.length > 0 && (
+              <span className="text-warn-text">
+                {" "}
+                · {behind.map((source) => source.name).join(", ")} {behind.length === 1 ? "hängt" : "hängen"} hinterher
+              </span>
+            )}
+          </span>
+          <Chevron className="h-3.5 w-3.5" />
+        </summary>
+        <ul className="flex flex-wrap gap-1.5 pb-2">
           {sources.map((source) => {
-            const stand = source.lastImportAt ? shortStand(source.lastImportAt, now) : null;
             const share = source.checkedShare !== null ? formatShare(source.checkedShare) : null;
-            const details = [
-              source.lastImportAt && `Stand ${formatDayTime(source.lastImportAt)}`,
-              share && `${share} der Angebote in den letzten 24 h geprüft`,
-            ].filter(Boolean);
+            const details = [source.lastImportAt && `Stand ${formatDayTime(source.lastImportAt)}`, share && `${share} in 24 h geprüft`].filter(Boolean);
             const warn = lagging(source, now);
             return (
               <li
                 key={source.id}
-                title={details.length > 0 ? `${source.name}: ${details.join(", ")}` : source.name}
-                className={`truncate sm:rounded-full sm:border sm:px-2 sm:py-0.5 ${
-                  warn ? "text-warn-text sm:border-warn-line sm:bg-warn-bg" : "text-muted sm:border-line sm:bg-background"
-                }`}
+                className={`rounded-full border px-2 py-0.5 ${warn ? "border-warn-line bg-warn-bg text-warn-text" : "border-line bg-background text-muted"}`}
               >
-                <span className={`font-medium ${warn ? "" : "text-foreground"}`}>{source.name}</span>{" "}
-                {[stand, share].filter(Boolean).join(" · ")}
+                <span className={`font-medium ${warn ? "" : "text-foreground"}`}>{source.name}</span>
+                {details.length > 0 && <> · {details.join(" · ")}</>}
               </li>
             );
           })}
         </ul>
-      </div>
+      </details>
     </div>
   );
 }

@@ -769,6 +769,8 @@ export interface SourceStatus {
    * (0 to 1), as counted after the last import round; null before the first count.
    */
   checkedShare: number | null;
+  /** Active listings at that count, to weigh the shares of several portals; null before the first count. */
+  activeListings: number | null;
 }
 
 /** Active sources and when each last delivered listings, for the notice above the search. */
@@ -786,6 +788,7 @@ export async function getSourceStatus(pool: Pool): Promise<SourceStatus[]> {
     kind: row.kind,
     lastImportAt: row.last_import_at ? new Date(row.last_import_at).toISOString() : null,
     checkedShare: row.active_listings > 0 && row.checked_24h !== null ? row.checked_24h / row.active_listings : null,
+    activeListings: row.active_listings ?? null,
   }));
 }
 
